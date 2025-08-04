@@ -1,0 +1,272 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+use std::{
+    io,
+    mem::{MaybeUninit, size_of},
+    os::fd::AsRawFd,
+    ptr,
+};
+
+use nix::libc;
+
+#[derive(Eq, PartialEq, thiserror::Error)]
+#[error("insufficient capacity in buffer pool")]
+pub struct Error;
+
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("buffer_pool::Error")
+    }
+}
+
+/// A source of buffers.
+///
+/// Dropped buffers will automatically return to this pool.
+pub trait BufferSource: Clone + Send + Sync + std::fmt::Debug + Unpin {
+    type Shared: Shared + Ord;
+    type Owned: Owned<Shared = Self::Shared>;
+
+    /// Returns a buffer that is at least as long as the requested length.
+    fn take_owned(&self, len: usize) -> Result<Self::Owned, Error>;
+
+    /// A special case of `take_owned` that returns an empty `Owned`. This is infallible.
+    fn take_empty_owned(&self) -> Self::Owned;
+}
+
+/// Owns a particular range of the backing buffer.
+///
+/// An `Owned` tracks what part of itself has been filled with data.
+/// The filled region can be accessed with [`Owned::filled`], and bytes can be removed from the start of this region with [`Owned::drain`].
+/// The unfilled region can be accessed with [`Owned::unfilled_mut`], and bytes can be moved from the start of this region
+/// into the end of the filled region with [`Owned::fill`].
+///
+/// An `Owned` can be subdivided into smaller `Owned`s with `split_at` that each own
+/// smaller splits of the backing buffer.
+///
+/// An `Owned` is not `Clone`. It can be converted to a [`Shared`] which is, via [`Owned::freeze`]
+pub trait Owned: std::fmt::Debug {
+    type Shared: Shared;
+
+    fn filled_len(&self) -> usize;
+
+    fn filled_is_empty(&self) -> bool;
+
+    fn filled(&self) -> &[u8];
+
+    fn filled_mut(&mut self) -> &mut [u8];
+
+    fn unfilled_len(&self) -> usize;
+
+    fn unfilled_mut(&mut self) -> &mut [MaybeUninit<u8>];
+
+    /// Moves the given number of bytes from the start of the unfilled region to the end of the filled region.
+    fn fill(&mut self, n: usize);
+
+    /// Removes the given number of bytes from the start of the filled region.
+    fn drain(&mut self, n: usize);
+
+    /// Retains the range i.. in self, and returns a new Owned for the range 0..i
+    fn split_to(&mut self, i: usize) -> Self;
+
+    fn freeze(self) -> Self::Shared;
+
+    /// Append the given `u8` to this buffer, advancing the filled region.
+    ///
+    /// # Panics
+    /// Panics if `self.unfilled_len()` is less than `src.len()`.
+    fn put_slice(&mut self, src: &[u8]);
+
+    /// Increase the size of the unfilled region to be at least `additional` bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the buffer pool is at capacity.
+    fn reserve(&mut self, new_unfilled_len: usize) -> Result<(), Error>;
+}
+
+pub trait Shared:
+    AsRef<[u8]> + Clone + std::fmt::Debug + Eq + std::hash::Hash + PartialEq + Send + Sync
+{
+    fn new<O>(owned: &mut O, value: &[u8]) -> Result<Self, Error>
+    where
+        Self: Sized,
+        O: Owned<Shared = Self>,
+    {
+        assert!(owned.filled_is_empty());
+
+        let len = value.len();
+
+        owned.reserve(len)?;
+
+        {
+            let buf = owned.unfilled_mut();
+            maybe_uninit_copy_from_slice(&mut buf[..len], value);
+            owned.fill(len);
+        }
+
+        let filled_len = owned.filled_len();
+        let shared = owned.split_to(filled_len).freeze();
+        Ok(shared)
+    }
+
+    /// This makes a deep copy of the current shared
+    /// into a new shared provided by O2.
+    fn copy_to_shared<O2>(&self, owned: &mut O2) -> Result<O2::Shared, Error>
+    where
+        O2: Owned,
+    {
+        O2::Shared::new(owned, self.as_ref())
+    }
+
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool;
+
+    /// Retains the range i.. in self
+    ///
+    /// This is the same as [`Shared::split_to`] but does not require creating a new `Shared` for the range 0..i
+    fn drain(&mut self, i: usize);
+
+    /// Retains the range i.. in self, and returns a new Shared for the range 0..i
+    fn split_to(&mut self, i: usize) -> Self;
+
+    /// Gets a [`u8`] from this buffer. Returns `None` if there are insufficient bytes.
+    fn get_u8(&mut self) -> Option<u8> {
+        let b = self.as_ref().get(..size_of::<u8>())?;
+        let n = u8::from_be_bytes(b.try_into().unwrap());
+        self.drain(size_of::<u8>());
+        Some(n)
+    }
+
+    /// Gets a big-endian [`u16`] from this buffer. Returns `None` if there are insufficient bytes.
+    fn get_u16_be(&mut self) -> Option<u16> {
+        let b = self.as_ref().get(..size_of::<u16>())?;
+        let n = u16::from_be_bytes(b.try_into().unwrap());
+        self.drain(size_of::<u16>());
+        Some(n)
+    }
+
+    /// Gets a big-endian [`u32`] from this buffer. Returns `None` if there are insufficient bytes.
+    fn get_u32_be(&mut self) -> Option<u32> {
+        let b = self.as_ref().get(..size_of::<u32>())?;
+        let n = u32::from_be_bytes(b.try_into().unwrap());
+        self.drain(size_of::<u32>());
+        Some(n)
+    }
+
+    /// Gets a big-endian [`u64`] from this buffer. Returns `None` if there are insufficient bytes.
+    fn get_u64_be(&mut self) -> Option<u64> {
+        let b = self.as_ref().get(..size_of::<u64>())?;
+        let n = u64::from_be_bytes(b.try_into().unwrap());
+        self.drain(size_of::<u64>());
+        Some(n)
+    }
+
+    /// Gets a big-endian [`u128`] from this buffer. Returns `None` if there are insufficient bytes.
+    fn get_u128_be(&mut self) -> Option<u128> {
+        let b = self.as_ref().get(..size_of::<u128>())?;
+        let n = u128::from_be_bytes(b.try_into().unwrap());
+        self.drain(size_of::<u128>());
+        Some(n)
+    }
+}
+
+impl Shared for &[u8] {
+    fn len(&self) -> usize {
+        <[u8]>::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        <[u8]>::is_empty(self)
+    }
+
+    /// Retains the range i.. in self
+    ///
+    /// This is the same as [`Shared::split_to`] but does not require creating a new `Shared` for the range 0..i
+    fn drain(&mut self, i: usize) {
+        *self = &self[i..];
+    }
+
+    /// Retains the range i.. in self, and returns a new Shared for the range 0..i
+    fn split_to(&mut self, i: usize) -> Self {
+        let (first, second) = self.split_at(i);
+        *self = second;
+        first
+    }
+}
+
+pub mod accumulators;
+pub use accumulators::{BytesAccumulator, ToIovecs};
+
+#[cfg(feature = "bytes-build")]
+pub mod bytes;
+#[cfg(feature = "bytes-default")]
+pub use bytes::{BufferPoolImpl, OwnedImpl, SharedImpl};
+
+#[cfg(feature = "tests")]
+pub mod tests;
+
+// TODO(rustup): Replace this with `<[T]>::write_copy_of_slice` when that is stabilized.
+pub fn maybe_uninit_copy_from_slice<T>(this: &mut [MaybeUninit<T>], src: &[T])
+where
+    T: Copy,
+{
+    // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
+    let uninit_src: &[MaybeUninit<T>] =
+        unsafe { &*(ptr::from_ref(src) as *const [MaybeUninit<T>]) };
+    this.copy_from_slice(uninit_src);
+}
+
+// TODO(rustup): Replace this with `<[T]>::assume_init_ref` when that is stabilized.
+unsafe fn slice_assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
+    // SAFETY: Casting `slice` to a `*const [T]` is safe since the caller guarantees that
+    // `slice` is initialized, and `MaybeUninit<T>` is guaranteed to have the same layout as `T`.
+    // The pointer obtained is valid since it refers to memory owned by `slice` which is a
+    // reference and thus guaranteed to be valid for reads.
+    unsafe { &*(ptr::from_ref(slice) as *const [T]) }
+}
+
+pub fn maybe_uninit_copy_from_file_chunk<'dst>(
+    dst: &'dst mut [MaybeUninit<u8>],
+    f: &impl AsRawFd,
+    offset: u64,
+    len: usize,
+) -> io::Result<&'dst [u8]> {
+    if len == 0 {
+        return Ok(&[]);
+    }
+
+    let dst = dst.get_mut(..len).expect("dst.len() must be >= len");
+
+    let mut dst_pos = 0;
+    let mut file_pos = offset;
+    let mut remaining = len;
+
+    while remaining > 0 {
+        // This uses `libc::pread` instead of `FileExt::read_exact_at` or `nix::sys::uio::pread` because
+        // those require `&mut [u8]` instead of `&mut [MaybeUninit<u8>]`),
+        // and zeroing the buffer just before we read the file content into it is wasteful.
+        let read = unsafe {
+            libc::pread(
+                f.as_raw_fd(),
+                <*mut _>::cast(&raw mut dst[dst_pos..]),
+                remaining,
+                file_pos.try_into().expect("u64 -> off_t"),
+            )
+        };
+        let read: usize = match read.try_into() {
+            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(read) => read,
+            Err(_) => match nix::Error::last() {
+                nix::Error::EINTR => continue,
+                err => return Err(err.into()),
+            },
+        };
+
+        dst_pos += read;
+        file_pos += u64::try_from(read).expect("usize -> u64");
+        remaining -= read;
+    }
+
+    unsafe { Ok(slice_assume_init_ref(dst)) }
+}

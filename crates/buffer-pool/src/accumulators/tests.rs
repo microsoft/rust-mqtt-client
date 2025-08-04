@@ -1,0 +1,132 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+use std::{fs::File, io::IoSlice, marker::PhantomData, sync::Arc};
+
+use bytes_::{Buf as _, BytesMut};
+
+use crate::{BytesAccumulator, Error, Shared, ToIovecs, maybe_uninit_copy_from_file_chunk};
+
+/// Unlike [`single::BytesAccumulatorImpl`](crate::accumulators::single::BytesAccumulatorImpl),
+/// this `BytesAccumulatorImpl` enforces that `reserve` was called before `try_put_*`.
+#[derive(Debug, Eq, PartialEq)]
+pub struct BytesAccumulatorImpl<S> {
+    inner: BytesMut,
+
+    // Used to enforce that the BytesMut does not have more capacity what it was asked to reserve,
+    // since tests rely on this to assert that encoding fails when the buffer is too small.
+    // We can't use `inner.capacity() - inner.len()` because `inner.reserve(additional)` can (and in practice, does)
+    // reserve more than `additional`. So we need to track it ourselves.
+    unfilled_len: usize,
+
+    // Used to verify that the caller has called `put_done` as they're supposed to.
+    put_done_required: bool,
+
+    shared: PhantomData<S>,
+}
+
+impl<S> BytesAccumulatorImpl<S> {
+    pub fn with_capacity(len: usize) -> Self {
+        BytesAccumulatorImpl {
+            inner: BytesMut::with_capacity(len),
+            unfilled_len: len,
+            put_done_required: false,
+            shared: Default::default(),
+        }
+    }
+}
+
+impl<S> BytesAccumulator for BytesAccumulatorImpl<S>
+where
+    S: Shared,
+{
+    type Shared = S;
+
+    fn can_accept_more(&self) -> bool {
+        true
+    }
+
+    fn reserve(&mut self, additional: usize) -> Result<(), Error> {
+        self.inner.reserve(additional);
+        self.unfilled_len = self.unfilled_len.max(additional);
+        Ok(())
+    }
+
+    fn put_shared(&mut self, src: Self::Shared) {
+        self.put_done();
+
+        self.inner.extend_from_slice(src.as_ref());
+
+        // The contract of BytesAccumulator is that Shared's should not count towards reserved space,
+        // so re-reserve the space that was previously reserved.
+        self.inner.reserve(self.unfilled_len);
+    }
+
+    fn put_file_chunk(&mut self, f: Arc<File>, offset: u64, len: usize) {
+        self.put_done();
+
+        self.inner.reserve(len);
+        _ = maybe_uninit_copy_from_file_chunk(self.inner.spare_capacity_mut(), &f, offset, len);
+        unsafe {
+            self.inner.set_len(self.inner.len() + len);
+        }
+
+        // The contract of BytesAccumulator is that file chunks should not count towards reserved space,
+        // so re-reserve the space that was previously reserved.
+        self.inner.reserve(self.unfilled_len);
+    }
+
+    fn put_done(&mut self) {
+        self.put_done_required = false;
+    }
+
+    fn try_put_slice(&mut self, src: &[u8]) -> Option<()> {
+        if self.unfilled_len < src.len() {
+            return None;
+        }
+
+        self.inner.extend_from_slice(src);
+        self.unfilled_len = self.unfilled_len.checked_sub(src.len()).unwrap();
+        self.put_done_required = true;
+        Some(())
+    }
+
+    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> ToIovecs {
+        assert!(!self.put_done_required);
+
+        if let Some(iovec) = iovecs.first_mut() {
+            let chunk = self.inner.chunk();
+            if !chunk.is_empty() {
+                *iovec = IoSlice::new(chunk);
+                return ToIovecs::Iovecs {
+                    num_iovecs: 1,
+                    total_len: chunk.len(),
+                };
+            }
+        }
+
+        ToIovecs::Iovecs {
+            num_iovecs: 0,
+            total_len: 0,
+        }
+    }
+
+    fn drain(&mut self, n: usize) {
+        self.inner.advance(n);
+    }
+
+    fn split(&mut self) -> Self {
+        self.put_done();
+
+        BytesAccumulatorImpl {
+            inner: self.inner.split(),
+            unfilled_len: self.unfilled_len,
+            put_done_required: false,
+            shared: self.shared,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+}

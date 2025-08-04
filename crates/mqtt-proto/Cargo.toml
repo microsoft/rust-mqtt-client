@@ -1,0 +1,30 @@
+[package]
+name = "mqtt-proto"
+version = "0.1.0"
+authors = ["Azure IoT Operations Devs"]
+license = "MIT"
+edition = "2024"
+
+
+[dependencies]
+bstr = { workspace = true }
+derive-where = { workspace = true }
+enum-iterator = { workspace = true }
+serde = { workspace = true, optional = true }
+thiserror = { workspace = true }
+unicode-properties = { workspace = true }
+
+buffer-pool = { path = "../buffer-pool" }
+
+
+[dev-dependencies]
+matches = { workspace = true }
+test-case = { workspace = true }
+
+
+[features]
+tests = ["buffer-pool/tests"]
+
+
+[lints]
+workspace = true
