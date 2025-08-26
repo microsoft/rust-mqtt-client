@@ -46,11 +46,7 @@ where
 {
     const PACKET_TYPE: u8 = 0x60;
 
-    fn decode<const RLFML: usize>(
-        _flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(_flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let packet_identifier = src.try_get_packet_identifier()?;
 
         match version {
@@ -101,11 +97,7 @@ where
         }
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {

@@ -225,7 +225,7 @@ mod tests {
 
     use super::{Topic, topic};
 
-    use crate::{DecodeError, SINGLE_LEVEL_MATCH, byte_str};
+    use crate::{DecodeError, byte_str};
 
     #[test]
     fn create() {
@@ -242,7 +242,7 @@ mod tests {
         assert!(topic.iter().eq(components.iter().copied()));
     }
 
-    #[test_case(unsafe { std::str::from_utf8_unchecked(&[SINGLE_LEVEL_MATCH as u8]) })]
+    #[test_case("+")]
     #[test_case("a/+")]
     #[test_case("b/#")]
     fn invalid(topic: &str) {

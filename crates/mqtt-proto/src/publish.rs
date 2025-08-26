@@ -8,9 +8,9 @@ use derive_where::derive_where;
 use buffer_pool::{BytesAccumulator, Owned, Shared};
 
 use crate::{
-    ByteStr, CorrelationData, DecodeError, EncodeError, PacketIdentifier, PacketIdentifierDupQoS,
-    PacketMeta, Property, PropertyRef, ProtocolVersion, PubAck, PubAckOtherProperties,
-    PubAckReasonCode, PublicationOtherProperties, SharedExt as _, Topic, UserProperties,
+    ByteStr, CorrelationData, DecodeError, EncodeError, PacketIdentifierDupQoS, PacketMeta,
+    Property, PropertyRef, ProtocolVersion, PublicationOtherProperties, SharedExt as _, Topic,
+    UserProperties,
 };
 
 /// 3.3 PUBLISH – Publish message
@@ -47,145 +47,6 @@ impl<S> Publish<S>
 where
     S: Shared,
 {
-    pub fn qos0(topic: Topic<ByteStr<S>>, payload: S) -> Self {
-        Publish {
-            topic_name: topic,
-            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
-            retain: false,
-            payload,
-            other_properties: Default::default(),
-        }
-    }
-
-    pub fn qos1(
-        topic: Topic<ByteStr<S>>,
-        packet_identifier: u16,
-        duplicate: bool,
-        payload: S,
-        retain: bool,
-    ) -> Self {
-        Publish {
-            topic_name: topic,
-            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
-                PacketIdentifier::new(packet_identifier).expect("packet identifier == 0"),
-                duplicate,
-            ),
-            retain,
-            payload,
-            other_properties: Default::default(),
-        }
-    }
-
-    pub fn packet_id(&self) -> Option<PacketIdentifier> {
-        match self.packet_identifier_dup_qos {
-            PacketIdentifierDupQoS::ExactlyOnce(id, _)
-            | PacketIdentifierDupQoS::AtLeastOnce(id, _) => Some(id),
-            PacketIdentifierDupQoS::AtMostOnce => None,
-        }
-    }
-
-    pub fn payload(&self) -> &S {
-        &self.payload
-    }
-
-    /// Sets the property to the given value.
-    /// Note that if there were several properties with the same name,
-    /// they all will be removed and replaced with the a single new one.
-    #[inline]
-    pub fn set_property(&mut self, property: (ByteStr<S>, ByteStr<S>)) {
-        self.other_properties
-            .user_properties
-            .retain(|(k, _v)| k != &property.0);
-
-        self.other_properties.user_properties.push(property);
-    }
-
-    /// Returns the first property with the given name.
-    /// Note that the protocol allows multiple props with the same name.
-    #[inline]
-    pub fn property(&self, prop: impl AsRef<str>) -> Option<&ByteStr<S>> {
-        self.properties(prop).next()
-    }
-
-    /// Returns an iterator over all properties with the given name.
-    /// Note that the protocol allows multiple props with the same name.
-    #[inline]
-    pub fn properties(&self, prop: impl AsRef<str>) -> impl Iterator<Item = &ByteStr<S>> {
-        self.other_properties
-            .user_properties
-            .iter()
-            .filter_map(move |(k, val)| {
-                if k.as_ref() == prop.as_ref() {
-                    Some(val)
-                } else {
-                    None
-                }
-            })
-    }
-
-    #[inline]
-    pub fn response_topic(&self) -> Option<&Topic<ByteStr<S>>> {
-        self.other_properties.response_topic.as_ref()
-    }
-
-    #[inline]
-    pub fn correlation_data(&self) -> Option<&CorrelationData<S>> {
-        self.other_properties.correlation_data.as_ref()
-    }
-
-    pub fn with_correlation_data(mut self, correlation_data: CorrelationData<S>) -> Self {
-        self.other_properties.correlation_data = Some(correlation_data);
-        self
-    }
-
-    pub fn with_user_properties(
-        mut self,
-        user_properties: impl IntoIterator<Item = (ByteStr<S>, ByteStr<S>)>,
-    ) -> Self {
-        self.other_properties
-            .user_properties
-            .extend(user_properties);
-        self
-    }
-
-    pub fn with_response_topic(mut self, response_topic: Topic<ByteStr<S>>) -> Self {
-        self.other_properties.response_topic = Some(response_topic);
-        self
-    }
-
-    pub fn ack(&self) -> Option<PubAck<S>> {
-        self.ack_with_reason(PubAckReasonCode::Success)
-    }
-
-    pub fn ack_unauthorized(&self) -> Option<PubAck<S>> {
-        self.ack_with_reason(PubAckReasonCode::NotAuthorized)
-    }
-
-    pub fn ack_with_reason(&self, ack_reason_code: PubAckReasonCode) -> Option<PubAck<S>> {
-        self.ack_with_reason_string(ack_reason_code, None)
-    }
-
-    pub fn ack_with_reason_string(
-        &self,
-        ack_reason_code: PubAckReasonCode,
-        ack_reason_string: Option<ByteStr<S>>,
-    ) -> Option<PubAck<S>> {
-        match self.packet_identifier_dup_qos {
-            PacketIdentifierDupQoS::AtMostOnce => None,
-            PacketIdentifierDupQoS::AtLeastOnce(id, _) => Some(PubAck {
-                packet_identifier: id,
-                reason_code: ack_reason_code,
-                other_properties: PubAckOtherProperties {
-                    reason_string: ack_reason_string,
-                    ..Default::default()
-                },
-            }),
-            PacketIdentifierDupQoS::ExactlyOnce(_, _) => {
-                unreachable!("QoS 2 is not supported yet. This codepath should be unreachable.")
-            }
-        }
-    }
-
     /// Creates a copy of this `Publish` with another [`Shared`] type as the backing buffer.
     pub fn to_shared<O2>(&self, owned: &mut O2) -> Result<Publish<O2::Shared>, buffer_pool::Error>
     where
@@ -226,11 +87,7 @@ where
 {
     const PACKET_TYPE: u8 = 0x30;
 
-    fn decode<const RLFML: usize>(
-        flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let dup = (flags & 0b0000_1000) != 0;
         let retain = (flags & 0b0000_0001) != 0;
 
@@ -302,11 +159,7 @@ where
         }
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {
@@ -410,12 +263,12 @@ where
 #[cfg(all(test, feature = "tests"))]
 mod tests {
     use buffer_pool::{
-        BufferSource as _,
+        BufferPool as _,
         tests::{BufferPoolImpl, SharedImpl},
     };
 
     use super::*;
-    use crate::{Packet, UserProperty, byte_str, correlation_data, topic};
+    use crate::{Packet, PacketIdentifier, byte_str, correlation_data, topic};
 
     encode_decode_v3! {
         Packet::Publish(Publish {
@@ -481,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_to_shared() {
-        let publish = Publish::<SharedImpl> {
+        let publish = Publish {
             topic_name: topic("kittens"),
             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
             retain: false,
@@ -500,155 +353,5 @@ mod tests {
         let publish_shared = publish.to_shared(&mut owned).unwrap();
 
         assert_eq!(publish, publish_shared);
-    }
-
-    #[test]
-    fn publish_builder_qos0() {
-        let publish =
-            Publish::<SharedImpl>::qos0(topic("kittens"), SharedImpl::from_static(b"meow"))
-                .with_response_topic(topic("cute"))
-                .with_user_properties([(byte_str("genus"), byte_str("felix"))]);
-
-        assert_eq!(
-            publish,
-            Publish {
-                topic_name: topic("kittens"),
-                packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
-                retain: false,
-                payload: SharedImpl::from_static(b"meow"),
-                other_properties: PublishOtherProperties {
-                    response_topic: Some(topic("cute")),
-                    user_properties: vec![(byte_str("genus"), byte_str("felix"))],
-                    ..Default::default()
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn publish_builder_qos1() {
-        let publish = Publish::<SharedImpl>::qos1(
-            topic("kittens"),
-            1,
-            false,
-            SharedImpl::from_static(b"meow"),
-            false,
-        )
-        .with_response_topic(topic("cute"))
-        .with_user_properties([(byte_str("genus"), byte_str("felix"))]);
-
-        assert_eq!(
-            publish,
-            Publish {
-                topic_name: topic("kittens"),
-                packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
-                    PacketIdentifier::new(1).unwrap(),
-                    false
-                ),
-                retain: false,
-                payload: SharedImpl::from_static(b"meow"),
-                other_properties: PublishOtherProperties {
-                    response_topic: Some(topic("cute")),
-                    user_properties: vec![(byte_str("genus"), byte_str("felix"))],
-                    ..Default::default()
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn test_properties() {
-        let publish = Publish::<SharedImpl>::qos1(
-            topic("kittens"),
-            1,
-            false,
-            SharedImpl::from_static(b"meow"),
-            false,
-        )
-        .with_user_properties([
-            (byte_str("key"), byte_str("val1")),
-            (byte_str("key"), byte_str("val2")),
-            (byte_str("dummy"), byte_str("val1")),
-        ]);
-
-        let result = publish.properties("key");
-        assert_eq!(2, result.count());
-    }
-
-    #[test]
-    fn test_set_property() {
-        let mut publish = Publish::<SharedImpl>::qos1(
-            topic("kittens"),
-            1,
-            false,
-            SharedImpl::from_static(b"meow"),
-            false,
-        );
-
-        publish.set_property((byte_str("key"), byte_str("val1")));
-        assert_eq!(Some("val1"), publish.property("key").map(AsRef::as_ref));
-    }
-
-    #[test]
-    fn test_ack_with_reason_string_successful() {
-        let publish = Publish::<SharedImpl>::qos1(
-            topic("kittens"),
-            1,
-            false,
-            SharedImpl::from_static(b"meow"),
-            false,
-        );
-
-        let puback = publish
-            .ack_with_reason_string(PubAckReasonCode::Success, Some(byte_str("succeed")))
-            .unwrap();
-        assert_eq!(
-            Some(PacketIdentifier::new(1)),
-            Some(Some(puback.packet_identifier))
-        );
-        assert_eq!(PubAckReasonCode::Success, puback.reason_code);
-        assert_eq!(
-            Some(byte_str("succeed")),
-            puback.other_properties.reason_string
-        );
-
-        let expected_user_properties: Vec<UserProperty<SharedImpl>> = vec![];
-        assert_eq!(
-            expected_user_properties,
-            puback.other_properties.user_properties
-        );
-    }
-
-    #[test]
-    fn test_ack_with_reason_string_unsuccessful() {
-        let publish = Publish::<SharedImpl>::qos1(
-            topic("kittens"),
-            1,
-            false,
-            SharedImpl::from_static(b"meow"),
-            false,
-        );
-
-        let puback = publish
-            .ack_with_reason_string(
-                PubAckReasonCode::UnspecifiedError,
-                Some(byte_str("specific-error")),
-            )
-            .unwrap();
-        assert_eq!(
-            Some(PacketIdentifier::new(1)),
-            Some(Some(puback.packet_identifier))
-        );
-        assert_eq!(PubAckReasonCode::UnspecifiedError, puback.reason_code);
-        assert_eq!(
-            Some(byte_str("specific-error")),
-            puback.other_properties.reason_string
-        );
-
-        let expected_user_properties: Vec<UserProperty<SharedImpl>> = vec![];
-        assert_eq!(
-            expected_user_properties,
-            puback.other_properties.user_properties
-        );
     }
 }

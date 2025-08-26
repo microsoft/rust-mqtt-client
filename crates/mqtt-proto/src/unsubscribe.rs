@@ -7,8 +7,7 @@ use buffer_pool::{BytesAccumulator, Owned, Shared};
 
 use crate::{
     ByteStr, DecodeError, EncodeError, Filter, PacketIdentifier, PacketMeta, Property, PropertyRef,
-    ProtocolVersion, SharedExt as _, UnsubAck, UnsubAckOtherProperties, UnsubAckReasonCode,
-    UserProperties,
+    ProtocolVersion, SharedExt as _, UserProperties,
 };
 
 /// Ref: 3.10 UNSUBSCRIBE – Unsubscribe from topics
@@ -36,27 +35,6 @@ impl<S> Unsubscribe<S>
 where
     S: Shared,
 {
-    pub fn ack(&self, reason_codes: impl IntoIterator<Item = UnsubAckReasonCode>) -> UnsubAck<S> {
-        self.ack_with_reason_string(reason_codes, None)
-    }
-
-    pub fn ack_with_reason_string(
-        &self,
-        reason_codes: impl IntoIterator<Item = UnsubAckReasonCode>,
-        reason_string: Option<ByteStr<S>>,
-    ) -> UnsubAck<S> {
-        let reason_codes = reason_codes.into_iter().collect::<Vec<_>>();
-        assert_eq!(reason_codes.len(), self.unsubscribe_from.len());
-        UnsubAck {
-            packet_identifier: self.packet_identifier,
-            other_properties: UnsubAckOtherProperties {
-                reason_string,
-                reason_codes,
-                ..Default::default()
-            },
-        }
-    }
-
     /// Creates a copy of this `Unsubscribe` with another [`Shared`] type as the backing buffer.
     pub fn to_shared<O2>(
         &self,
@@ -84,11 +62,7 @@ where
 {
     const PACKET_TYPE: u8 = 0xA0;
 
-    fn decode<const RLFML: usize>(
-        _flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(_flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let packet_identifier = src.try_get_packet_identifier()?;
 
         let other_properties = match version {
@@ -118,11 +92,7 @@ where
         })
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {

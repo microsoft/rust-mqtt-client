@@ -31,26 +31,20 @@ where
         assert!(owned.filled_is_empty());
 
         let len = s.len();
-        let u16_size = size_of::<u16>();
 
-        owned.reserve(len + u16_size)?;
+        owned.reserve(len + U16_SIZE)?;
 
-        Ok(Self::new_inner(owned, s, len, u16_size))
-    }
-
-    fn new_inner<O>(owned: &mut O, s: &[u8], len: usize, u16_size: usize) -> Self
-    where
-        O: Owned<Shared = S>,
-    {
-        {
+        // SAFETY: Requirements of `unfilled_mut` and `fill` are upheld.
+        unsafe {
             let len: u16 = len.try_into().expect("len is too big for u16");
             let len = len.to_be_bytes();
             let buf = owned.unfilled_mut();
-            buffer_pool::maybe_uninit_copy_from_slice(&mut buf[..u16_size], &len);
-            owned.fill(u16_size);
+            buffer_pool::maybe_uninit_copy_from_slice(&mut buf[..U16_SIZE], &len);
+            owned.fill(U16_SIZE);
         }
 
-        {
+        // SAFETY: Requirements of `unfilled_mut` and `fill` are upheld.
+        unsafe {
             let buf = owned.unfilled_mut();
             buffer_pool::maybe_uninit_copy_from_slice(&mut buf[..len], s);
             owned.fill(len);
@@ -58,7 +52,7 @@ where
 
         let filled_len = owned.filled_len();
         let shared = owned.split_to(filled_len).freeze();
-        BinaryData(shared)
+        Ok(BinaryData(shared))
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -240,6 +234,8 @@ where
     }
 }
 
+const U16_SIZE: usize = size_of::<u16>();
+
 #[cfg(any(test, feature = "tests"))]
 pub fn binary_data(s: impl AsRef<[u8]>) -> BinaryData<buffer_pool::tests::SharedImpl> {
     let s = s.as_ref();
@@ -261,7 +257,7 @@ mod tests {
     use test_case::test_case;
 
     use buffer_pool::{
-        BufferSource as _, Shared as _,
+        BufferPool as _, Shared as _,
         tests::{BufferPoolImpl, SharedImpl},
     };
 

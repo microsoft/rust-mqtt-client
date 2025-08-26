@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{fs::File, io::IoSlice, sync::Arc};
+use std::io::IoSlice;
 
 use crate::{Error, Shared};
 
@@ -71,18 +71,13 @@ pub trait BytesAccumulator: std::fmt::Debug {
     /// This operation always succeeds. If there are any uncommitted bytes, they are committed before this `Shared` is appended.
     fn put_shared(&mut self, src: Self::Shared);
 
-    /// Append the given file chunk to this accumulator.
-    ///
-    /// This operation always succeeds. If there are any uncommitted bytes, they are committed before this chunk is appended.
-    fn put_file_chunk(&mut self, f: Arc<File>, offset: u64, len: usize);
-
     /// Commits any uncommitted bytes to this accumulator.
     fn put_done(&mut self);
 
     /// Fill the given [`IoSlice`]s with the buffers held by this accumulator.
     ///
     /// Returns the number of `IoSlice`s that were set in the given slice.
-    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> ToIovecs;
+    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> Iovecs;
 
     /// Removes the given number of bytes from the start of the accumulator.
     fn drain(&mut self, n: usize);
@@ -95,16 +90,9 @@ pub trait BytesAccumulator: std::fmt::Debug {
 }
 
 #[derive(Debug)]
-pub enum ToIovecs {
-    Iovecs {
-        num_iovecs: usize,
-        total_len: usize,
-    },
-    FileChunk {
-        f: Arc<File>,
-        offset: u64,
-        len: usize,
-    },
+pub struct Iovecs {
+    pub num_iovecs: usize,
+    pub total_len: usize,
 }
 
 pub mod iovecs;

@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! `bytes` implementation of [`BufferSource`] for tests.
+//! `bytes` implementation of [`BufferPool`] for tests.
 //!
 //! The types also offer convenience functions to create the buffer types directly.
 
 // This is test code.
 
-use crate::{BufferSource, Error};
+use crate::{BufferPool, Error};
 
 mod buffers;
 pub use buffers::{OwnedImpl, SharedImpl};
@@ -24,7 +24,7 @@ impl BufferPoolImpl {
     }
 }
 
-impl BufferSource for BufferPoolImpl {
+impl BufferPool for BufferPoolImpl {
     type Shared = SharedImpl;
     type Owned = OwnedImpl;
 

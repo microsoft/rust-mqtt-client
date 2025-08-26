@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! `bytes` implementation of [`BufferSource`].
+//! `bytes` implementation of [`BufferPool`].
 //!
 //! `OwnedImpl` is a wrapper around [`bytes::BytesMut`] and `SharedImpl` is a wrapper around [`bytes::Bytes`].
 
-use crate::{BufferSource, Error};
+use crate::{BufferPool, Error};
 
 mod buffers;
 pub use buffers::{OwnedImpl, SharedImpl};
@@ -22,7 +22,7 @@ impl BufferPoolImpl {
     }
 }
 
-impl BufferSource for BufferPoolImpl {
+impl BufferPool for BufferPoolImpl {
     type Shared = SharedImpl;
     type Owned = OwnedImpl;
 

@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{fs::File, io::IoSlice, marker::PhantomData, sync::Arc};
+use std::{io::IoSlice, marker::PhantomData};
 
 use derive_where::derive_where;
 
-use buffer_pool::{BytesAccumulator, Shared, ToIovecs};
+use buffer_pool::{BytesAccumulator, Iovecs, Shared};
 
 #[derive(Debug)]
 #[derive_where(Eq, PartialEq)]
@@ -47,12 +47,6 @@ where
         }
     }
 
-    fn put_file_chunk(&mut self, _f: Arc<File>, _offset: u64, len: usize) {
-        if COUNT_SHARED {
-            self.count += len;
-        }
-    }
-
     fn put_done(&mut self) {}
 
     fn try_put_slice(&mut self, src: &[u8]) -> Option<()> {
@@ -60,7 +54,7 @@ where
         Some(())
     }
 
-    fn to_iovecs<'a>(&'a self, _iovecs: &mut [IoSlice<'a>]) -> ToIovecs {
+    fn to_iovecs<'a>(&'a self, _iovecs: &mut [IoSlice<'a>]) -> Iovecs {
         unreachable!("ByteCounter is never used for actually writing");
     }
 

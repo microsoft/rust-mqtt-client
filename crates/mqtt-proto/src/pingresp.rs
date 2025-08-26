@@ -15,19 +15,11 @@ where
 {
     const PACKET_TYPE: u8 = 0xD0;
 
-    fn decode<const RLFML: usize>(
-        _flags: u8,
-        _src: &mut S,
-        _version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(_flags: u8, _src: &mut S, _version: ProtocolVersion) -> Result<Self, DecodeError> {
         Ok(Self)
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        _dst: &mut B,
-        _version: ProtocolVersion,
-    ) -> Result<(), EncodeError> {
+    fn encode<B>(&self, _dst: &mut B, _version: ProtocolVersion) -> Result<(), EncodeError> {
         Ok(())
     }
 }

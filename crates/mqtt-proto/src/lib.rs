@@ -309,7 +309,7 @@ where
     /// Decode the body (variable header + payload) of an MQTT packet.
     ///
     /// Ref: 2 MQTT Control Packet format
-    pub fn decode<const RLFML: usize>(
+    pub fn decode(
         first_byte: u8,
         body: &mut S,
         version: ProtocolVersion,
@@ -318,64 +318,54 @@ where
         let flags = first_byte & 0x0F;
 
         let packet = match (packet_type, flags) {
-            (Auth::<S>::PACKET_TYPE, 0) => {
-                Packet::Auth(Auth::decode::<RLFML>(flags, body, version)?)
-            }
+            (Auth::<S>::PACKET_TYPE, 0) => Packet::Auth(Auth::decode(flags, body, version)?),
 
             (ConnAck::<S>::PACKET_TYPE, 0) => {
-                Packet::ConnAck(ConnAck::decode::<RLFML>(flags, body, version)?)
+                Packet::ConnAck(ConnAck::decode(flags, body, version)?)
             }
 
             (Connect::<S>::PACKET_TYPE, 0) => {
-                Packet::Connect(Connect::decode::<RLFML>(flags, body, version)?)
+                Packet::Connect(Connect::decode(flags, body, version)?)
             }
 
             (Disconnect::<S>::PACKET_TYPE, 0) => {
-                Packet::Disconnect(Disconnect::decode::<RLFML>(flags, body, version)?)
+                Packet::Disconnect(Disconnect::decode(flags, body, version)?)
             }
 
             (<PingReq as PacketMeta<S>>::PACKET_TYPE, 0) => {
-                Packet::PingReq(PingReq::decode::<RLFML>(flags, body, version)?)
+                Packet::PingReq(PingReq::decode(flags, body, version)?)
             }
 
             (<PingResp as PacketMeta<S>>::PACKET_TYPE, 0) => {
-                Packet::PingResp(PingResp::decode::<RLFML>(flags, body, version)?)
+                Packet::PingResp(PingResp::decode(flags, body, version)?)
             }
 
-            (PubAck::<S>::PACKET_TYPE, 0) => {
-                Packet::PubAck(PubAck::decode::<RLFML>(flags, body, version)?)
-            }
+            (PubAck::<S>::PACKET_TYPE, 0) => Packet::PubAck(PubAck::decode(flags, body, version)?),
 
             (PubComp::<S>::PACKET_TYPE, 0) => {
-                Packet::PubComp(PubComp::decode::<RLFML>(flags, body, version)?)
+                Packet::PubComp(PubComp::decode(flags, body, version)?)
             }
 
             (Publish::<S>::PACKET_TYPE, flags) => {
-                Packet::Publish(Publish::decode::<RLFML>(flags, body, version)?)
+                Packet::Publish(Publish::decode(flags, body, version)?)
             }
 
-            (PubRec::<S>::PACKET_TYPE, 0) => {
-                Packet::PubRec(PubRec::decode::<RLFML>(flags, body, version)?)
-            }
+            (PubRec::<S>::PACKET_TYPE, 0) => Packet::PubRec(PubRec::decode(flags, body, version)?),
 
-            (PubRel::<S>::PACKET_TYPE, 2) => {
-                Packet::PubRel(PubRel::decode::<RLFML>(flags, body, version)?)
-            }
+            (PubRel::<S>::PACKET_TYPE, 2) => Packet::PubRel(PubRel::decode(flags, body, version)?),
 
-            (SubAck::<S>::PACKET_TYPE, 0) => {
-                Packet::SubAck(SubAck::decode::<RLFML>(flags, body, version)?)
-            }
+            (SubAck::<S>::PACKET_TYPE, 0) => Packet::SubAck(SubAck::decode(flags, body, version)?),
 
             (Subscribe::<S>::PACKET_TYPE, 2) => {
-                Packet::Subscribe(Subscribe::decode::<RLFML>(flags, body, version)?)
+                Packet::Subscribe(Subscribe::decode(flags, body, version)?)
             }
 
             (UnsubAck::<S>::PACKET_TYPE, 0) => {
-                Packet::UnsubAck(UnsubAck::decode::<RLFML>(flags, body, version)?)
+                Packet::UnsubAck(UnsubAck::decode(flags, body, version)?)
             }
 
             (Unsubscribe::<S>::PACKET_TYPE, 2) => {
-                Packet::Unsubscribe(Unsubscribe::decode::<RLFML>(flags, body, version)?)
+                Packet::Unsubscribe(Unsubscribe::decode(flags, body, version)?)
             }
 
             (packet_type, flags) => {
@@ -395,16 +385,13 @@ where
     }
 
     /// Decodes a full `Packet` from the given `Shared`.
-    pub fn decode_full<const RLFML: usize>(
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    pub fn decode_full(src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let first_byte = {
             let mut data = src.as_ref();
             let original_data_len = data.len();
 
             let (first_byte, remaining_length) =
-                decode_fixed_header::<RLFML>(&mut data)?.ok_or(DecodeError::IncompletePacket)?;
+                decode_fixed_header(&mut data)?.ok_or(DecodeError::IncompletePacket)?;
 
             let new_data_len = data.len();
             src.drain(original_data_len - new_data_len);
@@ -416,18 +403,14 @@ where
             }
         };
 
-        Self::decode::<RLFML>(first_byte, src, version)
+        Self::decode(first_byte, src, version)
     }
 
-    pub fn encode<BA, const RLFML: usize>(
-        &self,
-        dst: &mut BA,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    pub fn encode<BA>(&self, dst: &mut BA, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         BA: BytesAccumulator<Shared = S>,
     {
-        self.borrow().encode::<BA, RLFML>(dst, version)
+        self.borrow().encode(dst, version)
     }
 
     pub fn borrow(&self) -> PacketRef<'_, S> {
@@ -508,23 +491,19 @@ impl<S> PacketRef<'_, S>
 where
     S: Shared,
 {
-    pub fn encode<BA, const RLFML: usize>(
-        self,
-        dst: &mut BA,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    pub fn encode<BA>(self, dst: &mut BA, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         BA: BytesAccumulator<Shared = S>,
     {
         match self {
-            Self::Auth(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::ConnAck(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::Connect(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::Disconnect(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::PingReq(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::PingResp(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::PubAck(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::PubComp(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
+            Self::Auth(packet) => encode_inner(packet, 0, dst, version),
+            Self::ConnAck(packet) => encode_inner(packet, 0, dst, version),
+            Self::Connect(packet) => encode_inner(packet, 0, dst, version),
+            Self::Disconnect(packet) => encode_inner(packet, 0, dst, version),
+            Self::PingReq(packet) => encode_inner(packet, 0, dst, version),
+            Self::PingResp(packet) => encode_inner(packet, 0, dst, version),
+            Self::PubAck(packet) => encode_inner(packet, 0, dst, version),
+            Self::PubComp(packet) => encode_inner(packet, 0, dst, version),
             Self::Publish(packet) => {
                 #[expect(clippy::unusual_byte_groupings)]
                 let mut flags = match packet.packet_identifier_dup_qos {
@@ -538,19 +517,19 @@ where
                 if packet.retain {
                     flags |= 0b0_00_1;
                 }
-                encode_inner::<_, _, RLFML>(packet, flags, dst, version)
+                encode_inner(packet, flags, dst, version)
             }
-            Self::PubRec(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::PubRel(packet) => encode_inner::<_, _, RLFML>(packet, 0x02, dst, version),
-            Self::SubAck(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::Subscribe(packet) => encode_inner::<_, _, RLFML>(packet, 0x02, dst, version),
-            Self::UnsubAck(packet) => encode_inner::<_, _, RLFML>(packet, 0, dst, version),
-            Self::Unsubscribe(packet) => encode_inner::<_, _, RLFML>(packet, 0x02, dst, version),
+            Self::PubRec(packet) => encode_inner(packet, 0, dst, version),
+            Self::PubRel(packet) => encode_inner(packet, 0x02, dst, version),
+            Self::SubAck(packet) => encode_inner(packet, 0, dst, version),
+            Self::Subscribe(packet) => encode_inner(packet, 0x02, dst, version),
+            Self::UnsubAck(packet) => encode_inner(packet, 0, dst, version),
+            Self::Unsubscribe(packet) => encode_inner(packet, 0x02, dst, version),
         }
     }
 }
 
-fn encode_inner<B, TPacket, const RLFML: usize>(
+fn encode_inner<B, TPacket>(
     packet: &TPacket,
     flags: u8,
     dst: &mut B,
@@ -562,14 +541,14 @@ where
 {
     let body_len = {
         let mut counter = ByteCounter::<_, true>::new();
-        packet.encode::<_, RLFML>(&mut counter, version)?;
+        packet.encode(&mut counter, version)?;
         counter.into_count()
     };
 
     dst.try_put_u8(TPacket::PACKET_TYPE | flags)
         .ok_or(EncodeError::InsufficientBuffer)?;
-    encode_remaining_length::<_, RLFML>(body_len, dst)?;
-    packet.encode::<_, RLFML>(dst, version)?;
+    encode_remaining_length(body_len, dst)?;
+    packet.encode(dst, version)?;
 
     dst.put_done();
 
@@ -694,13 +673,10 @@ where
 ///
 /// These numbers are encoded with a variable-length scheme that uses the MSB of each byte as a continuation bit.
 ///
-/// RLFML - Remaining Length Field Maximum Length, a constant that defines the maximum number of bytes that can
-///         be used to encode a variable byte integer.
-///
 /// Ref:
 /// - 3.1.1: 2.2.3 Remaining Length
 /// - 5.0:   1.5.5 Variable Byte Integer
-fn decode_varint<const RLFML: usize>(src: &mut &[u8]) -> Result<Option<u32>, DecodeError> {
+fn decode_varint(src: &mut &[u8]) -> Result<Option<u32>, DecodeError> {
     let mut result = 0_u32;
     let mut num_bytes_read = 0_usize;
 
@@ -717,7 +693,7 @@ fn decode_varint<const RLFML: usize>(src: &mut &[u8]) -> Result<Option<u32>, Dec
             return Ok(Some(result));
         }
 
-        if num_bytes_read == RLFML {
+        if num_bytes_read == DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH {
             return Err(DecodeError::VarintTooHigh);
         }
     }
@@ -725,7 +701,7 @@ fn decode_varint<const RLFML: usize>(src: &mut &[u8]) -> Result<Option<u32>, Dec
 
 /// Encode MQTT-format variable byte integers.
 /// See [`decode_varint`] for details.
-fn encode_varint<B, const RLFML: usize>(mut item: u32, dst: &mut B) -> Result<(), EncodeError>
+fn encode_varint<B>(mut item: u32, dst: &mut B) -> Result<(), EncodeError>
 where
     B: BytesAccumulator,
 {
@@ -749,7 +725,7 @@ where
             break;
         }
 
-        if num_bytes_written == RLFML {
+        if num_bytes_written == DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH {
             return Err(EncodeError::VarintTooHigh(original));
         }
     }
@@ -766,29 +742,23 @@ where
 /// Ref:
 /// - 3.1.1: 2.2.3 Remaining Length
 /// - 5.0:   2.1.4 Remaining Length
-fn decode_remaining_length<const RLFML: usize>(
-    src: &mut &[u8],
-) -> Result<Option<usize>, DecodeError> {
+fn decode_remaining_length(src: &mut &[u8]) -> Result<Option<usize>, DecodeError> {
     const _STATIC_ASSERT_USIZE_IS_ATLEAST_U32: () =
         [(); (std::mem::size_of::<usize>() >= std::mem::size_of::<u32>()) as usize][0];
 
-    decode_varint::<RLFML>(src).map(|maybe_varint| {
+    decode_varint(src).map(|maybe_varint| {
         maybe_varint.map(|varint| varint.try_into().expect("usize is at least u32"))
     })
 }
 
-fn encode_remaining_length<B, const RLFML: usize>(
-    item: usize,
-    dst: &mut B,
-) -> Result<(), EncodeError>
+fn encode_remaining_length<B>(item: usize, dst: &mut B) -> Result<(), EncodeError>
 where
     B: BytesAccumulator,
 {
     let varint = item
         .try_into()
         .map_err(|_| EncodeError::RemainingLengthTooHigh(item))?;
-    encode_varint::<_, RLFML>(varint, dst)
-        .map_err(|_| EncodeError::RemainingLengthTooHigh(item))?;
+    encode_varint(varint, dst).map_err(|_| EncodeError::RemainingLengthTooHigh(item))?;
     Ok(())
 }
 
@@ -988,13 +958,6 @@ impl PacketIdentifierDupQoS {
         let (result, _, _) = self.into();
         result
     }
-
-    pub fn set_dup(&mut self, dup: bool) {
-        match self {
-            Self::AtMostOnce => {}
-            Self::AtLeastOnce(_, d) | Self::ExactlyOnce(_, d) => *d = dup,
-        }
-    }
 }
 
 impl From<PacketIdentifierDupQoS> for (QoS, bool, Option<PacketIdentifier>) {
@@ -1192,16 +1155,14 @@ pub enum EncodeError {
 /// Ref:
 /// - 3.1.1: 2 MQTT Control Packet format
 /// - 5.0:   2 MQTT Control Packet format
-pub fn decode_fixed_header<const RLFML: usize>(
-    src: &mut &[u8],
-) -> Result<Option<(u8, usize)>, DecodeError> {
+pub fn decode_fixed_header(src: &mut &[u8]) -> Result<Option<(u8, usize)>, DecodeError> {
     let (first_byte, rest) = match src.split_first() {
         Some((first_byte, rest)) => (*first_byte, rest),
         None => return Ok(None),
     };
     *src = rest;
 
-    let Some(remaining_length) = decode_remaining_length::<RLFML>(src)? else {
+    let Some(remaining_length) = decode_remaining_length(src)? else {
         return Ok(None);
     };
 
@@ -1217,20 +1178,12 @@ where
     const PACKET_TYPE: u8;
 
     /// Decodes this packet from the given buffer
-    fn decode<const RLFML: usize>(
-        flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError>;
+    fn decode(flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError>;
 
     /// Encodes the variable header and payload corresponding to this packet into the given buffer.
     /// The buffer is expected to already have the packet type and body length encoded into it,
     /// and to have reserved enough space to put the bytes of this packet directly into the buffer.
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>;
 }
@@ -1265,11 +1218,7 @@ mod tests {
     pub(crate) fn create_packet_as_shared(first_byte: u8, payload: &[u8]) -> SharedImpl {
         let mut result = BytesAccumulatorImpl::<SharedImpl>::with_capacity(5 + payload.len());
         result.try_put_u8(first_byte).unwrap();
-        encode_remaining_length::<_, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(
-            payload.len(),
-            &mut result,
-        )
-        .unwrap();
+        encode_remaining_length(payload.len(), &mut result).unwrap();
         result.try_put_slice(payload).unwrap();
         result.put_done();
 
@@ -1282,7 +1231,7 @@ mod tests {
     where
         S: Shared,
     {
-        Packet::decode_full::<DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(src, version).unwrap()
+        Packet::decode_full(src, version).unwrap()
     }
 
     pub(crate) fn encode<S>(packet: &Packet<S>, version: ProtocolVersion) -> SharedImpl
@@ -1301,7 +1250,7 @@ mod tests {
     {
         let num_bytes_needed = {
             let mut counter = ByteCounter::<_, false>::new();
-            packet.encode::<_, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(&mut counter, version)?;
+            packet.encode(&mut counter, version)?;
             counter.into_count()
         };
 
@@ -1309,9 +1258,7 @@ mod tests {
 
         // Any validation that failed would've failed when encoding with the ByteCounter above,
         // so this second encode with the BytesAccumulator must succeed.
-        packet
-            .encode::<_, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(&mut accumulator, version)
-            .unwrap();
+        packet.encode(&mut accumulator, version).unwrap();
 
         let mut iovec = IoSlice::new(&[]);
         accumulator.to_iovecs(slice::from_mut(&mut iovec));
@@ -1347,13 +1294,13 @@ mod tests {
         // Can't encode into a buffer with no unfilled space left
         let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(0);
         assert_matches!(
-            encode_varint::<_, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(value, &mut bytes),
+            encode_varint(value, &mut bytes),
             Err(EncodeError::InsufficientBuffer)
         );
 
         // Can encode into a buffer with unfilled space left and no filled space
         let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(8);
-        encode_varint::<_, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(value, &mut bytes).unwrap();
+        encode_varint(value, &mut bytes).unwrap();
         bytes.put_done();
         bytes.to_iovecs(slice::from_mut(&mut iovec));
         assert_eq!(*iovec, *expected);
@@ -1361,7 +1308,7 @@ mod tests {
         // Can encode into a buffer with unfilled space left and some filled space
         let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(8);
         bytes.try_put_slice(&[0x00; 3][..]).unwrap();
-        encode_varint::<_, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(value, &mut bytes).unwrap();
+        encode_varint(value, &mut bytes).unwrap();
         bytes.put_done();
         bytes.to_iovecs(slice::from_mut(&mut iovec));
         assert_eq!(iovec[3..], *expected);
@@ -1369,12 +1316,12 @@ mod tests {
 
     fn varint_encode_inner_too_high(value: u32) {
         let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(8);
-        assert_matches!(encode_varint::<_, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(value, &mut bytes), Err(EncodeError::VarintTooHigh(v)) if v == value);
+        assert_matches!(encode_varint(value, &mut bytes), Err(EncodeError::VarintTooHigh(v)) if v == value);
     }
 
     fn remaining_length_encode_inner_too_high(value: usize) {
         let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(8);
-        assert_matches!(encode_remaining_length::<_, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(value, &mut bytes), Err(EncodeError::RemainingLengthTooHigh(v)) if v == value);
+        assert_matches!(encode_remaining_length(value, &mut bytes), Err(EncodeError::RemainingLengthTooHigh(v)) if v == value);
     }
 
     #[test]
@@ -1404,22 +1351,17 @@ mod tests {
     }
 
     fn varint_decode_inner_ok(mut bytes: &[u8], expected: u32) {
-        let actual =
-            decode_varint::<DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(&mut bytes).unwrap();
+        let actual = decode_varint(&mut bytes).unwrap();
         assert_eq!(actual, Some(expected));
         assert!(bytes.is_empty());
     }
 
     fn varint_decode_inner_too_high(mut bytes: &[u8]) {
-        assert_matches!(
-            decode_varint::<DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(&mut bytes),
-            Err(DecodeError::VarintTooHigh)
-        );
+        assert_matches!(decode_varint(&mut bytes), Err(DecodeError::VarintTooHigh));
     }
 
     fn varint_decode_inner_incomplete_packet(mut bytes: &[u8]) {
-        let actual =
-            decode_varint::<DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(&mut bytes).unwrap();
+        let actual = decode_varint(&mut bytes).unwrap();
         assert_eq!(actual, None);
     }
 

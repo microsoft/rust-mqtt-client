@@ -92,19 +92,6 @@ where
             other_properties: self.other_properties.to_shared(owned)?,
         })
     }
-
-    pub fn from_reason_string(
-        reason_code: DisconnectReasonCode,
-        reason_string: Option<ByteStr<S>>,
-    ) -> Self {
-        Self {
-            reason_code,
-            other_properties: DisconnectOtherProperties {
-                reason_string,
-                ..Default::default()
-            },
-        }
-    }
 }
 
 impl<S> From<DisconnectReasonCode> for Disconnect<S>
@@ -122,11 +109,7 @@ where
 {
     const PACKET_TYPE: u8 = 0xE0;
 
-    fn decode<const RLFML: usize>(
-        _flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(_flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         match version {
             ProtocolVersion::V3 => Ok(Self {
                 reason_code: DisconnectReasonCode::Normal,
@@ -175,11 +158,7 @@ where
         }
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {

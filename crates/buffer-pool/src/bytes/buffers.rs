@@ -49,11 +49,17 @@ impl Owned for OwnedImpl {
         self.inner.capacity() - self.inner.len()
     }
 
-    fn unfilled_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+    /// # Safety
+    ///
+    /// Caller must not read from this slice, and must only write initialized elements to it.
+    unsafe fn unfilled_mut(&mut self) -> &mut [MaybeUninit<u8>] {
         unsafe { self.inner.chunk_mut().as_uninit_slice_mut() }
     }
 
-    fn fill(&mut self, n: usize) {
+    /// # Safety
+    ///
+    /// Caller must ensure that `n` bytes have already been initialized.
+    unsafe fn fill(&mut self, n: usize) {
         unsafe {
             self.inner.advance_mut(n);
         }

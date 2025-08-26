@@ -40,11 +40,7 @@ where
 {
     const PACKET_TYPE: u8 = 0xF0;
 
-    fn decode<const RLFML: usize>(
-        flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         match version {
             ProtocolVersion::V3 => Err(DecodeError::UnrecognizedPacket {
                 packet_type: Self::PACKET_TYPE,
@@ -87,11 +83,7 @@ where
         }
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {
@@ -138,7 +130,7 @@ mod tests {
     use matches::assert_matches;
 
     use super::*;
-    use crate::{DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH, Packet, binary_data, byte_str};
+    use crate::{Packet, binary_data, byte_str};
 
     encode_decode_v5! {
         Packet::Auth(Auth {
@@ -174,9 +166,7 @@ mod tests {
     fn decode_v3_fails() {
         let mut buf = binary_data(b"\x00\x00").into_shared();
         assert_matches!(
-            Auth::<buffer_pool::tests::SharedImpl>::decode::<
-                DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH,
-            >(0, &mut buf, ProtocolVersion::V3),
+            Auth::<buffer_pool::tests::SharedImpl>::decode(0, &mut buf, ProtocolVersion::V3),
             Err(DecodeError::UnrecognizedPacket {
                 packet_type: 0xF0,
                 flags: 0x00,

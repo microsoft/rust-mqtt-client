@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{fs::File, io::IoSlice, marker::PhantomData, sync::Arc};
+use std::{io::IoSlice, marker::PhantomData};
 
 use bytes_::{Buf as _, BytesMut};
 
-use crate::{BytesAccumulator, Error, Shared, ToIovecs, maybe_uninit_copy_from_file_chunk};
+use crate::{BytesAccumulator, Error, Iovecs, Shared};
 
 /// Unlike [`single::BytesAccumulatorImpl`](crate::accumulators::single::BytesAccumulatorImpl),
 /// this `BytesAccumulatorImpl` enforces that `reserve` was called before `try_put_*`.
@@ -62,20 +62,6 @@ where
         self.inner.reserve(self.unfilled_len);
     }
 
-    fn put_file_chunk(&mut self, f: Arc<File>, offset: u64, len: usize) {
-        self.put_done();
-
-        self.inner.reserve(len);
-        _ = maybe_uninit_copy_from_file_chunk(self.inner.spare_capacity_mut(), &f, offset, len);
-        unsafe {
-            self.inner.set_len(self.inner.len() + len);
-        }
-
-        // The contract of BytesAccumulator is that file chunks should not count towards reserved space,
-        // so re-reserve the space that was previously reserved.
-        self.inner.reserve(self.unfilled_len);
-    }
-
     fn put_done(&mut self) {
         self.put_done_required = false;
     }
@@ -91,21 +77,21 @@ where
         Some(())
     }
 
-    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> ToIovecs {
+    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> Iovecs {
         assert!(!self.put_done_required);
 
         if let Some(iovec) = iovecs.first_mut() {
             let chunk = self.inner.chunk();
             if !chunk.is_empty() {
                 *iovec = IoSlice::new(chunk);
-                return ToIovecs::Iovecs {
+                return Iovecs {
                     num_iovecs: 1,
                     total_len: chunk.len(),
                 };
             }
         }
 
-        ToIovecs::Iovecs {
+        Iovecs {
             num_iovecs: 0,
             total_len: 0,
         }

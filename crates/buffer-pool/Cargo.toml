@@ -8,9 +8,6 @@ edition = "2024"
 
 [dependencies]
 bytes_ = { workspace = true, optional = true }
-nix = { workspace = true, features = [
-	"fs",
-] }
 thiserror = { workspace = true }
 
 

@@ -51,14 +51,6 @@ define_u8_code! {
 }
 
 impl SubscribeReasonCode {
-    pub fn from_qos(qos: QoS) -> SubscribeReasonCode {
-        match qos {
-            QoS::AtMostOnce => SubscribeReasonCode::GrantedQoS0,
-            QoS::AtLeastOnce => SubscribeReasonCode::GrantedQoS1,
-            QoS::ExactlyOnce => SubscribeReasonCode::GrantedQoS2,
-        }
-    }
-
     pub fn is_success(&self) -> bool {
         matches!(
             self,
@@ -92,11 +84,7 @@ where
 {
     const PACKET_TYPE: u8 = 0x90;
 
-    fn decode<const RLFML: usize>(
-        _flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(_flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let packet_identifier = src.try_get_packet_identifier()?;
 
         let other_properties = match version {
@@ -135,11 +123,7 @@ where
         })
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {
@@ -236,6 +220,16 @@ impl SubscribeReasonCode {
     }
 }
 
+impl From<QoS> for SubscribeReasonCode {
+    fn from(qos: QoS) -> Self {
+        match qos {
+            QoS::AtMostOnce => Self::GrantedQoS0,
+            QoS::AtLeastOnce => Self::GrantedQoS1,
+            QoS::ExactlyOnce => Self::GrantedQoS2,
+        }
+    }
+}
+
 #[cfg(all(test, feature = "tests"))]
 mod tests {
     use test_case::test_case;
@@ -276,7 +270,7 @@ mod tests {
     #[test_case(QoS::AtLeastOnce, SubscribeReasonCode::GrantedQoS1; "qos 1")]
     #[test_case(QoS::ExactlyOnce, SubscribeReasonCode::GrantedQoS2; "qos 2")]
     fn subscribe_reason_code_from_qos(qos: QoS, code: SubscribeReasonCode) {
-        assert_eq!(SubscribeReasonCode::from_qos(qos), code);
+        assert_eq!(SubscribeReasonCode::from(qos), code);
     }
 
     encode_decode_v3! {

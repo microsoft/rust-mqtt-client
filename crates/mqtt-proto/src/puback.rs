@@ -26,15 +26,6 @@ impl<S> PubAck<S>
 where
     S: Shared,
 {
-    #[inline]
-    pub fn property(&self, prop: impl AsRef<str>) -> Option<&ByteStr<S>> {
-        let prop = prop.as_ref();
-        self.other_properties
-            .user_properties
-            .iter()
-            .find_map(|(k, v)| (k.as_ref() == prop).then_some(v))
-    }
-
     /// Creates a copy of this `PubAck` with another [`Shared`] type as the backing buffer.
     pub fn to_shared<O2>(&self, owned: &mut O2) -> Result<PubAck<O2::Shared>, buffer_pool::Error>
     where
@@ -110,11 +101,7 @@ where
 {
     const PACKET_TYPE: u8 = 0x40;
 
-    fn decode<const RLFML: usize>(
-        _flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(_flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let packet_identifier = src.try_get_packet_identifier()?;
 
         match version {
@@ -175,11 +162,7 @@ where
         }
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {

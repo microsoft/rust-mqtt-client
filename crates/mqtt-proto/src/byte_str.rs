@@ -96,7 +96,7 @@ where
     }
 
     /// This function converts the given `Shared` into a `ByteStr`. The `Shared` must contain
-    /// the bytes of a valid UTF-8 string. It is meant to be used for decoding payloads that are known to consist
+    /// the bytes of a valid UTF-8 string with a length prefix. It is meant to be used for decoding payloads that are known to consist
     /// entirely of a single string.
     ///
     /// See also [`decode`].
@@ -138,6 +138,8 @@ where
     S: Shared,
 {
     fn as_ref(&self) -> &str {
+        // SAFETY: All API for constructing a `ByteStr` validate that it was constructed from
+        // a valid UTF-8 string.
         unsafe { std::str::from_utf8_unchecked(self.0.as_ref()) }
     }
 }
@@ -246,7 +248,7 @@ mod tests {
 
     use test_case::test_case;
 
-    use buffer_pool::{BufferSource as _, tests::BufferPoolImpl};
+    use buffer_pool::{BufferPool as _, tests::BufferPoolImpl};
 
     use super::*;
     use crate::binary_data;

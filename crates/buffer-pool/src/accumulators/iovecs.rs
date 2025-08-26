@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{collections::VecDeque, fs::File, io::IoSlice, sync::Arc};
+use std::{collections::VecDeque, io::IoSlice};
 
-use crate::{BytesAccumulator, Error, Owned, Shared, ToIovecs};
+use crate::{BytesAccumulator, Error, Iovecs, Owned, Shared};
 
 #[derive(Debug)]
 pub struct BytesAccumulatorImpl<O>
@@ -11,19 +11,9 @@ where
     O: Owned,
 {
     owned: O,
-    chunks: VecDeque<Chunk<O::Shared>>,
+    chunks: VecDeque<O::Shared>,
     /// Total number of bytes in `self.chunks`.
     total_size: usize,
-}
-
-#[derive(Debug)]
-enum Chunk<S> {
-    Shared(S),
-    File {
-        f: Arc<File>,
-        offset: u64,
-        len: usize,
-    },
 }
 
 impl<O> BytesAccumulatorImpl<O>
@@ -69,30 +59,21 @@ where
 
         self.put_done();
         self.total_size += src.len();
-        self.chunks.push_back(Chunk::Shared(src));
-    }
-
-    fn put_file_chunk(&mut self, f: Arc<File>, offset: u64, len: usize) {
-        // Writing a chunk requires flushing all previous writes first, which is wasteful if this chunk is empty.
-        // So ignore empty chunks.
-        if len == 0 {
-            return;
-        }
-
-        self.put_done();
-        self.total_size += len;
-        self.chunks.push_back(Chunk::File { f, offset, len });
+        self.chunks.push_back(src);
     }
 
     fn try_put_slice(&mut self, src: &[u8]) -> Option<()> {
-        let dst = self.owned.unfilled_mut();
-        if dst.len() >= src.len() {
-            let dst = dst.get_mut(..src.len())?;
-            crate::maybe_uninit_copy_from_slice(dst, src);
-            self.owned.fill(src.len());
-            Some(())
-        } else {
-            None
+        // SAFETY: Requirements of `unfilled_mut` and `fill` are upheld.
+        unsafe {
+            let dst = self.owned.unfilled_mut();
+            if dst.len() >= src.len() {
+                let dst = dst.get_mut(..src.len())?;
+                crate::maybe_uninit_copy_from_slice(dst, src);
+                self.owned.fill(src.len());
+                Some(())
+            } else {
+                None
+            }
         }
     }
 
@@ -100,37 +81,21 @@ where
         if !self.owned.filled_is_empty() {
             let shared = self.owned.split_to(self.owned.filled_len()).freeze();
             self.total_size += shared.len();
-            self.chunks.push_back(Chunk::Shared(shared));
+            self.chunks.push_back(shared);
         }
     }
 
-    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> ToIovecs {
+    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> Iovecs {
         assert!(self.owned.filled_is_empty());
 
         let mut num_iovecs = 0;
         let mut total_len = 0;
         for (iovec, chunk) in iovecs.iter_mut().zip(&self.chunks) {
-            match chunk {
-                Chunk::Shared(shared) => {
-                    *iovec = IoSlice::new(shared.as_ref());
-                    num_iovecs += 1;
-                    total_len += shared.len();
-                }
-
-                Chunk::File { f, offset, len } => {
-                    if num_iovecs == 0 {
-                        return ToIovecs::FileChunk {
-                            f: f.clone(),
-                            offset: *offset,
-                            len: *len,
-                        };
-                    }
-
-                    break;
-                }
-            }
+            *iovec = IoSlice::new(chunk.as_ref());
+            num_iovecs += 1;
+            total_len += chunk.len();
         }
-        ToIovecs::Iovecs {
+        Iovecs {
             num_iovecs,
             total_len,
         }
@@ -148,40 +113,17 @@ where
         where
             O: Owned,
         {
-            while let Some(chunk) = this.chunks.pop_front() {
-                match chunk {
-                    Chunk::Shared(mut shared) => {
-                        this.total_size -= shared.as_ref().len();
+            while let Some(mut chunk) = this.chunks.pop_front() {
+                this.total_size -= chunk.as_ref().len();
 
-                        if let Some(n_) = n.checked_sub(shared.as_ref().len()) {
-                            n = n_;
-                        } else {
-                            shared.drain(n);
-                            n = 0;
-                            this.total_size += shared.as_ref().len();
-                            this.chunks.push_front(Chunk::Shared(shared));
-                            break;
-                        }
-                    }
-
-                    Chunk::File {
-                        f,
-                        mut offset,
-                        mut len,
-                    } => {
-                        this.total_size -= len;
-
-                        if let Some(n_) = n.checked_sub(len) {
-                            n = n_;
-                        } else {
-                            offset += u64::try_from(n).expect("usize -> u64");
-                            len -= n;
-                            n = 0;
-                            this.total_size += len;
-                            this.chunks.push_front(Chunk::File { f, offset, len });
-                            break;
-                        }
-                    }
+                if let Some(n_) = n.checked_sub(chunk.as_ref().len()) {
+                    n = n_;
+                } else {
+                    chunk.drain(n);
+                    n = 0;
+                    this.total_size += chunk.as_ref().len();
+                    this.chunks.push_front(chunk);
+                    break;
                 }
             }
             assert_eq!(n, 0);
@@ -209,51 +151,6 @@ where
     }
 
     fn is_empty(&self) -> bool {
-        self.owned.filled_is_empty() && self.chunks.iter().all(Chunk::is_empty)
+        self.owned.filled_is_empty() && self.chunks.iter().all(Self::Shared::is_empty)
     }
 }
-
-impl<S> Chunk<S>
-where
-    S: Shared,
-{
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Shared(shared) => shared.is_empty(),
-            Self::File { len, .. } => *len == 0,
-        }
-    }
-}
-
-impl<S> PartialEq for Chunk<S>
-where
-    S: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Shared(shared1), Self::Shared(shared2)) => shared1 == shared2,
-
-            // We don't want to actually read the file chunk to compare it.
-            // Instead we use a softer definition of checking that it's the same Arc<File>
-            // with the same chunk range.
-            // This means it's possible for two different `File`s to the same file chunk
-            // to compare unequal, but this is good enough for our use case.
-            (
-                Self::File {
-                    f: f1,
-                    offset: offset1,
-                    len: len1,
-                },
-                Self::File {
-                    f: f2,
-                    offset: offset2,
-                    len: len2,
-                },
-            ) => Arc::ptr_eq(f1, f2) && offset1 == offset2 && len1 == len2,
-
-            _ => false,
-        }
-    }
-}
-
-impl<S> Eq for Chunk<S> where S: Eq {}

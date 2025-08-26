@@ -5,11 +5,11 @@ use derive_where::derive_where;
 
 use buffer_pool::{BytesAccumulator, Owned, Shared};
 
-use super::{PacketMeta, Property, PropertyRef, SubAck, SubscribeReasonCode};
+use super::{PacketMeta, Property, PropertyRef};
 
 use crate::{
     ByteStr, DecodeError, EncodeError, Filter, PacketIdentifier, ProtocolVersion, QoS,
-    SharedExt as _, SubAckOtherProperties, UserProperties,
+    SharedExt as _, UserProperties,
 };
 
 /// Ref: 3.8 SUBSCRIBE - Subscribe to topics
@@ -145,29 +145,6 @@ impl<S> Subscribe<S>
 where
     S: Shared,
 {
-    pub fn ack(&self, reason_codes: impl IntoIterator<Item = SubscribeReasonCode>) -> SubAck<S> {
-        self.ack_with_reason_string(reason_codes, None)
-    }
-
-    pub fn ack_with_reason_string(
-        &self,
-        reason_codes: impl IntoIterator<Item = SubscribeReasonCode>,
-        reason_string: Option<ByteStr<S>>,
-    ) -> SubAck<S> {
-        SubAck {
-            packet_identifier: self.packet_identifier,
-            reason_codes: reason_codes.into_iter().collect(),
-            other_properties: SubAckOtherProperties {
-                reason_string,
-                ..Default::default()
-            },
-        }
-    }
-
-    pub fn ack_all(&self, reason_code: SubscribeReasonCode) -> SubAck<S> {
-        self.ack(self.subscribe_to.iter().map(|_| reason_code))
-    }
-
     /// Creates a copy of this `Subscribe` with another [`Shared`] type as the backing buffer.
     pub fn to_shared<O2>(&self, owned: &mut O2) -> Result<Subscribe<O2::Shared>, buffer_pool::Error>
     where
@@ -192,14 +169,10 @@ where
 {
     const PACKET_TYPE: u8 = 0x80;
 
-    fn decode<const RLFML: usize>(
-        _flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(_flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let packet_identifier = src.try_get_packet_identifier()?;
 
-        let other_properties = SubscribeOtherProperties::decode::<RLFML>(src, version)?;
+        let other_properties = SubscribeOtherProperties::decode(src, version)?;
 
         let mut subscribe_to = vec![];
 
@@ -218,11 +191,7 @@ where
         })
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {
@@ -235,7 +204,7 @@ where
         dst.try_put_u16_be(packet_identifier.0.get())
             .ok_or(EncodeError::InsufficientBuffer)?;
 
-        other_properties.encode::<B, RLFML>(dst, version)?;
+        other_properties.encode(dst, version)?;
 
         if subscribe_to.is_empty() {
             return Err(EncodeError::NoTopics);
@@ -335,10 +304,7 @@ impl<S> SubscribeOtherProperties<S>
 where
     S: Shared,
 {
-    pub fn decode<const RLFML: usize>(
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    pub fn decode(src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         Ok(match version {
             ProtocolVersion::V3 => Default::default(),
 
@@ -357,11 +323,7 @@ where
         })
     }
 
-    pub fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    pub fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {
@@ -393,8 +355,8 @@ mod tests {
     };
 
     use crate::{
-        BinaryData, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH, DecodeError, Packet,
-        PacketIdentifier, ProtocolVersion, QoS, binary_data, byte_str, filter,
+        BinaryData, DecodeError, Packet, PacketIdentifier, ProtocolVersion, QoS, binary_data,
+        byte_str, filter,
     };
 
     encode_decode_v3! {
@@ -442,10 +404,7 @@ mod tests {
         buffer.drain(std::mem::size_of::<u16>());
 
         assert_matches!(
-            Packet::<SharedImpl>::decode_full::<DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(
-                &mut buffer,
-                ProtocolVersion::V5,
-            ),
+            Packet::decode_full(&mut buffer, ProtocolVersion::V5,),
             Err(DecodeError::NoLocalWithSharedSubscription)
         );
     }

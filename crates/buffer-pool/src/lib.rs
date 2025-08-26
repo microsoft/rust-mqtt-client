@@ -2,13 +2,9 @@
 // Licensed under the MIT License.
 
 use std::{
-    io,
     mem::{MaybeUninit, size_of},
-    os::fd::AsRawFd,
     ptr,
 };
-
-use nix::libc;
 
 #[derive(Eq, PartialEq, thiserror::Error)]
 #[error("insufficient capacity in buffer pool")]
@@ -23,7 +19,7 @@ impl std::fmt::Debug for Error {
 /// A source of buffers.
 ///
 /// Dropped buffers will automatically return to this pool.
-pub trait BufferSource: Clone + Send + Sync + std::fmt::Debug + Unpin {
+pub trait BufferPool: Clone + Send + Sync + std::fmt::Debug + Unpin {
     type Shared: Shared + Ord;
     type Owned: Owned<Shared = Self::Shared>;
 
@@ -58,10 +54,17 @@ pub trait Owned: std::fmt::Debug {
 
     fn unfilled_len(&self) -> usize;
 
-    fn unfilled_mut(&mut self) -> &mut [MaybeUninit<u8>];
+    /// # Safety
+    ///
+    /// Caller must not read from this slice, and must only write initialized elements to it.
+    unsafe fn unfilled_mut(&mut self) -> &mut [MaybeUninit<u8>];
 
     /// Moves the given number of bytes from the start of the unfilled region to the end of the filled region.
-    fn fill(&mut self, n: usize);
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure that `n` bytes have already been initialized.
+    unsafe fn fill(&mut self, n: usize);
 
     /// Removes the given number of bytes from the start of the filled region.
     fn drain(&mut self, n: usize);
@@ -98,7 +101,8 @@ pub trait Shared:
 
         owned.reserve(len)?;
 
-        {
+        // SAFETY: Requirements of `unfilled_mut` and `fill` are upheld.
+        unsafe {
             let buf = owned.unfilled_mut();
             maybe_uninit_copy_from_slice(&mut buf[..len], value);
             owned.fill(len);
@@ -196,7 +200,7 @@ impl Shared for &[u8] {
 }
 
 pub mod accumulators;
-pub use accumulators::{BytesAccumulator, ToIovecs};
+pub use accumulators::{BytesAccumulator, Iovecs};
 
 #[cfg(feature = "bytes-build")]
 pub mod bytes;
@@ -211,62 +215,10 @@ pub fn maybe_uninit_copy_from_slice<T>(this: &mut [MaybeUninit<T>], src: &[T])
 where
     T: Copy,
 {
-    // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
+    // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout.
+    //
+    // This is the same code as libstd's unstable impl.
     let uninit_src: &[MaybeUninit<T>] =
         unsafe { &*(ptr::from_ref(src) as *const [MaybeUninit<T>]) };
     this.copy_from_slice(uninit_src);
-}
-
-// TODO(rustup): Replace this with `<[T]>::assume_init_ref` when that is stabilized.
-unsafe fn slice_assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
-    // SAFETY: Casting `slice` to a `*const [T]` is safe since the caller guarantees that
-    // `slice` is initialized, and `MaybeUninit<T>` is guaranteed to have the same layout as `T`.
-    // The pointer obtained is valid since it refers to memory owned by `slice` which is a
-    // reference and thus guaranteed to be valid for reads.
-    unsafe { &*(ptr::from_ref(slice) as *const [T]) }
-}
-
-pub fn maybe_uninit_copy_from_file_chunk<'dst>(
-    dst: &'dst mut [MaybeUninit<u8>],
-    f: &impl AsRawFd,
-    offset: u64,
-    len: usize,
-) -> io::Result<&'dst [u8]> {
-    if len == 0 {
-        return Ok(&[]);
-    }
-
-    let dst = dst.get_mut(..len).expect("dst.len() must be >= len");
-
-    let mut dst_pos = 0;
-    let mut file_pos = offset;
-    let mut remaining = len;
-
-    while remaining > 0 {
-        // This uses `libc::pread` instead of `FileExt::read_exact_at` or `nix::sys::uio::pread` because
-        // those require `&mut [u8]` instead of `&mut [MaybeUninit<u8>]`),
-        // and zeroing the buffer just before we read the file content into it is wasteful.
-        let read = unsafe {
-            libc::pread(
-                f.as_raw_fd(),
-                <*mut _>::cast(&raw mut dst[dst_pos..]),
-                remaining,
-                file_pos.try_into().expect("u64 -> off_t"),
-            )
-        };
-        let read: usize = match read.try_into() {
-            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
-            Ok(read) => read,
-            Err(_) => match nix::Error::last() {
-                nix::Error::EINTR => continue,
-                err => return Err(err.into()),
-            },
-        };
-
-        dst_pos += read;
-        file_pos += u64::try_from(read).expect("usize -> u64");
-        remaining -= read;
-    }
-
-    unsafe { Ok(slice_assume_init_ref(dst)) }
 }

@@ -97,29 +97,6 @@ impl<S> ConnAck<S>
 where
     S: Shared,
 {
-    /// Returns the first property with the given name.
-    /// Note that the protocol allows multiple props with the same name.
-    #[inline]
-    pub fn property(&self, prop: impl AsRef<str>) -> Option<&ByteStr<S>> {
-        self.properties(prop).next()
-    }
-
-    /// Returns an iterator over all properties with the given name.
-    /// Note that the protocol allows multiple props with the same name.
-    #[inline]
-    pub fn properties(&self, prop: impl AsRef<str>) -> impl Iterator<Item = &ByteStr<S>> {
-        self.other_properties
-            .user_properties
-            .iter()
-            .filter_map(move |(k, val)| {
-                if k.as_ref() == prop.as_ref() {
-                    Some(val)
-                } else {
-                    None
-                }
-            })
-    }
-
     /// Creates a copy of this `ConnAck` with another [`Shared`] type as the backing buffer.
     pub fn to_shared<O2>(&self, owned: &mut O2) -> Result<ConnAck<O2::Shared>, buffer_pool::Error>
     where
@@ -138,11 +115,7 @@ where
 {
     const PACKET_TYPE: u8 = 0x20;
 
-    fn decode<const RLFML: usize>(
-        _flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(_flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let connack_flags = src.try_get_u8()?;
         let session_present = match connack_flags {
             0x00 => false,
@@ -208,11 +181,7 @@ where
         })
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {

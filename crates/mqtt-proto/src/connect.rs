@@ -58,18 +58,18 @@ impl<S> Connect<S>
 where
     S: Shared,
 {
-    pub fn decode_any_version<const RLFML: usize>(
+    pub fn decode_any_version(
         flags: u8,
         src: &mut S,
     ) -> Result<(Self, ProtocolVersion), DecodeError> {
         let version = decode_start(flags, src)?;
         match version {
-            ProtocolVersion::V3 => Ok((Self::decode_rest_v3::<RLFML>(src)?, version)),
-            ProtocolVersion::V5 => Ok((Self::decode_rest_v5::<RLFML>(src)?, version)),
+            ProtocolVersion::V3 => Ok((Self::decode_rest_v3(src)?, version)),
+            ProtocolVersion::V5 => Ok((Self::decode_rest_v5(src)?, version)),
         }
     }
 
-    pub(crate) fn decode_rest_v3<const RLFML: usize>(src: &mut S) -> Result<Self, DecodeError> {
+    pub(crate) fn decode_rest_v3(src: &mut S) -> Result<Self, DecodeError> {
         let connect_flags = src.try_get_u8()?;
         if connect_flags & CONNECT_FLAGS_RESERVED != 0 {
             return Err(DecodeError::ConnectReservedSet);
@@ -159,7 +159,7 @@ where
         })
     }
 
-    pub(crate) fn decode_rest_v5<const RLFML: usize>(src: &mut S) -> Result<Self, DecodeError> {
+    pub(crate) fn decode_rest_v5(src: &mut S) -> Result<Self, DecodeError> {
         let connect_flags = src.try_get_u8()?;
         if connect_flags & CONNECT_FLAGS_RESERVED != 0 {
             return Err(DecodeError::ConnectReservedSet);
@@ -309,29 +309,6 @@ where
             other_properties: self.other_properties.to_shared(owned)?,
         })
     }
-
-    /// Returns the first property with the given name.
-    /// Note that the protocol allows multiple props with the same name.
-    #[inline]
-    pub fn property(&self, prop: impl AsRef<str>) -> Option<&ByteStr<S>> {
-        self.properties(prop).next()
-    }
-
-    /// Returns an iterator over all properties with the given name.
-    /// Note that the protocol allows multiple props with the same name.
-    #[inline]
-    pub fn properties(&self, prop: impl AsRef<str>) -> impl Iterator<Item = &ByteStr<S>> {
-        self.other_properties
-            .user_properties
-            .iter()
-            .filter_map(move |(k, val)| {
-                if k.as_ref() == prop.as_ref() {
-                    Some(val)
-                } else {
-                    None
-                }
-            })
-    }
 }
 
 impl<S> std::fmt::Debug for Connect<S>
@@ -369,11 +346,7 @@ where
 {
     const PACKET_TYPE: u8 = 0x10;
 
-    fn decode<const RLFML: usize>(
-        flags: u8,
-        src: &mut S,
-        version: ProtocolVersion,
-    ) -> Result<Self, DecodeError> {
+    fn decode(flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let actual_version = decode_start(flags, src)?;
         if actual_version != version {
             return Err(DecodeError::UnrecognizedProtocolVersion(
@@ -382,16 +355,12 @@ where
         }
 
         match version {
-            ProtocolVersion::V3 => Self::decode_rest_v3::<RLFML>(src),
-            ProtocolVersion::V5 => Self::decode_rest_v5::<RLFML>(src),
+            ProtocolVersion::V3 => Self::decode_rest_v3(src),
+            ProtocolVersion::V5 => Self::decode_rest_v5(src),
         }
     }
 
-    fn encode<B, const RLFML: usize>(
-        &self,
-        dst: &mut B,
-        version: ProtocolVersion,
-    ) -> Result<(), EncodeError>
+    fn encode<B>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {
@@ -656,9 +625,9 @@ mod tests {
     use super::{Connect, ConnectOtherProperties};
 
     use crate::{
-        Authentication, BinaryData, DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH, DecodeError,
-        EncodeError, Packet, ProtocolVersion, Publication, PublicationOtherProperties, QoS,
-        SessionExpiryInterval, binary_data, byte_str, correlation_data, tests, topic,
+        Authentication, BinaryData, DecodeError, EncodeError, Packet, ProtocolVersion, Publication,
+        PublicationOtherProperties, QoS, SessionExpiryInterval, binary_data, byte_str,
+        correlation_data, tests, topic,
     };
 
     encode_decode_v3! {
@@ -841,10 +810,7 @@ mod tests {
         buffer.drain(std::mem::size_of::<u16>());
 
         assert_matches!(
-            Packet::<SharedImpl>::decode_full::<DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH>(
-                &mut buffer,
-                version
-            ),
+            Packet::decode_full(&mut buffer, version),
             Err(DecodeError::WillPropertiesFlagsSetButNotWillFlag)
         );
     }
@@ -914,9 +880,7 @@ mod tests {
         let mut buffer = encoding.clone().into_shared();
         buffer.drain(std::mem::size_of::<u16>());
 
-        let actual_packet = Packet::<SharedImpl>::decode_full::<
-            DEFAULT_REMAINING_LENGTH_FIELD_MAX_LENGTH,
-        >(&mut buffer, version);
+        let actual_packet = Packet::decode_full(&mut buffer, version);
 
         if let (ProtocolVersion::V3, false, true) = (version, username_present, password_present) {
             assert_matches!(

@@ -371,7 +371,7 @@ mod tests {
         // checking the error message instead.
         assert_eq!(
             format!("{:?}", Filter::new(filter)),
-            format!("{:?}", Result::<Filter<String>, DecodeError>::Err(err))
+            format!("{:?}", Err::<Filter<String>, DecodeError>(err))
         );
     }
 

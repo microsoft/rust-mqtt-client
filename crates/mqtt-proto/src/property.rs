@@ -248,17 +248,17 @@ impl<S> Property<S>
 where
     S: Shared,
 {
-    pub(super) fn decode_all<const RLFML: usize>(
+    pub(super) fn decode_all(
         src: &mut S,
     ) -> Result<impl Iterator<Item = Result<Self, DecodeError>>, DecodeError> {
-        struct PropertyDecodeIter<S, const RLFML: usize>
+        struct PropertyDecodeIter<S>
         where
             S: Shared,
         {
             src: S,
         }
 
-        impl<S, const RLFML: usize> Iterator for PropertyDecodeIter<S, RLFML>
+        impl<S> Iterator for PropertyDecodeIter<S>
         where
             S: Shared,
         {
@@ -269,7 +269,7 @@ where
                     return None;
                 }
 
-                Some(Property::decode::<RLFML>(&mut self.src))
+                Some(Property::decode(&mut self.src))
             }
         }
 
@@ -277,7 +277,7 @@ where
             let mut src = src.as_ref();
             let original_src_len = src.len();
             let remaining_length =
-                decode_remaining_length::<RLFML>(&mut src)?.ok_or(DecodeError::IncompletePacket)?;
+                decode_remaining_length(&mut src)?.ok_or(DecodeError::IncompletePacket)?;
             let new_src_len = src.len();
             (remaining_length, original_src_len - new_src_len)
         };
@@ -288,10 +288,10 @@ where
         }
         let src = src.split_to(remaining_length);
 
-        Ok(PropertyDecodeIter::<_, RLFML> { src })
+        Ok(PropertyDecodeIter { src })
     }
 
-    fn decode<const RLFML: usize>(src: &mut S) -> Result<Self, DecodeError> {
+    fn decode(src: &mut S) -> Result<Self, DecodeError> {
         // Note: The spec says property identifiers are technically variable-length integers,
         // but also that all the current defined identifiers are one-byte long,
         // so for now we take the easy route and just parse a byte.
@@ -332,8 +332,7 @@ where
                 let (varint, varint_len) = {
                     let mut src = src.as_ref();
                     let original_src_len = src.len();
-                    let varint =
-                        decode_varint::<4>(&mut src)?.ok_or(DecodeError::IncompletePacket)?;
+                    let varint = decode_varint(&mut src)?.ok_or(DecodeError::IncompletePacket)?;
                     let new_src_len = src.len();
                     (varint, original_src_len - new_src_len)
                 };
@@ -504,42 +503,36 @@ impl<S> PropertyRef<'_, S>
 where
     S: Shared,
 {
-    pub(super) fn encode_all<B, I, const RLFML: usize>(
-        properties: I,
-        dst: &mut B,
-    ) -> Result<(), EncodeError>
+    pub(super) fn encode_all<B, I>(properties: I, dst: &mut B) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
         I: Iterator<Item = Self> + Clone,
     {
-        fn encode_all_inner<'a, B, I, const RLFML: usize>(
-            properties: I,
-            dst: &mut B,
-        ) -> Result<(), EncodeError>
+        fn encode_all_inner<'a, B, I>(properties: I, dst: &mut B) -> Result<(), EncodeError>
         where
             B: BytesAccumulator,
             I: Iterator<Item = PropertyRef<'a, B::Shared>> + Clone,
             B::Shared: 'a,
         {
             for property in properties {
-                property.encode::<B, RLFML>(dst)?;
+                property.encode(dst)?;
             }
             Ok(())
         }
 
         let properties_length = {
             let mut counter = ByteCounter::<_, true>::new();
-            encode_all_inner::<ByteCounter<_, true>, I, RLFML>(properties.clone(), &mut counter)?;
+            encode_all_inner::<ByteCounter<_, true>, I>(properties.clone(), &mut counter)?;
             counter.into_count()
         };
 
-        encode_remaining_length::<_, RLFML>(properties_length, dst)?;
-        encode_all_inner::<_, _, RLFML>(properties, dst)?;
+        encode_remaining_length(properties_length, dst)?;
+        encode_all_inner(properties, dst)?;
 
         Ok(())
     }
 
-    fn encode<B, const RLFML: usize>(self, dst: &mut B) -> Result<(), EncodeError>
+    fn encode<B>(self, dst: &mut B) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
     {
@@ -564,7 +557,7 @@ where
 
             Self::ConnectSessionExpiryInterval(&interval) => {
                 if u32::from(interval) > 0 {
-                    PropertyRef::SessionExpiryInterval(&interval.0).encode::<_, RLFML>(dst)?;
+                    PropertyRef::SessionExpiryInterval(&interval.0).encode(dst)?;
                 }
             }
 
@@ -703,7 +696,7 @@ where
             Self::SubscriptionIdentifier(&varint) => {
                 dst.try_put_u8(0x0B)
                     .ok_or(EncodeError::InsufficientBuffer)?;
-                encode_varint::<_, RLFML>(varint, dst)?;
+                encode_varint(varint, dst)?;
             }
 
             Self::SubscriptionIdentifiersAvailable(&available) => {
@@ -771,7 +764,7 @@ macro_rules! decode_properties {
         { }
     ) => {
         $($bindings_decl)*
-        for property in Property::decode_all::<RLFML>($src)? {
+        for property in Property::decode_all($src)? {
             match property? {
                 $($match_body)*
                 // TODO: Include at least the variant name of the unexpected property in the error
@@ -876,7 +869,7 @@ macro_rules! encode_properties {
         { }
     ) => {
         let properties = $($result)*;
-        PropertyRef::encode_all::<_, _, RLFML>(properties, $dst)?;
+        PropertyRef::encode_all::<_, _>(properties, $dst)?;
     };
 
     (

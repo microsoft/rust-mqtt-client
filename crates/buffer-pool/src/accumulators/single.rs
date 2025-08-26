@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{fs::File, io::IoSlice, marker::PhantomData, sync::Arc};
+use std::{io::IoSlice, marker::PhantomData};
 
 use bytes_::{Buf as _, BytesMut};
 
-use crate::{BytesAccumulator, Error, Shared, ToIovecs, maybe_uninit_copy_from_file_chunk};
+use crate::{BytesAccumulator, Error, Iovecs, Shared};
 
 /// This type impls [`BytesAccumulator`] with a target of a single [`BytesMut`].
 ///
@@ -38,14 +38,6 @@ where
         self.0.extend_from_slice(src.as_ref());
     }
 
-    fn put_file_chunk(&mut self, f: Arc<File>, offset: u64, len: usize) {
-        self.0.reserve(len);
-        _ = maybe_uninit_copy_from_file_chunk(self.0.spare_capacity_mut(), &f, offset, len);
-        unsafe {
-            self.0.set_len(self.0.len() + len);
-        }
-    }
-
     fn try_put_slice(&mut self, src: &[u8]) -> Option<()> {
         self.0.extend_from_slice(src);
         Some(())
@@ -53,19 +45,19 @@ where
 
     fn put_done(&mut self) {}
 
-    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> ToIovecs {
+    fn to_iovecs<'a>(&'a self, iovecs: &mut [IoSlice<'a>]) -> Iovecs {
         if let Some(iovec) = iovecs.first_mut() {
             let chunk = self.0.chunk();
             if !chunk.is_empty() {
                 *iovec = IoSlice::new(chunk);
-                return ToIovecs::Iovecs {
+                return Iovecs {
                     num_iovecs: 1,
                     total_len: chunk.len(),
                 };
             }
         }
 
-        ToIovecs::Iovecs {
+        Iovecs {
             num_iovecs: 0,
             total_len: 0,
         }

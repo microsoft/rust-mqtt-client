@@ -16,8 +16,6 @@ enum-iterator = { version = "2", default-features = false }
 
 matches = { version = "0.1", default-features = false }
 
-nix = { version = "0.30", default-features = false }
-
 serde = { version = "1", features = ["derive"] }
 
 test-case = { version = "3", default-features = false }
