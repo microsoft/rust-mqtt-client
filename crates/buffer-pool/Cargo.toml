@@ -1,0 +1,22 @@
+[package]
+name = "buffer-pool"
+version = "0.1.0"
+authors = ["Azure IoT Operations Devs"]
+license = "MIT"
+edition = "2024"
+
+
+[dependencies]
+bytes_ = { workspace = true, optional = true }
+thiserror = { workspace = true }
+
+
+[features]
+bytes-build = ["bytes_"]
+bytes-default = ["bytes-build"]
+
+tests = ["bytes-build"]
+
+
+[lints]
+workspace = true
