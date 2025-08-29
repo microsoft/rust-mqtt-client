@@ -20,7 +20,7 @@ impl std::fmt::Debug for Error {
 ///
 /// Dropped buffers will automatically return to this pool.
 pub trait BufferPool: Clone + Send + Sync + std::fmt::Debug + Unpin {
-    type Shared: Shared + Ord;
+    type Shared: Shared;
     type Owned: Owned<Shared = Self::Shared>;
 
     /// Returns a buffer that is at least as long as the requested length.
@@ -200,7 +200,7 @@ impl Shared for &[u8] {
 }
 
 pub mod accumulators;
-pub use accumulators::{BytesAccumulator, Iovecs};
+pub use accumulators::{BytesAccumulator, EitherBytesAccumulator, Iovecs};
 
 #[cfg(feature = "bytes-build")]
 pub mod bytes;

@@ -62,10 +62,6 @@ where
         unreachable!("ByteCounter is never used for actually writing");
     }
 
-    fn split(&mut self) -> Self {
-        unreachable!("ByteCounter is never used for actually writing");
-    }
-
     fn is_empty(&self) -> bool {
         unreachable!("ByteCounter is never used in situations where this is called")
     }
