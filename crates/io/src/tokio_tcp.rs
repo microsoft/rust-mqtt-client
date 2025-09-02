@@ -50,13 +50,10 @@ pub struct TcpStreamWrite {
 }
 
 impl ReadableStream for TcpStreamRead {
-    fn read<'a, 'buf>(
+    fn read<'a>(
         &'a mut self,
-        buf: &'buf mut [MaybeUninit<u8>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>
-    where
-        'buf: 'a,
-    {
+        buf: &'a mut [MaybeUninit<u8>],
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
         Box::pin(async move {
             loop {
                 self.inner.readable().await?;
@@ -81,11 +78,8 @@ impl ReadableStream for TcpStreamRead {
 impl WritableStream for TcpStreamWrite {
     fn write_vectored<'a, 'buf>(
         &'a mut self,
-        bufs: &'buf [IoSlice<'buf>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>
-    where
-        'buf: 'a,
-    {
+        bufs: &'a [IoSlice<'buf>],
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
         Box::pin(async move {
             loop {
                 self.inner.writable().await?;

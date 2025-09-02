@@ -13,6 +13,11 @@ buffer-pool = { path = "../buffer-pool" }
 mqtt-proto = { path = "../mqtt-proto" }
 
 
+[dev-dependencies]
+matches = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+
 [features]
 tests = []
 

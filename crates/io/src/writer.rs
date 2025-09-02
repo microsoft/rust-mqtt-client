@@ -26,6 +26,14 @@ where
     }
 
     /// Encodes an MQTT [`Packet`] and enqueues that data to this `Writer`.
+    ///
+    /// The bytes of the packet are not guaranteed to be written to the underlying network stream
+    /// until `flush` is called.
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if the underlying network stream write or flush produced an error,
+    /// or an `UnexpectedEof` if 0 bytes were written.
     pub async fn write(
         &mut self,
         packet: &Packet<BP::Shared>,
@@ -58,8 +66,13 @@ where
         Ok(())
     }
 
-    /// Write all the data given to the [`BytesAccumulator`] returned by [`bytes_accumulator`] to
+    /// Ensures that all the data given to previous calls to [`write`] are written to
     /// the underlying network stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if the underlying network stream write or flush produced an error,
+    /// or an `UnexpectedEof` if 0 bytes were written.
     pub async fn flush(&mut self) -> io::Result<()> {
         loop {
             let mut iovecs = [IoSlice::new(&[]); 128];
@@ -101,5 +114,119 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Writer").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        future,
+        io::{self, IoSlice},
+        ops::Deref,
+        pin::Pin,
+    };
+
+    use buffer_pool::{
+        BufferPool as _, EitherBytesAccumulator,
+        accumulators::iovecs::BytesAccumulatorImpl,
+        tests::{BufferPoolImpl, SharedImpl},
+    };
+    use mqtt_proto::{
+        Connect, ConnectSessionExpiryInterval, Filter, KeepAlive, Packet, PacketIdentifier,
+        ProtocolVersion, QoS, SessionExpiryInterval, Subscribe, SubscribeOptions, SubscribeTo,
+        byte_str,
+    };
+
+    use super::Writer;
+    use crate::WritableStream;
+
+    struct MockWritableStream {
+        expected_writes: VecDeque<Vec<&'static [u8]>>,
+    }
+
+    impl WritableStream for MockWritableStream {
+        fn write_vectored<'a, 'buf>(
+            &'a mut self,
+            bufs: &'a [IoSlice<'buf>],
+        ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+            Box::pin(async move {
+                let Some(next_expected_write) = self.expected_writes.pop_front() else {
+                    panic!("MockWritableStream did not expect a write of {bufs:02x?}");
+                };
+                assert!(
+                    next_expected_write
+                        .iter()
+                        .copied()
+                        .eq(bufs.iter().map(Deref::deref)),
+                    "MockWritableStream did not get expected write:\nexpected {next_expected_write:02x?}\nbut got  {bufs:02x?}",
+                );
+                Ok(bufs.iter().map(|s| s.len()).sum())
+            })
+        }
+
+        fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>> {
+            Box::pin(future::ready(Ok(())))
+        }
+    }
+
+    impl Drop for MockWritableStream {
+        fn drop(&mut self) {
+            assert!(
+                self.expected_writes.is_empty(),
+                "MockWritableStream dropped before all expected writes occurred"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn it_works() {
+        let p1 = Packet::<SharedImpl>::Connect(Connect {
+            username: None,
+            password: None,
+            will: None,
+            client_id: None,
+            clean_start: true,
+            keep_alive: KeepAlive::Infinite,
+            session_expiry_interval: ConnectSessionExpiryInterval(SessionExpiryInterval::Infinite),
+            other_properties: Default::default(),
+        });
+
+        let p2 = Packet::<SharedImpl>::Subscribe(Subscribe {
+            packet_identifier: PacketIdentifier::new(1).unwrap(),
+            subscribe_to: vec![SubscribeTo {
+                topic_filter: Filter::new(byte_str("foo")).unwrap(),
+                options: SubscribeOptions {
+                    maximum_qos: QoS::AtLeastOnce,
+                    other_properties: Default::default(),
+                },
+            }],
+            other_properties: Default::default(),
+        });
+
+        let stream = MockWritableStream {
+            expected_writes: [
+                vec![
+                    // CONNECT
+                    &b"\x10\x12\x00\x04\x4d\x51\x54\x54\x05\x02\x00\x00\x05\x11\xff\xff\xff\xff\x00\x00"[..],
+                    // Start of SUBSCRIBE
+                    &b"\x82\x09\x00\x01\x00"[..],
+                    // SUBSCRIBE topic filter string
+                    &b"\x00\x03\x66\x6f\x6f"[..],
+                    // End of SUBSCRIBE
+                    &b"\x09"[..],
+                ],
+            ].into(),
+        };
+        let pool = BufferPoolImpl;
+        let mut writer = Writer::new(
+            Box::new(stream),
+            EitherBytesAccumulator::<BufferPoolImpl>::Iovecs(BytesAccumulatorImpl::new(
+                pool.take_empty_owned(),
+            )),
+        );
+        writer.write(&p1, ProtocolVersion::V5).await.unwrap();
+        writer.write(&p2, ProtocolVersion::V5).await.unwrap();
+        writer.flush().await.unwrap();
     }
 }

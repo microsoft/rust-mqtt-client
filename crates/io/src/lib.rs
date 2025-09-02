@@ -17,21 +17,17 @@ mod writer;
 pub use writer::Writer;
 
 trait ReadableStream {
-    fn read<'a, 'buf>(
+    fn read<'a>(
         &'a mut self,
-        buf: &'buf mut [MaybeUninit<u8>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>
-    where
-        'buf: 'a;
+        buf: &'a mut [MaybeUninit<u8>],
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>;
 }
 
 trait WritableStream {
     fn write_vectored<'a, 'buf>(
         &'a mut self,
-        bufs: &'buf [IoSlice<'buf>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>
-    where
-        'buf: 'a;
+        bufs: &'a [IoSlice<'buf>],
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>;
 
     fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>>;
 }
