@@ -82,10 +82,6 @@ pub trait BytesAccumulator: std::fmt::Debug {
     /// Removes the given number of bytes from the start of the accumulator.
     fn drain(&mut self, n: usize);
 
-    /// Returns a new `ByteAccumulator` with all the buffers from this accumulator.
-    /// The current accumulator is left empty.
-    fn split(&mut self) -> Self;
-
     fn is_empty(&self) -> bool;
 }
 
@@ -94,6 +90,9 @@ pub struct Iovecs {
     pub num_iovecs: usize,
     pub total_len: usize,
 }
+
+mod either;
+pub use either::EitherBytesAccumulator;
 
 pub mod iovecs;
 pub mod single;

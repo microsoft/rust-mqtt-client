@@ -101,17 +101,6 @@ where
         self.inner.advance(n);
     }
 
-    fn split(&mut self) -> Self {
-        self.put_done();
-
-        BytesAccumulatorImpl {
-            inner: self.inner.split(),
-            unfilled_len: self.unfilled_len,
-            put_done_required: false,
-            shared: self.shared,
-        }
-    }
-
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }

@@ -138,18 +138,6 @@ where
         drain_slow(self, n);
     }
 
-    fn split(&mut self) -> Self {
-        self.put_done();
-
-        let chunks = std::mem::take(&mut self.chunks);
-        let total_size = std::mem::replace(&mut self.total_size, 0);
-        BytesAccumulatorImpl {
-            total_size,
-            owned: self.owned.split_to(0),
-            chunks,
-        }
-    }
-
     fn is_empty(&self) -> bool {
         self.owned.filled_is_empty() && self.chunks.iter().all(Self::Shared::is_empty)
     }

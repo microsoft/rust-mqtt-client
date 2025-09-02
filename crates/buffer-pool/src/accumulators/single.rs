@@ -67,10 +67,6 @@ where
         self.0.advance(n);
     }
 
-    fn split(&mut self) -> Self {
-        BytesAccumulatorImpl(self.0.split(), PhantomData)
-    }
-
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
