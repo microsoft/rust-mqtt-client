@@ -14,13 +14,30 @@ derive-where = { version = "1", default-features = false }
 
 enum-iterator = { version = "2", default-features = false }
 
+hkdf = { version = "0.12", default-features = false }
+hmac = { version = "0.12", default-features = false, features = [
+    "reset", # for `hmac::Hmac::finalize_reset`
+] }
+
+# for kTLS support
+libc = { version = "0.2.151", default-features = false }
+
 matches = { version = "0.1", default-features = false }
 
+nix = { version = "0.30", default-features = false }
+
+openssl = { version = "0.10", default-features = false }
+
+parking_lot = "0.12"
+
 serde = { version = "1", features = ["derive"] }
+
+sha2 = { version = "0.10", default-features = false }
 
 test-case = { version = "3", default-features = false }
 thiserror = { version = "2", default-features = false }
 tokio = { version = "1.38", default-features = false }
+tokio-openssl = { version = "0.6", default-features = false }
 
 unicode-properties = { version = "0.1", default-features = false, features = [
     "general-category",
@@ -39,3 +56,4 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 return_self_not_must_use = "allow"
 too_many_lines = "allow"
+type_complexity = "allow"

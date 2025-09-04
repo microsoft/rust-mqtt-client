@@ -11,7 +11,8 @@ mod reader;
 pub use reader::Reader;
 
 pub mod tokio_tcp;
-pub use tokio_tcp::{TcpStreamRead, TcpStreamWrite};
+
+pub mod tokio_tls;
 
 mod writer;
 pub use writer::Writer;

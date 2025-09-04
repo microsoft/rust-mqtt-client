@@ -25,27 +25,33 @@ where
     BP: BufferPool,
 {
     let stream = TcpStream::connect(addr).await?;
+    Ok(connect_inner(stream, reader_pool, writer_pool))
+}
 
+pub(crate) fn connect_inner<BP>(
+    stream: TcpStream,
+    reader_pool: &BP,
+    writer_pool: &BP,
+) -> (Reader<BP>, Writer<BP>)
+where
+    BP: BufferPool,
+{
     let read = Rc::new(stream);
     let read_buf = reader_pool.take_empty_owned();
     let write = read.clone();
-    let write_buf = EitherBytesAccumulator::Iovecs(
-        buffer_pool::accumulators::iovecs::BytesAccumulatorImpl::new(
-            writer_pool.take_empty_owned(),
-        ),
-    );
+    let write_buf = EitherBytesAccumulator::Iovecs(writer_pool.take_empty_owned().into());
 
-    Ok((
+    (
         Reader::new(Box::new(TcpStreamRead { inner: read }), read_buf),
         Writer::new(Box::new(TcpStreamWrite { inner: write }), write_buf),
-    ))
+    )
 }
 
-pub struct TcpStreamRead {
+struct TcpStreamRead {
     inner: Rc<TcpStream>,
 }
 
-pub struct TcpStreamWrite {
+struct TcpStreamWrite {
     inner: Rc<TcpStream>,
 }
 

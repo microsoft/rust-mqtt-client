@@ -1,0 +1,22 @@
+[package]
+name = "opensslext"
+version = "0.1.0"
+authors = ["Azure IoT Operations Devs"]
+license = "MIT"
+edition = "2024"
+
+
+[dependencies]
+hkdf = { workspace = true }
+hmac = { workspace = true }
+libc = { workspace = true }
+openssl = { workspace = true }
+sha2 = { workspace = true }
+
+
+[features]
+tests = []
+
+
+[lints]
+workspace = true

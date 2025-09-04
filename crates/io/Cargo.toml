@@ -7,10 +7,15 @@ edition = "2024"
 
 
 [dependencies]
+nix = { workspace = true, features = ["net", "process", "socket", "zerocopy"] }
+openssl = { workspace = true }
+parking_lot = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net"] }
+tokio-openssl = { workspace = true }
 
 buffer-pool = { path = "../buffer-pool" }
 mqtt-proto = { path = "../mqtt-proto" }
+opensslext = { path = "../opensslext" }
 
 
 [dev-dependencies]

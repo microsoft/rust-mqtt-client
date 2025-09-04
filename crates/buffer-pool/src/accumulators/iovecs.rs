@@ -142,3 +142,12 @@ where
         self.owned.filled_is_empty() && self.chunks.iter().all(Self::Shared::is_empty)
     }
 }
+
+impl<O> From<O> for BytesAccumulatorImpl<O>
+where
+    O: Owned,
+{
+    fn from(owned: O) -> Self {
+        Self::new(owned)
+    }
+}
