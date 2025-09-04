@@ -129,7 +129,6 @@ mod tests {
 
     use buffer_pool::{
         BufferPool as _, EitherBytesAccumulator,
-        accumulators::iovecs::BytesAccumulatorImpl,
         tests::{BufferPoolImpl, SharedImpl},
     };
     use mqtt_proto::{
