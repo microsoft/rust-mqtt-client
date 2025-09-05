@@ -129,7 +129,6 @@ mod tests {
 
     use buffer_pool::{
         BufferPool as _, EitherBytesAccumulator,
-        accumulators::iovecs::BytesAccumulatorImpl,
         tests::{BufferPoolImpl, SharedImpl},
     };
     use mqtt_proto::{
@@ -221,9 +220,7 @@ mod tests {
         let pool = BufferPoolImpl;
         let mut writer = Writer::new(
             Box::new(stream),
-            EitherBytesAccumulator::<BufferPoolImpl>::Iovecs(BytesAccumulatorImpl::new(
-                pool.take_empty_owned(),
-            )),
+            EitherBytesAccumulator::<BufferPoolImpl>::Iovecs(pool.take_empty_owned().into()),
         );
         writer.write(&p1, ProtocolVersion::V5).await.unwrap();
         writer.write(&p2, ProtocolVersion::V5).await.unwrap();
