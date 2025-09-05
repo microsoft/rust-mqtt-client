@@ -15,6 +15,8 @@ use buffer_pool::{BufferPool, EitherBytesAccumulator};
 
 use crate::{ReadableStream, Reader, WritableStream, Writer};
 
+/// Connect to the given address with a TCP connection, and use the given buffer pools
+/// to initialize the buffers for the stream reader and writer.
 // TODO: Also take max packet size and forward it to `Reader`.
 pub async fn connect<BP>(
     addr: impl ToSocketAddrs,

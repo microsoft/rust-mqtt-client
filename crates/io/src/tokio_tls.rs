@@ -46,6 +46,10 @@ const TLS_METHOD_USERSPACE: u8 = 2;
 
 static TLS_METHOD: AtomicU8 = AtomicU8::new(TLS_METHOD_UNKNOWN);
 
+/// Connect to the given address with a TLS connection, and use the given buffer pools
+/// to initialize the buffers for the stream reader and writer.
+///
+/// The hostname part of the address will be matched against the server cert SAN.
 pub async fn connect<BP>(
     addr: &str,
     reader_pool: &BP,
@@ -207,7 +211,7 @@ fn prepare_for_ktls(
     //
     // [2]: https://github.com/rustls/rustls/commit/7117a805e0104705da50259357d8effa7d599e37
     context_builder
-        .set_cipher_list("ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256")
+        .set_cipher_list("ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256")
         .map_err(openssl_err_to_io_err)?;
     context_builder
         .set_ciphersuites(
