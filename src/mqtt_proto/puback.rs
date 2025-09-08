@@ -3,7 +3,7 @@
 
 use derive_where::derive_where;
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
     ByteStr, DecodeError, EncodeError, PacketIdentifier, PacketMeta, Property, PropertyRef,
     ProtocolVersion, SharedExt as _, UserProperties,

@@ -3,7 +3,7 @@
 
 use derive_where::derive_where;
 
-use crate::buffer_pool::{Owned, Shared, self};
+use crate::buffer_pool::{self, Owned, Shared};
 use crate::mqtt_proto::{
     ByteStr, CorrelationData, PacketIdentifier, PacketIdentifierDupQoS, Publish,
     PublishOtherProperties, QoS, Topic, UserProperties,

@@ -129,8 +129,8 @@ mod tests {
     use matches::assert_matches;
 
     use super::*;
-    use crate::mqtt_proto::{Packet, binary_data, byte_str};
     use crate::buffer_pool;
+    use crate::mqtt_proto::{Packet, binary_data, byte_str};
 
     encode_decode_v5! {
         Packet::Auth(Auth {

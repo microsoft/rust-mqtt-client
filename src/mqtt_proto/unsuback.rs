@@ -3,7 +3,7 @@
 
 use derive_where::derive_where;
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
     ByteStr, DecodeError, EncodeError, PacketIdentifier, PacketMeta, Property, PropertyRef,
     ProtocolVersion, SharedExt as _, UserProperties,
@@ -192,7 +192,7 @@ impl UnsubAckReasonCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mqtt_proto::{BinaryData, Packet, binary_data, byte_str, self};
+    use crate::mqtt_proto::{self, BinaryData, Packet, binary_data, byte_str};
     use buffer_pool::{Shared, tests::SharedImpl};
     use test_case::test_case;
 

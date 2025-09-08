@@ -3,7 +3,7 @@
 
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory as _};
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{BinaryData, DecodeError, EncodeError};
 
 /// Strings are prefixed with a two-byte big-endian length and are encoded as utf-8.

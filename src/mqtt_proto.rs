@@ -13,7 +13,7 @@ use std::{cmp::Ordering, hash::Hash, num::NonZeroU16};
 
 use derive_where::derive_where;
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 
 const PROTOCOL_NAME_STR: &str = "MQTT";
 const PROTOCOL_NAME: &[u8] = b"\x00\x04MQTT";

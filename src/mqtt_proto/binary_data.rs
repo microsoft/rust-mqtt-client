@@ -3,7 +3,7 @@
 
 use std::mem::size_of;
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{DecodeError, EncodeError};
 
 /// Binary data (not including payloads described by remaining length) are prefixed

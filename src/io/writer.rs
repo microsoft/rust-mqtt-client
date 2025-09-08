@@ -4,8 +4,8 @@
 use std::io::{self, IoSlice};
 
 use crate::buffer_pool::{BufferPool, BytesAccumulator, EitherBytesAccumulator, Iovecs};
-use crate::mqtt_proto::{ByteCounter, Packet, ProtocolVersion};
 use crate::io::WritableStream;
+use crate::mqtt_proto::{ByteCounter, Packet, ProtocolVersion};
 
 /// This type wraps a writable network stream and provides API to write data to that stream.
 pub struct Writer<BP>

@@ -5,7 +5,7 @@ use std::num::{NonZeroU16, NonZeroU32};
 
 use derive_where::derive_where;
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 
 use crate::mqtt_proto::{
     Authentication, ByteStr, DecodeError, EncodeError, KeepAlive, PacketMeta, Property,
@@ -436,7 +436,7 @@ mod tests {
     use matches::assert_matches;
 
     use super::*;
-    use crate::mqtt_proto::{Packet, byte_str, self};
+    use crate::mqtt_proto::{self, Packet, byte_str};
 
     encode_decode_v3! {
         Packet::ConnAck(ConnAck {
@@ -669,7 +669,8 @@ mod tests {
 
             let mut encoding = mqtt_proto::tests::encode(&packet, mqtt_proto::ProtocolVersion::V5);
             println!("encoded packet: {encoding:?}");
-            let decoded_packet = mqtt_proto::tests::decode(&mut encoding, mqtt_proto::ProtocolVersion::V5);
+            let decoded_packet =
+                mqtt_proto::tests::decode(&mut encoding, mqtt_proto::ProtocolVersion::V5);
 
             assert_eq!(packet, decoded_packet);
         }
@@ -677,8 +678,10 @@ mod tests {
 
     #[test]
     fn zero_session_expiry_interval() {
-        let mut src =
-            mqtt_proto::tests::create_packet_as_shared(0x20, &[0x00, 0x00, 0x05, 0x11, 0x00, 0x00, 0x00, 0x00]);
+        let mut src = mqtt_proto::tests::create_packet_as_shared(
+            0x20,
+            &[0x00, 0x00, 0x05, 0x11, 0x00, 0x00, 0x00, 0x00],
+        );
         let packet = mqtt_proto::tests::decode(&mut src, ProtocolVersion::V5);
 
         assert_matches!(

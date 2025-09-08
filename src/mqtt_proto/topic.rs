@@ -6,8 +6,10 @@ use std::{
     fmt::{Display, Formatter},
 };
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
-use crate::mqtt_proto::{ByteStr, DecodeError, EncodeError, MULTI_LEVEL_MATCH, SEPARATOR, SINGLE_LEVEL_MATCH};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
+use crate::mqtt_proto::{
+    ByteStr, DecodeError, EncodeError, MULTI_LEVEL_MATCH, SEPARATOR, SINGLE_LEVEL_MATCH,
+};
 
 /// Represents an MQTT Topic Name as described in
 /// MQTT v5, section "4.7 Topic Names and Topic Filters".
@@ -204,7 +206,9 @@ where
 }
 
 #[cfg(test)]
-pub fn topic(s: impl AsRef<str>) -> Topic<crate::mqtt_proto::ByteStr<buffer_pool::tests::SharedImpl>> {
+pub fn topic(
+    s: impl AsRef<str>,
+) -> Topic<crate::mqtt_proto::ByteStr<buffer_pool::tests::SharedImpl>> {
     let t = crate::mqtt_proto::byte_str(s);
     Topic::new(t).expect("topic")
 }

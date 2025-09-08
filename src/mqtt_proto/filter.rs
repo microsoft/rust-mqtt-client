@@ -3,7 +3,7 @@
 
 use std::fmt::{Display, Formatter};
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
     ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, MULTI_LEVEL_MATCH, SEPARATOR,
     SHARED_SUBSCRIPTION_PREFIX, SINGLE_LEVEL_MATCH,
@@ -332,7 +332,9 @@ where
 }
 
 #[cfg(test)]
-pub fn filter(s: impl AsRef<str>) -> Filter<crate::mqtt_proto::ByteStr<buffer_pool::tests::SharedImpl>> {
+pub fn filter(
+    s: impl AsRef<str>,
+) -> Filter<crate::mqtt_proto::ByteStr<buffer_pool::tests::SharedImpl>> {
     let t = crate::mqtt_proto::byte_str(s);
     Filter::new(t).expect("topic")
 }

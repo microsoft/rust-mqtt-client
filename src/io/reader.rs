@@ -107,11 +107,12 @@ mod tests {
 
     use matches::assert_matches;
 
-    use crate::buffer_pool::{BufferPool as _, maybe_uninit_copy_from_slice, tests::BufferPoolImpl};
+    use crate::buffer_pool::{
+        BufferPool as _, maybe_uninit_copy_from_slice, tests::BufferPoolImpl,
+    };
     use crate::io::ReadableStream;
 
     use super::{RawPacket, Reader};
-
 
     impl<R> ReadableStream for Cursor<R>
     where

@@ -9,10 +9,12 @@ use std::{
 };
 
 use crate::buffer_pool::{BytesAccumulator, Shared};
-use crate::mqtt_proto::{decode_remaining_length, decode_varint, encode_remaining_length, encode_varint};
 use crate::mqtt_proto::{
     BinaryData, ByteCounter, ByteStr, ConnectSessionExpiryInterval, CorrelationData, DecodeError,
     EncodeError, QoS, SharedExt as _, Topic,
+};
+use crate::mqtt_proto::{
+    decode_remaining_length, decode_varint, encode_remaining_length, encode_varint,
 };
 
 /// Ref: 3.1.2.10 Keep Alive

@@ -32,8 +32,8 @@ use tokio::{
 use tokio_openssl::SslStream;
 
 use crate::buffer_pool::{BufferPool, EitherBytesAccumulator};
-use crate::opensslext::ssl::{ConnectionTrafficSecrets, ExtractedSecrets};
 use crate::io::{ReadableStream, Reader, WritableStream, Writer, tokio_tcp};
+use crate::opensslext::ssl::{ConnectionTrafficSecrets, ExtractedSecrets};
 
 /// We haven't attempted to create a TLS connection yet, so whether the kernel supports TLS or not
 /// is not yet known.

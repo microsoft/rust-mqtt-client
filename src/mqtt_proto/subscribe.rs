@@ -3,12 +3,12 @@
 
 use derive_where::derive_where;
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
-use crate::mqtt_proto::{PacketMeta, Property, PropertyRef};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
     ByteStr, DecodeError, EncodeError, Filter, PacketIdentifier, ProtocolVersion, QoS,
     SharedExt as _, UserProperties,
 };
+use crate::mqtt_proto::{PacketMeta, Property, PropertyRef};
 
 /// Ref: 3.8 SUBSCRIBE - Subscribe to topics
 #[derive(Clone, Debug)]

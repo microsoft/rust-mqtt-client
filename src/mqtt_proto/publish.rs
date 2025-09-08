@@ -5,7 +5,7 @@ use std::num::NonZeroU16;
 
 use derive_where::derive_where;
 
-use crate::buffer_pool::{BytesAccumulator, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
     ByteStr, CorrelationData, DecodeError, EncodeError, PacketIdentifierDupQoS, PacketMeta,
     Property, PropertyRef, ProtocolVersion, PublicationOtherProperties, SharedExt as _, Topic,
