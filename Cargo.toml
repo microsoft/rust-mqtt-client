@@ -1,53 +1,41 @@
-[workspace]
-members = [
-    "crates/*"
-]
-resolver = "2"
+[package]
+name = "azure_mqtt"
+version = "0.1.0"
+edition = "2024"
 
-[workspace.dependencies]
+[dependencies]
 bstr = "1"
 bytes = { version = "1", default-features = false }
-# TODO(rustup): Move this rename to manifests that need it when https://github.com/rust-lang/cargo/issues/12546 is fixed
-bytes_ = { package = "bytes", version = "1", default-features = false }
-
 derive-where = { version = "1", default-features = false }
-
 enum-iterator = { version = "2", default-features = false }
-
 hkdf = { version = "0.12", default-features = false }
 hmac = { version = "0.12", default-features = false, features = [
-    "reset", # for `hmac::Hmac::finalize_reset`
+"reset", # for `hmac::Hmac::finalize_reset`
 ] }
-
 # for kTLS support
 libc = { version = "0.2.151", default-features = false }
-
-matches = { version = "0.1", default-features = false }
-
-nix = { version = "0.30", default-features = false }
-
+nix = { version = "0.30", features = ["net", "process", "socket", "zerocopy"], default-features = false }
 openssl = { version = "0.10", default-features = false }
-
 parking_lot = "0.12"
-
 serde = { version = "1", features = ["derive"] }
-
 sha2 = { version = "0.10", default-features = false }
-
 test-case = { version = "3", default-features = false }
 thiserror = { version = "2", default-features = false }
-tokio = { version = "1.38", default-features = false }
+tokio = { version = "1.38", features = ["io-util", "net"], default-features = false }
 tokio-openssl = { version = "0.6", default-features = false }
-
 unicode-properties = { version = "0.1", default-features = false, features = [
     "general-category",
 ] }
 
+[dev-dependencies]
+matches = { version = "0.1", default-features = false }
+tokio = { version = "1.38", features = ["rt", "macros"], default-features = false }
 
-[workspace.lints.rust]
+
+[lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
 
-[workspace.lints.clippy]
+[lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 default_trait_access = "allow"
