@@ -3,7 +3,7 @@
 
 use std::{collections::VecDeque, io::IoSlice};
 
-use crate::buffer_pool::{BytesAccumulator, Error, Iovecs, Owned, Shared, self};
+use crate::buffer_pool::{self, BytesAccumulator, Error, Iovecs, Owned, Shared};
 
 #[derive(Debug)]
 pub struct BytesAccumulatorImpl<O>
