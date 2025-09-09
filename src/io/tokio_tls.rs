@@ -13,6 +13,7 @@ use std::{
     },
 };
 
+use either::Either;
 use nix::{
     libc,
     sys::socket::{
@@ -35,16 +36,6 @@ use crate::buffer_pool::{BufferPool, EitherBytesAccumulator};
 use crate::io::{ReadableStream, Reader, WritableStream, Writer, tokio_tcp};
 use crate::opensslext::ssl::{ConnectionTrafficSecrets, ExtractedSecrets};
 
-/// We haven't attempted to create a TLS connection yet, so whether the kernel supports TLS or not
-/// is not yet known.
-const TLS_METHOD_UNKNOWN: u8 = 0;
-/// Use `tokio::net::TcpStream` with TLS ULP.
-const TLS_METHOD_KERNEL: u8 = 1;
-/// Use `tokio_openssl::SslStream`.
-const TLS_METHOD_USERSPACE: u8 = 2;
-
-static TLS_METHOD: AtomicU8 = AtomicU8::new(TLS_METHOD_UNKNOWN);
-
 /// Connect to the given address with a TLS connection, and use the given buffer pools
 /// to initialize the buffers for the stream reader and writer.
 ///
@@ -57,6 +48,35 @@ pub async fn connect<BP>(
 where
     BP: BufferPool,
 {
+    Ok(match connect_inner(addr).await? {
+        Either::Left(tcp_stream) => tokio_tcp::connect_inner(tcp_stream, reader_pool, writer_pool),
+
+        Either::Right(ssl_stream) => {
+            let (read, write) = tokio::io::split(ssl_stream);
+            let read_buf = reader_pool.take_empty_owned();
+            let write_buf = EitherBytesAccumulator::Single(Default::default());
+
+            (
+                Reader::new(Box::new(OpensslStreamRead { inner: read }), read_buf),
+                Writer::new(Box::new(OpensslStreamWrite { inner: write }), write_buf),
+            )
+        }
+    })
+}
+
+pub(crate) async fn connect_inner(
+    addr: &str,
+) -> io::Result<Either<TcpStream, SslStream<TcpStream>>> {
+    /// We haven't attempted to create a TLS connection yet, so whether the kernel supports TLS or not
+    /// is not yet known.
+    const TLS_METHOD_UNKNOWN: u8 = 0;
+    /// Use `tokio::net::TcpStream` with TLS ULP.
+    const TLS_METHOD_KERNEL: u8 = 1;
+    /// Use `tokio_openssl::SslStream`.
+    const TLS_METHOD_USERSPACE: u8 = 2;
+
+    static TLS_METHOD: AtomicU8 = AtomicU8::new(TLS_METHOD_UNKNOWN);
+
     let mut connector = SslConnector::builder(SslMethod::tls_client())?;
     connector.set_min_proto_version(Some(openssl::ssl::SslVersion::TLS1_2))?;
 
@@ -101,11 +121,7 @@ where
 
         TLS_METHOD.store(TLS_METHOD_KERNEL, Ordering::Relaxed);
 
-        Ok(tokio_tcp::connect_inner(
-            tcp_stream,
-            reader_pool,
-            writer_pool,
-        ))
+        Ok(Either::Left(tcp_stream))
     } else if method == TLS_METHOD_KERNEL {
         let traffic_secrets = prepare_for_ktls(&mut connector)?;
 
@@ -126,11 +142,7 @@ where
 
         setup_ktls(&tcp_stream, ssl, &traffic_secrets)?;
 
-        Ok(tokio_tcp::connect_inner(
-            tcp_stream,
-            reader_pool,
-            writer_pool,
-        ))
+        Ok(Either::Left(tcp_stream))
     } else {
         debug_assert_eq!(method, TLS_METHOD_USERSPACE);
 
@@ -146,14 +158,7 @@ where
             .await
             .map_err(openssl_err_to_io_err)?;
 
-        let (read, write) = tokio::io::split(ssl_stream);
-        let read_buf = reader_pool.take_empty_owned();
-        let write_buf = EitherBytesAccumulator::Single(Default::default());
-
-        Ok((
-            Reader::new(Box::new(OpensslStreamRead { inner: read }), read_buf),
-            Writer::new(Box::new(OpensslStreamWrite { inner: write }), write_buf),
-        ))
+        Ok(Either::Right(ssl_stream))
     }
 }
 
