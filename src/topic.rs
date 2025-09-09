@@ -3,6 +3,9 @@
 
 //! Topic name and filter structures
 
+#![allow(unused_variables)]
+
+// TODO: This may be completely redundant with the topic types in mqtt_proto.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TopicName {}
@@ -14,7 +17,7 @@ impl TopicName {
         TopicName {}
     }
 
-    /// Returns true if the TopicName matches the given TopicFilter
+    /// Returns true if the `TopicName` matches the given `TopicFilter`
     pub fn matches(&self, filter: &TopicFilter) -> bool {
         unimplemented!()
     }
@@ -30,7 +33,7 @@ impl TopicFilter {
         TopicFilter {}
     }
 
-    /// Returns true if the TopicFilter matches the given TopicName
+    /// Returns true if the `TopicFilter` matches the given `TopicName`
     pub fn matches(&self, name: &TopicName) -> bool {
         unimplemented!()
     }

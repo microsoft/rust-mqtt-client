@@ -3,14 +3,18 @@
 
 //! MQTT packet types and associated properties and reason codes.
 
-// TODO: This may not be necessary in it's entirety - this is a straight port of API proposal stubs. Remove as necessary.
+// TODO: Remove when possible.
+#![allow(clippy::derivable_impls)]
+
+// TODO: This may not be necessary in it's entirety - this is a straight port of API proposal stubs.
+// Remove items as necessary.
 
 use bytes::Bytes;
 
 use crate::error::OperationFailure;
 use crate::topic::TopicName;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Publish {
     pub topic_name: TopicName,
     pub payload: Bytes,
@@ -25,7 +29,7 @@ pub enum QoS {
     ExactlyOnce = 2,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConnectProperties {}
 impl Default for ConnectProperties {
     fn default() -> Self {
@@ -33,7 +37,7 @@ impl Default for ConnectProperties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DisconnectProperties {}
 impl Default for DisconnectProperties {
     fn default() -> Self {
@@ -41,7 +45,7 @@ impl Default for DisconnectProperties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PublishProperties {}
 impl Default for PublishProperties {
     fn default() -> Self {
@@ -49,7 +53,7 @@ impl Default for PublishProperties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubscribeProperties {}
 impl Default for SubscribeProperties {
     fn default() -> Self {
@@ -57,7 +61,7 @@ impl Default for SubscribeProperties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnsubscribeProperties {}
 impl Default for UnsubscribeProperties {
     fn default() -> Self {
@@ -65,7 +69,7 @@ impl Default for UnsubscribeProperties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AuthProperties {}
 impl Default for AuthProperties {
     fn default() -> Self {
@@ -82,10 +86,10 @@ impl Default for AckProperties {
 }
 
 // NOTE: These are aliased for clarity on specific packet types
-pub type PubAckProperties = AckProperties;  // For QoS 1
-pub type PubRecProperties = AckProperties;  // For QoS 2
+pub type PubAckProperties = AckProperties; // For QoS 1
+pub type PubRecProperties = AckProperties; // For QoS 2
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PubRelProperties {}
 impl Default for PubRelProperties {
     fn default() -> Self {
@@ -93,7 +97,7 @@ impl Default for PubRelProperties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PubCompProperties {}
 impl Default for PubCompProperties {
     fn default() -> Self {
@@ -101,7 +105,7 @@ impl Default for PubCompProperties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConnAck {
     pub reason: ConnAckReason,
     pub properties: ConnectProperties,
@@ -133,7 +137,7 @@ impl PubAck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PubRec {
     pub reason: PubRecReason,
     pub properties: PubRecProperties,
@@ -149,19 +153,19 @@ impl PubRec {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PubRel {
     pub reason: PubRelReason,
     pub properties: PubRelProperties,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PubComp {
     pub reason: PubCompReason,
     pub properties: PubCompProperties,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubAck {
     pub reason: SubAckReason,
     pub properties: SubscribeProperties,
@@ -177,7 +181,7 @@ impl SubAck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnsubAck {
     pub reason: UnsubAckReason,
     pub properties: UnsubscribeProperties,
@@ -193,7 +197,7 @@ impl UnsubAck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnAckReason {
     Success = 0x00,
     UnspecifiedError = 0x80,
@@ -221,7 +225,7 @@ pub enum ConnAckReason {
 
 // TODO: Not all of these are valid for the application to send
 // e.g. "PacketTooLarge" should be determined by the client I think...
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisconnectReason {
     NormalDisconnection = 0x00,
     DisconnectWithWillMessage = 0x04,
@@ -254,7 +258,7 @@ pub enum DisconnectReason {
     WildcardSubscriptionsNotSupported = 0xA2,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubAckReason {
     GrantedQoS0 = 0x00,
     GrantedQoS1 = 0x01,
@@ -270,7 +274,7 @@ pub enum SubAckReason {
     WildcardSubscriptionsNotSupported = 0xA2,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnsubAckReason {
     Success = 0x00,
     NoSubscriptionExisted = 0x11,
@@ -282,7 +286,7 @@ pub enum UnsubAckReason {
 }
 
 // TODO: make this internal only
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PubAckRecReason {
     // Ok
     Success = 0x00,
@@ -299,6 +303,7 @@ pub enum PubAckRecReason {
 
 // NOTE: strict subset of PubAckReason/PubRecReason
 // TODO: Massage naming
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PubRejectReason {
     UnspecifiedError = 0x80,
     ImplementationSpecificError = 0x83,
@@ -309,11 +314,16 @@ pub enum PubRejectReason {
     PayloadFormatInvalid = 0x99,
 }
 
+// NOTE: We implement Into instead of From here because there isn't a non-failable conversion
+// the other way, as `PubRejectReason` is a strict subset of `PubAckRecReason`.
+#[allow(clippy::from_over_into)]
 impl Into<PubAckRecReason> for PubRejectReason {
     fn into(self) -> PubAckRecReason {
         match self {
             PubRejectReason::UnspecifiedError => PubAckRecReason::UnspecifiedError,
-            PubRejectReason::ImplementationSpecificError => PubAckRecReason::ImplementationSpecificError,
+            PubRejectReason::ImplementationSpecificError => {
+                PubAckRecReason::ImplementationSpecificError
+            }
             PubRejectReason::NotAuthorized => PubAckRecReason::NotAuthorized,
             PubRejectReason::TopicNameInvalid => PubAckRecReason::TopicNameInvalid,
             PubRejectReason::PacketIdentifierInUse => PubAckRecReason::PacketIdentifierInUse,
@@ -327,30 +337,26 @@ impl Into<PubAckRecReason> for PubRejectReason {
 pub type PubAckReason = PubAckRecReason; // For QoS 1
 pub type PubRecReason = PubAckRecReason; // For QoS 2
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PubRelReason {
     Success = 0x00,
     PacketIdentifierNotFound = 0x92,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PubCompReason {
     Success = 0x00,
     PacketIdentifierNotFound = 0x92,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthReason {
     Success = 0x00,
     ContinueAuthentication = 0x18,
     Reauthenticate = 0x19,
 }
 
-
 // TODO: How to handle ack semantics re: reason codes and properties? the naming gets very weird.
 
 // TODO: What about if you do get a subscription, but at a different QoS than you requested? success? failure?
 // Anything less than 0x80 is considered a success I think
-
-// DISCUSS: Seems to be a decent case for limiting the scope of "AckReason" (as opposed to "PubAckReason") to only support
-// values that can be provided by the user (strict subset) of the client.

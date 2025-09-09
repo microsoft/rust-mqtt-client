@@ -12,9 +12,9 @@ mod opensslext;
 
 // High-level modules
 pub mod client;
+pub mod error;
 pub mod packet;
 pub mod token;
-pub mod error;
 pub mod topic;
 
 // NOTE: Any dispatching or connection management would be supplementary components.
