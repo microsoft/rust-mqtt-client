@@ -17,7 +17,7 @@ libc = { version = "0.2.151", default-features = false }
 nix = { version = "0.30", features = ["net", "process", "socket", "zerocopy"], default-features = false }
 openssl = { version = "0.10", default-features = false }
 parking_lot = "0.12"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"], optional = true }
 sha2 = { version = "0.10", default-features = false }
 test-case = { version = "3", default-features = false }
 thiserror = { version = "2", default-features = false }

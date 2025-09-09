@@ -1,6 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 /*!
  * MQTT protocol types for versions 3.1.1 and 5.0.
  *

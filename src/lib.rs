@@ -1,4 +1,4 @@
-mod buffer_pool;
-mod io;
-mod mqtt_proto;
+pub mod buffer_pool;
+pub (crate) mod io;
+pub (crate) mod mqtt_proto;
 mod opensslext;

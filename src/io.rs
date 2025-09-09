@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+#![allow(dead_code)]
 
 use std::{
     io::{self, IoSlice},
@@ -17,14 +18,14 @@ pub mod tokio_tls;
 mod writer;
 pub use writer::Writer;
 
-trait ReadableStream {
+pub(crate) trait ReadableStream {
     fn read<'a>(
         &'a mut self,
         buf: &'a mut [MaybeUninit<u8>],
     ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>;
 }
 
-trait WritableStream {
+pub(crate) trait WritableStream {
     fn write_vectored<'a, 'buf>(
         &'a mut self,
         bufs: &'a [IoSlice<'buf>],
