@@ -51,7 +51,7 @@ define_u8_code! {
 }
 
 impl SubscribeReasonCode {
-    pub fn is_success(&self) -> bool {
+    pub fn is_success(self) -> bool {
         matches!(
             self,
             SubscribeReasonCode::GrantedQoS0

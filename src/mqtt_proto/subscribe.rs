@@ -13,6 +13,7 @@ use crate::mqtt_proto::{PacketMeta, Property, PropertyRef};
 /// Ref: 3.8 SUBSCRIBE - Subscribe to topics
 #[derive(Clone, Debug)]
 #[derive_where(Eq, PartialEq)]
+#[allow(clippy::struct_field_names)]
 pub struct Subscribe<S>
 where
     S: Shared,
@@ -82,6 +83,7 @@ impl SubscribeOptions {
         }
     }
 
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn encode<B, S>(&self, dst: &mut B, version: ProtocolVersion) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,

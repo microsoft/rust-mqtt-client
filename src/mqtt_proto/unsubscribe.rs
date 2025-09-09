@@ -12,6 +12,7 @@ use crate::mqtt_proto::{
 /// Ref: 3.10 UNSUBSCRIBE – Unsubscribe from topics
 #[derive(Clone, Debug)]
 #[derive_where(Eq, PartialEq)]
+#[allow(clippy::struct_field_names)]
 pub struct Unsubscribe<S>
 where
     S: Shared,

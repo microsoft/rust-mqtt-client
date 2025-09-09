@@ -117,6 +117,7 @@ where
         }
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn encode<B>(&self, dst: &mut B) -> Result<(), EncodeError>
     where
         B: BytesAccumulator<Shared = S>,
