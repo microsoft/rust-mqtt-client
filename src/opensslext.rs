@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![allow(dead_code)]
-
 //! Extensions to `openssl` for kernel TLS.
 
 pub mod ssl {

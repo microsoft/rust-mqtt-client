@@ -1,5 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+
+// TODO: Revisit this suppression
 #![allow(dead_code)]
 
 use std::{
