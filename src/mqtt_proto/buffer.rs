@@ -4,7 +4,7 @@
 use crate::buffer_pool::Shared;
 use crate::mqtt_proto::{DecodeError, PacketIdentifier};
 
-/// Adds convenience methods to [`buffer_pool::Shared`]
+/// Adds convenience methods to [`crate::buffer_pool::Shared`]
 pub trait SharedExt {
     fn try_get_u8(&mut self) -> Result<u8, DecodeError>;
     fn try_get_u16_be(&mut self) -> Result<u16, DecodeError>;

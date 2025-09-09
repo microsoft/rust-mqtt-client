@@ -7,7 +7,7 @@
 
 use crate::buffer_pool::{BufferPool, Error};
 
-pub mod buffers;
+mod buffers;
 pub use buffers::{OwnedImpl, SharedImpl};
 
 // This could be Copy too, but that makes it harder to easily swap
