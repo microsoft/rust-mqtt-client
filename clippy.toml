@@ -12,7 +12,7 @@ disallowed-types = [
     { path = "std::sync::Mutex", reason = "use parking_lot::Mutex instead" },
     { path = "once_cell::sync::OnceCell", reason = "use std::sync::OnceLock instead" },
     { path = "once_cell::unsync::OnceCell", reason = "use std::cell::OnceCell instead" },
-    { path = "tokio::sync::Mutex", reason = "use parking_lot::Mutex or futures_util::lock::Mutex instead" },
+    { path = "tokio::sync::Mutex", reason = "use parking_lot::Mutex or futures_util::lock::Mutex instead", allow-invalid = true},
 ]
 
 doc-valid-idents = ["MiB", "PUBLISHes", "QoS"]

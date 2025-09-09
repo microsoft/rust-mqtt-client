@@ -10,14 +10,10 @@ clean:
 
 .PHONY: test
 test:
-	cargo test \
-		--workspace \
-		--features tests
+	cargo test
 	cargo clippy \
-		--workspace \
 		--tests \
 		--examples \
-		--features tests \
 		-- \
 		--deny=warnings
 
