@@ -1,3 +1,8 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License
+
+//! Token types for awaiting completion of MQTT operations and issuing acknowledgements.
+
 use std::pin::Pin;
 use tokio::sync::oneshot::Receiver;
 
@@ -21,13 +26,7 @@ impl <T> Future for CompletionToken<T> {
     }
 }
 
-
-
-//     // Can only be successfully used:
-//     // - QoS 1: During the same connection epoch on which it was received.
-//     // - QoS 2: During the same session epoch on which it was received.
-
-// ---PUBACK--
+/// Token that allows the user to acknowledge a received PUBLISH on QoS 1 with a PUBACK.
 pub struct PubAckToken {}
 
 impl PubAckToken {
@@ -42,6 +41,8 @@ impl PubAckToken {
     /// 
     /// Returns once the PUBACK has been accepted into the MQTT session.
     /// The returned CompletionToken resolves once the PUBACK is sent (*after* any ordering necessary).
+    /// 
+    /// Can only be successfully used during the same connection epoch on which it was received.
     pub async fn accept(self, properties: PubAckProperties) -> Result<CompletionToken<()>, ClientError> {
 
         // TODO: Should CompletionToken be provided before the ordering?
@@ -68,15 +69,30 @@ impl Drop for PubAckToken {
 }
 
 
-// ---PUBREC---
-
+/// Token that allows the user to acknowledge a received PUBLISH on QoS 2 with a PUBREC.
 pub struct PubRecToken {}
 
 impl PubRecToken {
+    /// Accept the received PUBLISH by issuing a PUBREC indicating success.
+    /// 
+    /// Consumes itself on call, so it cannot be used again.
+    /// 
+    /// Returns once the PUBREC has been accepted into the MQTT session.
+    /// The returned CompletionToken resolves once the PUBREC is sent (*after* any ordering necessary).
+    /// 
+    /// Can only be successfully used during the same session epoch on which it was received.
     pub async fn accept(self, properties: PubRecProperties) -> Result<CompletionToken<(PubRel, PubCompToken)>, ClientError> {
         unimplemented!()
     }
 
+    /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
+    /// 
+    /// Consumes itself on call so it cannot be used again.
+    /// 
+    /// Returns once the PUBREC has been accepted into the MQTT session.
+    /// The returned CompletionToken resolves once the PUBREC is sent (*after* any ordering necessary).
+    /// 
+    /// Can only be successfully used during the same session epoch on which it was received.
     pub async fn reject(self, reason: PubRejectReason, properties: PubRecProperties) -> Result<CompletionToken<()>, ClientError> {
         unimplemented!()
     }
@@ -90,9 +106,18 @@ impl Drop for PubRecToken {
 }
 
 
-// ---PUBREL---
+/// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
 pub struct PubRelToken {}
 impl PubRelToken {
+
+    /// Confirm the PUBREC was received by issuing a PUBREL.
+    /// 
+    /// Consumes itself on call so it cannot be used again.
+    /// 
+    /// Returns once the PUBREL has been accepted into the MQTT session.
+    /// The returned CompletionToken resolves once the PUBREL is sent (*after* any ordering necessary).
+    /// 
+    /// Can only be successfully used during the same session epoch on which it was received.
     pub async fn confirm(self, properties: PubRelProperties) -> Result<CompletionToken<PubComp>, ClientError> {
         unimplemented!()
     }
@@ -106,10 +131,18 @@ impl Drop for PubRelToken {
 }
 
 
-// ---PUBCOMP---
+/// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
 pub struct PubCompToken {}
 
 impl PubCompToken {
+    /// Confirm the PUBREL was received by issuing a PUBCOMP.
+    /// 
+    /// Consumes itself on call so it cannot be used again.
+    /// 
+    /// Returns once the PUBCOMP has been accepted into the MQTT session.
+    /// The returned CompletionToken resolves once the PUBCOMP is sent (*after* any ordering necessary).
+    /// 
+    /// Can only be successfully used during the same session epoch on which it was received.
     pub async fn confirm(self, properties: PubCompProperties) -> Result<CompletionToken<()>, ClientError> {
         unimplemented!()
     }

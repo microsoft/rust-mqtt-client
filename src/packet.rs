@@ -1,3 +1,10 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License
+
+//! MQTT packet types and associated properties and reason codes.
+
+// TODO: This may not be necessary in it's entirety - this is a straight port of API proposal stubs. Remove as necessary.
+
 use bytes::Bytes;
 
 use crate::error::OperationFailure;
