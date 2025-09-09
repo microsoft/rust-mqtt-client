@@ -15,4 +15,9 @@ disallowed-types = [
     { path = "tokio::sync::Mutex", reason = "use parking_lot::Mutex or futures_util::lock::Mutex instead", allow-invalid = true},
 ]
 
-doc-valid-idents = ["MiB", "PUBLISHes", "QoS"]
+doc-valid-idents = [
+    "MiB",
+    "PUBLISHes",
+    "QoS",
+    "WebSocket",
+]
