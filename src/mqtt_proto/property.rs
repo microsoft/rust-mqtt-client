@@ -20,7 +20,6 @@ use crate::mqtt_proto::{
 /// Ref: 3.1.2.10 Keep Alive
 /// A Keep Alive value of 0 has the effect of turning off the Keep Alive mechanism.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KeepAlive {
     Infinite,
     /// Duration in seconds.
@@ -78,7 +77,6 @@ impl Display for KeepAlive {
 /// Ref: 3.1.2.11.2 Session Expiry Interval
 /// If the Session Expiry Interval is 0xFFFFFFFF, the Session does not expire.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SessionExpiryInterval {
     Infinite,
     Duration(u32),
