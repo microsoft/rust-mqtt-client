@@ -3,7 +3,7 @@
 
 use std::{collections::VecDeque, io::IoSlice};
 
-use crate::buffer_pool::{BytesAccumulator, Error, Iovecs, Owned, Shared};
+use crate::buffer_pool::{BytesAccumulator, Error, Iovecs, Owned, Shared, self};
 
 #[derive(Debug)]
 pub struct BytesAccumulatorImpl<O>
@@ -68,7 +68,7 @@ where
             let dst = self.owned.unfilled_mut();
             if dst.len() >= src.len() {
                 let dst = dst.get_mut(..src.len())?;
-                crate::buffer_pool::maybe_uninit_copy_from_slice(dst, src);
+                buffer_pool::maybe_uninit_copy_from_slice(dst, src);
                 self.owned.fill(src.len());
                 Some(())
             } else {

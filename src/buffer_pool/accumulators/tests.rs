@@ -7,7 +7,7 @@ use bytes::{Buf as _, BytesMut};
 
 use crate::buffer_pool::{BytesAccumulator, Error, Iovecs, Shared};
 
-/// Unlike [`single::BytesAccumulatorImpl`](crate::accumulators::single::BytesAccumulatorImpl),
+/// Unlike [`single::BytesAccumulatorImpl`](crate::buffer_pool::accumulators::single::BytesAccumulatorImpl),
 /// this `BytesAccumulatorImpl` enforces that `reserve` was called before `try_put_*`.
 #[derive(Debug, Eq, PartialEq)]
 pub struct BytesAccumulatorImpl<S> {
