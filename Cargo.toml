@@ -20,7 +20,6 @@ libc = { version = "0.2.151", default-features = false }
 nix = { version = "0.30", features = ["net", "process", "socket", "zerocopy"], default-features = false }
 openssl = { version = "0.10", default-features = false }
 parking_lot = "0.12"
-serde = { version = "1", features = ["derive"], optional = true }
 sha2 = { version = "0.10", default-features = false }
 test-case = { version = "3", default-features = false }
 thiserror = { version = "2", default-features = false }
@@ -33,7 +32,6 @@ unicode-properties = { version = "0.1", default-features = false, features = [
 [dev-dependencies]
 matches = { version = "0.1", default-features = false }
 tokio = { version = "1.38", features = ["rt", "macros"], default-features = false }
-
 
 [lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }

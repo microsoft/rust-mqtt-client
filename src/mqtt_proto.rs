@@ -927,27 +927,6 @@ pub fn correlation_data(s: impl AsRef<[u8]>) -> CorrelationData<buffer_pool::tes
     CorrelationData::Variable(binary_data(s))
 }
 
-#[cfg(feature = "serde")]
-impl serde::Serialize for QoS {
-    fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::ser::Serializer,
-    {
-        ser.serialize_u8(*self as u8)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for QoS {
-    fn deserialize<D>(de: D) -> Result<Self, D::Error>
-    where
-        D: serde::de::Deserializer<'de>,
-    {
-        let tmp = u8::deserialize(de)?;
-        Self::try_from(tmp).map_err(<D::Error as serde::de::Error>::custom)
-    }
-}
-
 /// A combination of the packet identifier, dup flag and QoS that only allows valid combinations of these three properties.
 /// Used in [`Packet::Publish`]
 #[allow(clippy::enum_variant_names)]

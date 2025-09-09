@@ -51,7 +51,6 @@ where
 /// `ConnectSessionExpiryInterval` is not emitted when it is 0 to match the semantics of
 /// the Session Expiry Interval property in CONNECT packets.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConnectSessionExpiryInterval(pub SessionExpiryInterval);
 
 impl<S> Connect<S>
@@ -622,13 +621,12 @@ mod tests {
 
     use crate::buffer_pool::{Shared, tests::SharedImpl};
 
-    use crate::mqtt_proto::{Connect, ConnectOtherProperties};
-
     use crate::mqtt_proto::{
         Authentication, BinaryData, DecodeError, EncodeError, Packet, ProtocolVersion, Publication,
         PublicationOtherProperties, QoS, SessionExpiryInterval, binary_data, byte_str,
         correlation_data, tests, topic,
     };
+    use crate::mqtt_proto::{Connect, ConnectOtherProperties};
 
     encode_decode_v3! {
         Packet::Connect(Connect {
