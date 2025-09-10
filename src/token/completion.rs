@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License
 
-//! Synchronization for MQTT operations
+//! Synchronization for portable reporting of remote operations
 
 // TODO: Remove when possible.
 #![allow(dead_code)]
@@ -14,7 +14,6 @@ use tokio::sync::oneshot;
 
 pub fn completion_pair<T: Clone>() -> (CompletionTransmitter<T>, CompletionToken<T>) {
     let (tx, rx) = oneshot::channel();
-    // TODO: put the sharing logic here
     let token = CompletionToken(rx.shared());
     let transmitter = CompletionTransmitter(tx);
     (transmitter, token)
@@ -22,7 +21,7 @@ pub fn completion_pair<T: Clone>() -> (CompletionTransmitter<T>, CompletionToken
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum CompletionError {
-    Detatched, // is this really the correct place for it?
+    Detatched,
     Cancelled,
 }
 
@@ -58,8 +57,8 @@ impl<T> CompletionTransmitter<T>
 where
     T: Clone,
 {
-    /// Complete the token(s) with the given value.
-    /// If the token(s) have been dropped, the value is returned.
+    /// Complete the associated token(s) with the given value.
+    /// If all the token(s) have been dropped, the value is returned.
     pub fn complete(self, value: T) -> Result<(), T> {
         match self.0.send(Ok(value)) {
             Ok(()) => Ok(()),
@@ -68,6 +67,8 @@ where
         }
     }
 
+    /// Issue a cancellation to the associated token(s).
+    /// If all the token(s) have been dropped, an error is returned.
     pub fn cancel(self) -> Result<(), String> {
         match self.0.send(Err(CompletionError::Cancelled)) {
             Ok(()) => Ok(()),
@@ -76,7 +77,9 @@ where
         }
     }
 
-    // what other failures could there be other than cancellation?
+    // TODO:
+    // What other failures could there be other than cancellation?
+    // Do they need distinct methods?
     // - packet size?
     // - wildcard sub?
     // - qos exceeded?
@@ -88,7 +91,28 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn clonability() {
+    async fn simple_completion() {
+        let (transmitter, token) = completion_pair();
+
+        transmitter.complete("hello_world".to_string()).unwrap();
+
+        let res = token.await;
+        assert_eq!(res, Ok("hello_world".to_string()));
+    }
+
+    #[tokio::test]
+    async fn simple_cancellation() {
+        let (transmitter, token): (CompletionTransmitter<String>, CompletionToken<String>) =
+            completion_pair();
+
+        transmitter.cancel().unwrap();
+
+        let res = token.await;
+        assert_eq!(res, Err(CompletionError::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn clonability_completion() {
         let (transmitter, token) = completion_pair();
         let token_clone = token.clone();
 
@@ -101,7 +125,21 @@ mod test {
     }
 
     #[tokio::test]
-    async fn portability() {
+    async fn clonability_cancellation() {
+        let (transmitter, token): (CompletionTransmitter<String>, CompletionToken<String>) =
+            completion_pair();
+        let token_clone = token.clone();
+
+        transmitter.cancel().unwrap();
+
+        let r1 = token.await;
+        let r2 = token_clone.await;
+        assert_eq!(r1, r2);
+        assert_eq!(r1, Err(CompletionError::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn portability_completion() {
         let (transmitter, token) = completion_pair();
 
         let handle = tokio::spawn(token);
@@ -112,5 +150,81 @@ mod test {
         assert_eq!(res, Ok("hello_world".to_string()));
     }
 
-    // test todo: drops, cancellations, cancel safety, thread portability etc.
+    #[tokio::test]
+    async fn portability_cancellation() {
+        let (transmitter, token): (CompletionTransmitter<String>, CompletionToken<String>) =
+            completion_pair();
+
+        let handle = tokio::spawn(token);
+
+        transmitter.cancel().unwrap();
+
+        let res = handle.await.unwrap();
+        assert_eq!(res, Err(CompletionError::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn dropped_token() {
+        let (transmitter, token): (CompletionTransmitter<String>, CompletionToken<String>) =
+            completion_pair();
+
+        drop(token);
+
+        let res = transmitter.complete("hello_world".to_string());
+        assert_eq!(res, Err("hello_world".to_string()));
+    }
+
+    #[tokio::test]
+    async fn dropped_token_multiple() {
+        let (transmitter, token): (CompletionTransmitter<String>, CompletionToken<String>) =
+            completion_pair();
+        let token_clone = token.clone();
+
+        // Drop both tokens
+        drop(token);
+        drop(token_clone);
+
+        let res = transmitter.complete("hello_world".to_string());
+        assert_eq!(res, Err("hello_world".to_string()));
+    }
+
+    #[tokio::test]
+    async fn droped_token_one_of_multiple() {
+        let (transmitter, token): (CompletionTransmitter<String>, CompletionToken<String>) =
+            completion_pair();
+        let token_clone = token.clone();
+
+        // Drop one of the tokens
+        drop(token_clone);
+
+        // Completion can still be sent to the other token
+        transmitter.complete("hello_world".to_string()).unwrap();
+        let res = token.await;
+        assert_eq!(res, Ok("hello_world".to_string()));
+    }
+
+    #[tokio::test]
+    async fn dropped_transmitter_single_token() {
+        let (transmitter, token): (CompletionTransmitter<String>, CompletionToken<String>) =
+            completion_pair();
+
+        drop(transmitter);
+
+        let res = token.await;
+        assert_eq!(res, Err(CompletionError::Detatched));
+    }
+
+    #[tokio::test]
+    async fn dropped_transmitter_multiple_tokens() {
+        let (transmitter, token): (CompletionTransmitter<String>, CompletionToken<String>) =
+            completion_pair();
+        let token_clone = token.clone();
+
+        drop(transmitter);
+
+        let res1 = token.await;
+        let res2 = token_clone.await;
+        assert_eq!(res1, Err(CompletionError::Detatched));
+        assert_eq!(res2, Err(CompletionError::Detatched));
+    }
 }
