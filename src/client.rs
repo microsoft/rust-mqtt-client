@@ -28,15 +28,35 @@ use crate::topic::{TopicFilter, TopicName};
 /// Creates the three components needed to run the MQTT client
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
 pub fn new_client(options: ClientOptions) -> (Client, EventLoop, Receiver) {
-    unimplemented!()
+    // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
+    // owned by the internal session state. If this becomes a performance bottleneck, revisit.
+    let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(1);
+    let (o_ctrl_tx, o_ctrl_rx) = tokio::sync::mpsc::channel(1);
+    // TODO: How should the size of the incoming application message channel be determined?
+    // For now, it's arbitrarily set to 100.
+    let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::channel(100);
+    let client = Client {
+        pub_tx: o_pub_tx,
+        ctrl_tx: o_ctrl_tx,
+    };
+    let event_loop = EventLoop {
+        o_pub_rx,
+        o_ctrl_rx,
+        i_pub_tx,
+    };
+    let receiver = Receiver { rx: i_pub_rx };
+    (client, event_loop, receiver)
 }
 
-// NOTE: Use a builder pattern
+/// Options for configuring the MQTT client
 pub struct ClientOptions {
+    /// MQTT Client Identifier
     pub client_id: String,
+    /// Maximum size of the outgoing message queue
     pub queue_size: usize,
     // Any other options can be added here, but there really ought not be many.
-    // TODO: Are there any other options anyway? Should we just forgo the struct and have a function that takes a queue size?
+    // TODO: Use a builder pattern?
+    // TODO: How to represent authentication options?
 }
 
 // TODO: I don't like the naming of this as Client.
@@ -45,8 +65,12 @@ pub struct ClientOptions {
 /// Sends outgoing data.
 #[derive(Clone)]
 pub struct Client {
-    // TODO: There likely need to be multiple channels to account for priority/handling of operations
-    pub_tx: tokio::sync::mpsc::Sender<Request>,
+    // NOTE: We use different channels for publishes vs. control packets to allow for
+    // prioritization of operations by the receiver.
+    /// Channel that transmits outgoing PUBLISH requests
+    pub_tx: tokio::sync::mpsc::Sender<PublishRequest>,
+    /// Channel that transmits all other outgoing control packet requests
+    ctrl_tx: tokio::sync::mpsc::Sender<ControlRequest>,
 }
 
 impl Client {
@@ -57,7 +81,12 @@ impl Client {
         &self,
         properties: ConnectProperties,
     ) -> Result<CompletionToken<ConnAck>, ClientError> {
-        unimplemented!()
+        let (transmitter, token) = completion_pair();
+        self.ctrl_tx
+            .send(ControlRequest::Connect(transmitter, properties))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
     }
 
     /// Sends a DISCONNECT packet to the broker.
@@ -67,7 +96,12 @@ impl Client {
         &self,
         properties: DisconnectProperties,
     ) -> Result<CompletionToken<()>, ClientError> {
-        unimplemented!()
+        let (transmitter, token) = completion_pair();
+        self.ctrl_tx
+            .send(ControlRequest::Disconnect(transmitter, properties))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
     }
 
     /// Sends an AUTH packet to the broker with reason code 0x19 (Reauthenticate).
@@ -91,7 +125,17 @@ impl Client {
         payload: Bytes,
         properties: PublishProperties,
     ) -> Result<CompletionToken<()>, ClientError> {
-        unimplemented!()
+        let (transmitter, token) = completion_pair();
+        self.pub_tx
+            .send(PublishRequest::PublishQoS0(
+                transmitter,
+                topic_name,
+                payload,
+                properties,
+            ))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
     }
 
     /// Sends a PUBLISH packet to the broker at QoS 1
@@ -104,10 +148,13 @@ impl Client {
         properties: PublishProperties,
     ) -> Result<CompletionToken<PubAck>, ClientError> {
         let (transmitter, token) = completion_pair();
-        // TODO: Naturally, you would also need to assemble a Publish packet here and include it in the `Request`
-        // Do this once packet types are figured out.
         self.pub_tx
-            .send(Request::PublishQoS1(transmitter))
+            .send(PublishRequest::PublishQoS1(
+                transmitter,
+                topic_name,
+                payload,
+                properties,
+            ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -123,7 +170,17 @@ impl Client {
         payload: Bytes,
         properties: PublishProperties,
     ) -> Result<CompletionToken<(PubRec, Option<PubRelToken>)>, ClientError> {
-        unimplemented!()
+        let (transmitter, token) = completion_pair();
+        self.pub_tx
+            .send(PublishRequest::PublishQoS2(
+                transmitter,
+                topic_name,
+                payload,
+                properties,
+            ))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
     }
 
     /// Send a SUBSCRIBE packet to the broker.
@@ -135,7 +192,12 @@ impl Client {
         qos: QoS,
         properties: SubscribeProperties,
     ) -> Result<CompletionToken<SubAck>, ClientError> {
-        unimplemented!()
+        let (transmitter, token) = completion_pair();
+        self.ctrl_tx
+            .send(ControlRequest::Subscribe(transmitter, qos, properties))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
     }
 
     /// Send an UNSUBSCRIBE packet to the broker.
@@ -146,7 +208,28 @@ impl Client {
         topic_filter: TopicFilter,
         properties: UnsubscribeProperties,
     ) -> Result<CompletionToken<UnsubAck>, ClientError> {
-        unimplemented!()
+        let (transmitter, token) = completion_pair();
+        self.ctrl_tx
+            .send(ControlRequest::Unsubscribe(transmitter, properties))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
+    }
+}
+
+/// Receives incoming Application Messages as `Publish`es.
+pub struct Receiver {
+    /// Channel for receiving incoming PUBLISH packets
+    rx: tokio::sync::mpsc::Receiver<(Publish, AckHandle)>,
+}
+impl Receiver {
+    /// Receive an incoming `Publish`, and any `AckToken` that may be associated with it.
+    ///
+    /// `AckToken` will only be present if the Publish has a QoS of 1 or 2.
+    ///
+    /// Receiving None indicates that the client has been dropped, and no more messages will be received.
+    pub async fn recv(&mut self) -> Option<(Publish, AckHandle)> {
+        self.rx.recv().await
     }
 }
 
@@ -158,6 +241,15 @@ pub struct EventLoop {
     // Furthermore, it's somewhat confusing if the actual connect method is not on the Connection.
     // ConnectionEventLoop?
     // It'll really come down to what events get provided here I guess.
+
+    // NOTE: We use different channels for publishes vs. control packets to allow for
+    // prioritization of operations we want to process here.
+    /// Channel for receiving outgoing PUBLISH requests from a `Client`
+    o_pub_rx: tokio::sync::mpsc::Receiver<PublishRequest>,
+    /// Channel for receiving all other outgoing control packet requests from a `Client`
+    o_ctrl_rx: tokio::sync::mpsc::Receiver<ControlRequest>,
+    /// Channel for sending incoming PUBLISH packets to the `Receiver`
+    i_pub_tx: tokio::sync::mpsc::Sender<(Publish, AckHandle)>,
 }
 
 impl EventLoop {
@@ -178,18 +270,6 @@ pub enum Event {
     // other stuff
 }
 
-pub struct Receiver {}
-impl Receiver {
-    /// Receive an incoming Publish, and any `AckToken` that may be associated with it.
-    ///
-    /// `AckToken` will only be present if the Publish has a QoS of 1 or 2.
-    ///
-    /// Receiving None indicates that the client has been dropped, and no more messages will be received.
-    pub async fn recv(&mut self) -> Option<(Publish, AckHandle)> {
-        unimplemented!()
-    }
-}
-
 // TODO: this has to be clonable
 pub enum AckHandle {
     QoS0,
@@ -197,6 +277,35 @@ pub enum AckHandle {
     QoS2(PubRecToken),
 }
 
-enum Request {
-    PublishQoS1(CompletionTransmitter<PubAck>),
+/// Request to send a PUBLISH packet.
+enum PublishRequest {
+    PublishQoS0(
+        CompletionTransmitter<()>,
+        TopicName,
+        Bytes,
+        PublishProperties,
+    ),
+    PublishQoS1(
+        CompletionTransmitter<PubAck>,
+        TopicName,
+        Bytes,
+        PublishProperties,
+    ),
+    PublishQoS2(
+        CompletionTransmitter<(PubRec, Option<PubRelToken>)>,
+        TopicName,
+        Bytes,
+        PublishProperties,
+    ),
+}
+
+/// Request to send a non-PUBLISH control packet.
+enum ControlRequest {
+    // NOTE: A PUBLISH *is* a control packet, but it is not included here as it has a dedicated
+    // channel and enum to allow for prioritization.
+    Connect(CompletionTransmitter<ConnAck>, ConnectProperties),
+    Disconnect(CompletionTransmitter<()>, DisconnectProperties),
+    Reauthenticate(CompletionTransmitter<()>),
+    Subscribe(CompletionTransmitter<SubAck>, QoS, SubscribeProperties),
+    Unsubscribe(CompletionTransmitter<UnsubAck>, UnsubscribeProperties),
 }
