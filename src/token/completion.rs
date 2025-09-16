@@ -25,7 +25,7 @@ pub enum CompletionError {
     Cancelled,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CompletionToken<T>(Shared<oneshot::Receiver<Result<T, CompletionError>>>)
 where
     T: Clone;
@@ -48,7 +48,8 @@ where
     }
 }
 
-// TODO: Finalize naming - Signaller?
+// TODO: Finalize naming - Signaller? CompletionTrigger? CompletionNotify? CompletionSignal? CompletionReporter?
+#[derive(Debug)]
 pub struct CompletionTransmitter<T>(oneshot::Sender<Result<T, CompletionError>>)
 where
     T: Clone;

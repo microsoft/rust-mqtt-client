@@ -9,13 +9,20 @@
 
 use crate::error::ClientError;
 use crate::packet::{
-    PubAckProperties, PubComp, PubCompProperties, PubRecProperties, PubRejectReason, PubRel,
-    PubRelProperties,
+    PubAck, PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties,
+    PubRejectReason, PubRel, PubRelProperties, SubAck, UnsubAck,
 };
 
 mod completion;
 pub use completion::CompletionToken;
 pub(crate) use completion::{CompletionTransmitter, completion_pair};
+
+pub(crate) type PublishQoS0CompletionTransmitter = CompletionTransmitter<()>;
+pub(crate) type PublishQoS1CompletionTransmitter = CompletionTransmitter<PubAck>;
+pub(crate) type PublishQoS2CompletionTransmitter =
+    CompletionTransmitter<(PubRec, Option<PubRelToken>)>;
+pub(crate) type SubscribeCompletionTransmitter = CompletionTransmitter<SubAck>;
+pub(crate) type UnsubscribeCompletionTransmitter = CompletionTransmitter<UnsubAck>;
 
 // TODO: These tokens for acknowledgement should likely get their own submodule, and `token` should strictly be for re-exports.
 // However, it may also make sense for them to be implemented alongside whatever mechanism tracks acknowledgements.
@@ -24,7 +31,7 @@ pub(crate) use completion::{CompletionTransmitter, completion_pair};
 // NOTE: It is unlikely that `Clone` can be derived in the final implementation, it will likely have to be manually implemented.
 
 /// Token that allows the user to acknowledge a received PUBLISH on QoS 1 with a PUBACK.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PubAckToken {}
 
 impl PubAckToken {
@@ -73,7 +80,7 @@ impl Drop for PubAckToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBLISH on QoS 2 with a PUBREC.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PubRecToken {}
 
 impl PubRecToken {
@@ -117,7 +124,7 @@ impl Drop for PubRecToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PubRelToken {}
 impl PubRelToken {
     /// Confirm the PUBREC was received by issuing a PUBREL.
@@ -144,7 +151,7 @@ impl Drop for PubRelToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PubCompToken {}
 
 impl PubCompToken {

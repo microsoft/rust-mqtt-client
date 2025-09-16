@@ -8,6 +8,8 @@
 #![allow(dead_code)]
 #![allow(clippy::unused_async)]
 
+mod inflight;
+
 use bytes::Bytes;
 
 use crate::error::ClientError;
