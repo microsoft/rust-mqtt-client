@@ -16,7 +16,7 @@ use crate::packet::{
     PublishProperties, QoS, SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
 };
 use crate::token::{
-    CompletionToken, CompletionTransmitter, PubAckToken, PubRecToken, PubRelToken, completion_pair,
+    CompletionNotifier, CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -81,9 +81,9 @@ impl Client {
         &self,
         properties: ConnectProperties,
     ) -> Result<CompletionToken<ConnAck>, ClientError> {
-        let (transmitter, token) = completion_pair();
+        let (notifier, token) = completion_pair();
         self.ctrl_tx
-            .send(ControlRequest::Connect(transmitter, properties))
+            .send(ControlRequest::Connect(notifier, properties))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -96,9 +96,9 @@ impl Client {
         &self,
         properties: DisconnectProperties,
     ) -> Result<CompletionToken<()>, ClientError> {
-        let (transmitter, token) = completion_pair();
+        let (notifier, token) = completion_pair();
         self.ctrl_tx
-            .send(ControlRequest::Disconnect(transmitter, properties))
+            .send(ControlRequest::Disconnect(notifier, properties))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -125,13 +125,10 @@ impl Client {
         payload: Bytes,
         properties: PublishProperties,
     ) -> Result<CompletionToken<()>, ClientError> {
-        let (transmitter, token) = completion_pair();
+        let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS0(
-                transmitter,
-                topic_name,
-                payload,
-                properties,
+                notifier, topic_name, payload, properties,
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
@@ -147,13 +144,10 @@ impl Client {
         payload: Bytes,
         properties: PublishProperties,
     ) -> Result<CompletionToken<PubAck>, ClientError> {
-        let (transmitter, token) = completion_pair();
+        let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS1(
-                transmitter,
-                topic_name,
-                payload,
-                properties,
+                notifier, topic_name, payload, properties,
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
@@ -170,13 +164,10 @@ impl Client {
         payload: Bytes,
         properties: PublishProperties,
     ) -> Result<CompletionToken<(PubRec, Option<PubRelToken>)>, ClientError> {
-        let (transmitter, token) = completion_pair();
+        let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS2(
-                transmitter,
-                topic_name,
-                payload,
-                properties,
+                notifier, topic_name, payload, properties,
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
@@ -192,9 +183,9 @@ impl Client {
         qos: QoS,
         properties: SubscribeProperties,
     ) -> Result<CompletionToken<SubAck>, ClientError> {
-        let (transmitter, token) = completion_pair();
+        let (notifier, token) = completion_pair();
         self.ctrl_tx
-            .send(ControlRequest::Subscribe(transmitter, qos, properties))
+            .send(ControlRequest::Subscribe(notifier, qos, properties))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -208,9 +199,9 @@ impl Client {
         topic_filter: TopicFilter,
         properties: UnsubscribeProperties,
     ) -> Result<CompletionToken<UnsubAck>, ClientError> {
-        let (transmitter, token) = completion_pair();
+        let (notifier, token) = completion_pair();
         self.ctrl_tx
-            .send(ControlRequest::Unsubscribe(transmitter, properties))
+            .send(ControlRequest::Unsubscribe(notifier, properties))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -279,20 +270,15 @@ pub enum AckHandle {
 
 /// Request to send a PUBLISH packet.
 enum PublishRequest {
-    PublishQoS0(
-        CompletionTransmitter<()>,
-        TopicName,
-        Bytes,
-        PublishProperties,
-    ),
+    PublishQoS0(CompletionNotifier<()>, TopicName, Bytes, PublishProperties),
     PublishQoS1(
-        CompletionTransmitter<PubAck>,
+        CompletionNotifier<PubAck>,
         TopicName,
         Bytes,
         PublishProperties,
     ),
     PublishQoS2(
-        CompletionTransmitter<(PubRec, Option<PubRelToken>)>,
+        CompletionNotifier<(PubRec, Option<PubRelToken>)>,
         TopicName,
         Bytes,
         PublishProperties,
@@ -303,9 +289,9 @@ enum PublishRequest {
 enum ControlRequest {
     // NOTE: A PUBLISH *is* a control packet, but it is not included here as it has a dedicated
     // channel and enum to allow for prioritization.
-    Connect(CompletionTransmitter<ConnAck>, ConnectProperties),
-    Disconnect(CompletionTransmitter<()>, DisconnectProperties),
-    Reauthenticate(CompletionTransmitter<()>),
-    Subscribe(CompletionTransmitter<SubAck>, QoS, SubscribeProperties),
-    Unsubscribe(CompletionTransmitter<UnsubAck>, UnsubscribeProperties),
+    Connect(CompletionNotifier<ConnAck>, ConnectProperties),
+    Disconnect(CompletionNotifier<()>, DisconnectProperties),
+    Reauthenticate(CompletionNotifier<()>),
+    Subscribe(CompletionNotifier<SubAck>, QoS, SubscribeProperties),
+    Unsubscribe(CompletionNotifier<UnsubAck>, UnsubscribeProperties),
 }

@@ -15,7 +15,7 @@ use crate::packet::{
 
 mod completion;
 pub use completion::CompletionToken;
-pub(crate) use completion::{CompletionTransmitter, completion_pair};
+pub(crate) use completion::{CompletionNotifier, completion_pair};
 
 // TODO: These tokens for acknowledgement should likely get their own submodule, and `token` should strictly be for re-exports.
 // However, it may also make sense for them to be implemented alongside whatever mechanism tracks acknowledgements.
