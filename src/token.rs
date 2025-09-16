@@ -15,14 +15,14 @@ use crate::packet::{
 
 mod completion;
 pub use completion::CompletionToken;
-pub(crate) use completion::{CompletionTransmitter, completion_pair};
+pub(crate) use completion::{CompletionNotifier, completion_pair};
 
-pub(crate) type PublishQoS0CompletionTransmitter = CompletionTransmitter<()>;
-pub(crate) type PublishQoS1CompletionTransmitter = CompletionTransmitter<PubAck>;
-pub(crate) type PublishQoS2CompletionTransmitter =
-    CompletionTransmitter<(PubRec, Option<PubRelToken>)>;
-pub(crate) type SubscribeCompletionTransmitter = CompletionTransmitter<SubAck>;
-pub(crate) type UnsubscribeCompletionTransmitter = CompletionTransmitter<UnsubAck>;
+pub(crate) type PublishQoS0CompletionNotifier = CompletionNotifier<()>;
+pub(crate) type PublishQoS1CompletionNotifier = CompletionNotifier<PubAck>;
+pub(crate) type PublishQoS2CompletionNotifier =
+    CompletionNotifier<(PubRec, Option<PubRelToken>)>;
+pub(crate) type SubscribeCompletionNotifier = CompletionNotifier<SubAck>;
+pub(crate) type UnsubscribeCompletionNotifier = CompletionNotifier<UnsubAck>;
 
 // TODO: These tokens for acknowledgement should likely get their own submodule, and `token` should strictly be for re-exports.
 // However, it may also make sense for them to be implemented alongside whatever mechanism tracks acknowledgements.
