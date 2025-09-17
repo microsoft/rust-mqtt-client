@@ -5,7 +5,7 @@
 
 // TODO: This may not justify its own module, consider combining with other session state management.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, iter::Cycle};
 
 use crate::mqtt_proto::PacketIdentifier;
 
@@ -14,6 +14,7 @@ use crate::mqtt_proto::PacketIdentifier;
 // So, by defining a bespoke range type, we can implement `Iterator` directly for it.
 
 /// Iterator that yields `PacketIdentifier`s in a specified range, inclusive.
+#[derive(Clone)]
 struct PkidRange {
     current: PacketIdentifier,
     end: PacketIdentifier,
@@ -50,7 +51,7 @@ impl Iterator for PkidRange {
 /// Manages leasing and releasing Packet Identifiers for MQTT operations.
 pub struct PkidPool {
     leased: HashSet<PacketIdentifier>,
-    lease_cursor: PacketIdentifier,
+    cycle: Cycle<PkidRange>,
     max_pkid: PacketIdentifier,
 }
 
@@ -59,8 +60,11 @@ impl PkidPool {
     pub fn new(max_pkid: PacketIdentifier) -> Self {
         Self {
             leased: HashSet::new(),
-            lease_cursor: PacketIdentifier::new(1)
-                .expect("PacketIdentifier::new(1) is always valid"),
+            cycle: PkidRange::new(
+                PacketIdentifier::new(1).expect("PacketIdentifier::new(1) is always valid"),
+                max_pkid,
+            )
+            .cycle(),
             max_pkid,
         }
     }
@@ -68,21 +72,21 @@ impl PkidPool {
     /// Attempts to lease the next available Packet Identifier.
     /// Returns `Some(PacketIdentifier)` if successful, or `None` if all identifiers are in use.
     pub fn lease_next_pkid(&mut self) -> Option<PacketIdentifier> {
-        // NOTE: Technically, this second range should end with self.lease_cursor - 1, but it doesn't support subtract
-        // TODO: subtract?
-        let circular_iter = PkidRange::new(self.lease_cursor, self.max_pkid).chain(PkidRange::new(
-            PacketIdentifier::new(1).expect("PacketIdentifier::new(1) is always valid"),
-            self.lease_cursor,
-        ));
-
-        for pkid in circular_iter {
-            self.lease_cursor = pkid;
+        if self.leased.len() == self.max_pkid.get().into() {
+            return None; // All leased
+        }
+        // NOTE: Infinite loop is safe here as we are guaranteed to find a free pkid because of
+        // the lease check above.
+        loop {
+            let pkid = self
+                .cycle
+                .next()
+                .expect("Cycle is infinite and iter is non-emtpy");
             if !self.leased.contains(&pkid) {
                 self.leased.insert(pkid);
                 return Some(pkid);
             }
         }
-        None
     }
 
     /// Releases a previously leased Packet Identifier, making it available for future leasing.
@@ -92,6 +96,7 @@ impl PkidPool {
         self.leased.remove(&pkid)
     }
 }
+
 
 #[cfg(test)]
 mod test {
