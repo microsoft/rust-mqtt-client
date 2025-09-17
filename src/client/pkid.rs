@@ -9,6 +9,10 @@ use std::collections::HashSet;
 
 use crate::mqtt_proto::PacketIdentifier;
 
+// NOTE: `PkidRange` is required because `RangeInclusive` does not support `PacketIdentifier`
+// and the required trait (`Step`) is unstable, so `PacketIdentifier` cannot implement it.
+// So, by defining a bespoke range type, we can implement `Iterator` directly for it.
+
 /// Iterator that yields `PacketIdentifier`s in a specified range, inclusive.
 struct PkidRange {
     current: PacketIdentifier,
