@@ -78,10 +78,7 @@ impl PkidPool {
         // NOTE: Infinite loop is safe here as we are guaranteed to find a free pkid because of
         // the lease check above.
         loop {
-            let pkid = self
-                .cycle
-                .next()
-                .expect("Cycle is infinite and non-empty");
+            let pkid = self.cycle.next().expect("Cycle is infinite and non-empty");
             if !self.leased.contains(&pkid) {
                 self.leased.insert(pkid);
                 return Some(pkid);
@@ -96,7 +93,6 @@ impl PkidPool {
         self.leased.remove(&pkid)
     }
 }
-
 
 #[cfg(test)]
 mod test {
