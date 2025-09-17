@@ -17,12 +17,15 @@ mod completion;
 pub use completion::CompletionToken;
 pub(crate) use completion::{CompletionNotifier, completion_pair};
 
+// Aliases for completion notifier types.
+// For internal use where we'd prefer to avoid the mix of user-facing and internal packet types.
 pub(crate) type PublishQoS0CompletionNotifier = CompletionNotifier<()>;
 pub(crate) type PublishQoS1CompletionNotifier = CompletionNotifier<PubAck>;
-pub(crate) type PublishQoS2CompletionNotifier =
-    CompletionNotifier<(PubRec, Option<PubRelToken>)>;
+pub(crate) type PublishQoS2CompletionNotifier = CompletionNotifier<(PubRec, Option<PubRelToken>)>;
 pub(crate) type SubscribeCompletionNotifier = CompletionNotifier<SubAck>;
 pub(crate) type UnsubscribeCompletionNotifier = CompletionNotifier<UnsubAck>;
+pub(crate) type PubRecCompletionNotifier = CompletionNotifier<(PubRel, PubCompToken)>;
+pub(crate) type PubRelCompletionNotifier = CompletionNotifier<PubComp>;
 
 // TODO: These tokens for acknowledgement should likely get their own submodule, and `token` should strictly be for re-exports.
 // However, it may also make sense for them to be implemented alongside whatever mechanism tracks acknowledgements.

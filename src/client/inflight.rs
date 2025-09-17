@@ -7,8 +7,10 @@ use thiserror::Error;
 
 use crate::buffer_pool::Shared;
 use crate::mqtt_proto::{PacketIdentifier, PacketIdentifierDupQoS, Publish};
-use crate::packet::{PubAck, PubRec, SubAck, UnsubAck};
-use crate::token::{CompletionTransmitter, PubRelToken};
+use crate::token::{
+    PubRecCompletionNotifier, PubRelCompletionNotifier, PubRelToken, PublishQoS1CompletionNotifier,
+    PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+};
 
 // #[derive(Error, Debug)]
 // pub struct OccupiedError(#[from] OccupiedError);
@@ -26,8 +28,8 @@ pub struct PkidError(PacketIdentifier);
 // pub enum InflightPublish<S>
 // where S: Shared
 // {
-//     QoS1(Publish<S>, CompletionTransmitter<PubAck>),
-//     QoS2(Publish<S>, CompletionTransmitter<(PubRec, Option<PubRelToken>)>),
+//     QoS1(Publish<S>, CompletionNotifier<PubAck>),
+//     QoS2(Publish<S>, CompletionNotifier<(PubRec, Option<PubRelToken>)>),
 //     // Other packet types as needed
 // }
 
@@ -45,25 +47,33 @@ pub struct InflightTracker<S>
 where
     S: Shared,
 {
+    // --- Operation tracking (shares PKID pool) ---
     // Superset of all inflight packet identifiers for PUBLISH, SUBSCRIBE, and UNSUBSCRIBE
     inflight_pkids: HashSet<PacketIdentifier>,
     // All inflight QoS 1 PUBLISH operations
-    publish_qos1: HashMap<PacketIdentifier, (Publish<S>, CompletionTransmitter<PubAck>)>,
+    publish_qos1: HashMap<PacketIdentifier, (Publish<S>, PublishQoS1CompletionNotifier)>,
     // All inflight QoS 2 PUBLISH operations
-    publish_qos2: HashMap<
-        PacketIdentifier,
-        (
-            Publish<S>,
-            CompletionTransmitter<(PubRec, Option<PubRelToken>)>,
-        ),
-    >,
+    publish_qos2: HashMap<PacketIdentifier, (Publish<S>, PublishQoS2CompletionNotifier)>,
     // All inflight SUBSCRIBE operations
-    subscribe: HashMap<PacketIdentifier, CompletionTransmitter<SubAck>>,
+    subscribe: HashMap<PacketIdentifier, SubscribeCompletionNotifier>,
     // All inflight UNSUBSCRIBE operations
-    unsubscribe: HashMap<PacketIdentifier, CompletionTransmitter<UnsubAck>>,
+    unsubscribe: HashMap<PacketIdentifier, UnsubscribeCompletionNotifier>,
+
+    // --- Acknowledgement tracking (does not share PKID pool) ---
     // All inflight PUBREC operations
-    pubrec: HashMap<PacketIdentifier, CompletionTransmitter<(PubRel, PubCompToken)>>,
+    pubrec: HashMap<PacketIdentifier, PubRecCompletionNotifier>,
+    // All inflight PUBREL operations
+    pubrel: HashMap<PacketIdentifier, PubRelCompletionNotifier>,
 }
+
+// TODO: how does the pkid get freed up again? Outside of this module?
+// i.e. when we do mass deletes, probably needs to be hooked in here somewhow...
+
+// TODO: how do we interact with this? Insert, fetch for redelivery, complete, delete...
+
+// TODO: if the key is shared, could it be flattened somewhat?
+// - we could use an enum over the types of completion notifiers, but that would make clearing slowerly likely
+// - consider that sub and unsub are simply not going to happen all that often...
 
 impl<S> InflightTracker<S>
 where
@@ -72,14 +82,14 @@ where
     pub fn add_publish_qos1(
         &mut self,
         publish: Publish<S>,
-        completion: CompletionTransmitter<PubAck>,
-    ) -> Result<(), InsertionError<Publish<S>, CompletionTransmitter<PubAck>>> {
+        completion: PublishQoS1CompletionNotifier,
+    ) -> Result<(), InsertionError<Publish<S>, PublishQoS1CompletionNotifier>> {
         if let PacketIdentifierDupQoS::AtLeastOnce(pkid, _) = publish.packet_identifier_dup_qos {
             if self.inflight_pkids.contains(&pkid) {
                 return Err(InsertionError {
                     packet: publish,
                     completion,
-                    reason: format!("Packet Identifier {pkid} is already in-flight")
+                    reason: format!("Packet Identifier {pkid} is already in-flight"),
                 });
             }
             self.inflight_pkids.insert(pkid);
@@ -89,7 +99,7 @@ where
             return Err(InsertionError {
                 packet: publish,
                 completion,
-                reason: "Publish packet is not QoS 1".to_string()
+                reason: "Publish packet is not QoS 1".to_string(),
             });
         }
     }
@@ -97,14 +107,14 @@ where
     pub fn add_publish_qos2(
         &mut self,
         publish: Publish<S>,
-        completion: CompletionTransmitter<(PubRec, Option<PubRelToken>)>,
-    ) -> Result<(), InsertionError<Publish<S>, CompletionTransmitter<(PubRec, Option<PubRelToken>)>>> {
+        completion: PublishQoS2CompletionNotifier,
+    ) -> Result<(), InsertionError<Publish<S>, PublishQoS2CompletionNotifier>> {
         if let PacketIdentifierDupQoS::ExactlyOnce(pkid, _) = publish.packet_identifier_dup_qos {
             if self.inflight_pkids.contains(&pkid) {
                 return Err(InsertionError {
                     packet: publish,
                     completion,
-                    reason: format!("Packet Identifier {pkid} is already in-flight")
+                    reason: format!("Packet Identifier {pkid} is already in-flight"),
                 });
             }
             self.inflight_pkids.insert(pkid);
@@ -114,9 +124,8 @@ where
             return Err(InsertionError {
                 packet: publish,
                 completion,
-                reason: "Publish packet is not QoS 2".to_string()
+                reason: "Publish packet is not QoS 2".to_string(),
             });
         }
     }
-
 }
