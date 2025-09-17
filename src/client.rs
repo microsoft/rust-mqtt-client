@@ -20,6 +20,8 @@ use crate::token::{
 };
 use crate::topic::{TopicFilter, TopicName};
 
+mod pkid;
+
 // TODO: What should this module and factory function be called?
 // The three components are the client collectively - so what should the outbound struct (currently called the Client) be?
 // Should it be MqttSender or something? Or are we fine with the duplicate semantic?
