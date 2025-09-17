@@ -9,7 +9,6 @@
 #![allow(clippy::unused_async)]
 
 mod inflight;
-mod pkid;
 
 use bytes::Bytes;
 
