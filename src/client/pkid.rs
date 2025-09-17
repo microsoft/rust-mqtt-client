@@ -81,7 +81,7 @@ impl PkidPool {
             let pkid = self
                 .cycle
                 .next()
-                .expect("Cycle is infinite and iter is non-emtpy");
+                .expect("Cycle is infinite and non-empty");
             if !self.leased.contains(&pkid) {
                 self.leased.insert(pkid);
                 return Some(pkid);
