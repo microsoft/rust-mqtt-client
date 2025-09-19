@@ -64,11 +64,13 @@ impl<S: Shared> Session<S> {
     }
 
     /// Returns the next outgoing MQTT packet to be sent over the network
+    #[allow(clippy::unused_self)]
     pub async fn next_outgoing_packet(&mut self) -> Option<Packet<S>> {
         unimplemented!()
     }
 
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
     pub fn incoming_publish(&mut self, publish: Publish<S>) {
         unimplemented!()
     }
@@ -79,11 +81,13 @@ impl<S: Shared> Session<S> {
     }
 
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
     pub fn transition_disconnected(&mut self, disconnect: Disconnect<S>) {
         unimplemented!()
     }
 
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
     pub fn complete_inflight(&mut self, operation: CompletedOperation<S>) {
         unimplemented!()
     }
