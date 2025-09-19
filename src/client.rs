@@ -8,8 +8,6 @@
 #![allow(dead_code)]
 #![allow(clippy::unused_async)]
 
-mod inflight;
-
 use bytes::Bytes;
 
 use crate::error::ClientError;
@@ -22,7 +20,11 @@ use crate::token::{
 };
 use crate::topic::{TopicFilter, TopicName};
 
+mod inflight;
 mod pkid;
+mod session;
+mod session_old;
+mod variant_session_design;
 
 // TODO: What should this module and factory function be called?
 // The three components are the client collectively - so what should the outbound struct (currently called the Client) be?

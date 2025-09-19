@@ -10,7 +10,7 @@
 use crate::error::ClientError;
 use crate::packet::{
     PubAck, PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties,
-    PubRejectReason, PubRel, PubRelProperties, SubAck, UnsubAck,
+    PubRejectReason, PubRel, PubRelProperties, SubAck, UnsubAck, ConnAck,
 };
 
 mod completion;
@@ -19,6 +19,7 @@ pub(crate) use completion::{CompletionNotifier, completion_pair};
 
 // Aliases for completion notifier types.
 // For internal use where we'd prefer to avoid the mix of user-facing and internal packet types.
+pub(crate) type ConnectCompletionNotifier = CompletionNotifier<ConnAck>;
 pub(crate) type PublishQoS0CompletionNotifier = CompletionNotifier<()>;
 pub(crate) type PublishQoS1CompletionNotifier = CompletionNotifier<PubAck>;
 pub(crate) type PublishQoS2CompletionNotifier = CompletionNotifier<(PubRec, Option<PubRelToken>)>;
