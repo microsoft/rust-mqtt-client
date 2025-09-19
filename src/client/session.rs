@@ -11,7 +11,7 @@ use crate::client::{
         AcknowledgementRequest, ConnectionRequest, IncomingPublish, PublishRequest,
         SubscriptionRequest,
     },
-    session::{pkid::PkidPool, inflight::InflightTracker},
+    session::{inflight::InflightTracker, pkid::PkidPool},
 };
 use crate::mqtt_proto::{
     ConnAck, Connect, Disconnect, Packet, PacketIdentifier, PubAck, Publish, SubAck, UnsubAck,
@@ -49,8 +49,8 @@ impl<S: Shared> Session<S> {
     ) -> Self {
         let ch = Channels {
             conn_rx,
-            sub_rx,
             o_pub_rx,
+            sub_rx,
             ack_rx,
             i_pub_tx,
         };

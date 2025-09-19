@@ -10,14 +10,14 @@ use crate::mqtt_proto::{PacketIdentifier, Publish};
 
 pub struct InflightTracker<S>
 where
-    S: Shared
+    S: Shared,
 {
-    placeholder: HashMap<PacketIdentifier, Publish<S>>
+    placeholder: HashMap<PacketIdentifier, Publish<S>>,
 }
 
-impl <S> InflightTracker <S>
+impl<S> InflightTracker<S>
 where
-    S: Shared
+    S: Shared,
 {
     pub fn new() -> Self {
         unimplemented!()
