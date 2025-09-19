@@ -10,21 +10,22 @@
 
 use bytes::Bytes;
 
+use crate::buffer_pool::BufferPool;
+use crate::client::{
+    channel_data::{ConnectionRequest, PublishRequest, SubscriptionRequest},
+    session::Session,
+};
 use crate::error::ClientError;
 use crate::packet::{
-    AuthProperties, ConnAck, ConnectProperties, DisconnectProperties, PubAck, PubRec, Publish,
-    PublishProperties, QoS, SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
+    AuthProperties, ConnAck, ConnectProperties, DisconnectProperties, PacketIdentifier, PubAck,
+    PubRec, Publish, PublishProperties, QoS, SubAck, SubscribeProperties, UnsubAck,
+    UnsubscribeProperties,
 };
-use crate::token::{
-    CompletionNotifier, CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair,
-};
+use crate::token::{CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair};
 use crate::topic::{TopicFilter, TopicName};
 
-mod inflight;
-mod pkid;
+mod channel_data;
 mod session;
-mod session_old;
-mod variant_session_design;
 
 // TODO: What should this module and factory function be called?
 // The three components are the client collectively - so what should the outbound struct (currently called the Client) be?
@@ -33,22 +34,40 @@ mod variant_session_design;
 
 /// Creates the three components needed to run the MQTT client
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
-pub fn new_client(options: ClientOptions) -> (Client, EventLoop, Receiver) {
+pub fn new_client<BP>(
+    options: ClientOptions,
+    reader_pool: BP,
+    writer_pool: BP,
+) -> (Client, EventLoop<BP>, Receiver)
+where
+    BP: BufferPool,
+{
     // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
     // owned by the internal session state. If this becomes a performance bottleneck, revisit.
+    let (conn_tx, conn_rx) = tokio::sync::mpsc::channel(1);
     let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(1);
-    let (o_ctrl_tx, o_ctrl_rx) = tokio::sync::mpsc::channel(1);
+    let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
+    let (ack_tx, ack_rx) = tokio::sync::mpsc::channel(1);
     // TODO: How should the size of the incoming application message channel be determined?
     // For now, it's arbitrarily set to 100.
     let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::channel(100);
     let client = Client {
+        conn_tx,
         pub_tx: o_pub_tx,
-        ctrl_tx: o_ctrl_tx,
+        sub_tx,
     };
-    let event_loop = EventLoop {
+    let session = Session::new(
+        conn_rx,
+        sub_rx,
         o_pub_rx,
-        o_ctrl_rx,
+        ack_rx,
         i_pub_tx,
+        PacketIdentifier::new(100).expect("100 is always okay"), // TODO: customizable
+    );
+    let event_loop = EventLoop {
+        session,
+        reader_pool,
+        writer_pool,
     };
     let receiver = Receiver { rx: i_pub_rx };
     (client, event_loop, receiver)
@@ -70,13 +89,16 @@ pub struct ClientOptions {
 
 /// Sends outgoing data.
 #[derive(Clone)]
+#[allow(clippy::struct_field_names)]
 pub struct Client {
     // NOTE: We use different channels for publishes vs. control packets to allow for
     // prioritization of operations by the receiver.
+    /// Channel that transmits outgoing CONNECT/DISCONNECT requests
+    conn_tx: tokio::sync::mpsc::Sender<ConnectionRequest>,
     /// Channel that transmits outgoing PUBLISH requests
     pub_tx: tokio::sync::mpsc::Sender<PublishRequest>,
-    /// Channel that transmits all other outgoing control packet requests
-    ctrl_tx: tokio::sync::mpsc::Sender<ControlRequest>,
+    /// Channel that transmits outgoing SUBSCRIBE/UNSUBSCRIBE requests
+    sub_tx: tokio::sync::mpsc::Sender<SubscriptionRequest>,
 }
 
 impl Client {
@@ -88,8 +110,8 @@ impl Client {
         properties: ConnectProperties,
     ) -> Result<CompletionToken<ConnAck>, ClientError> {
         let (notifier, token) = completion_pair();
-        self.ctrl_tx
-            .send(ControlRequest::Connect(notifier, properties))
+        self.conn_tx
+            .send(ConnectionRequest::Connect(notifier, properties))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -103,8 +125,8 @@ impl Client {
         properties: DisconnectProperties,
     ) -> Result<CompletionToken<()>, ClientError> {
         let (notifier, token) = completion_pair();
-        self.ctrl_tx
-            .send(ControlRequest::Disconnect(notifier, properties))
+        self.conn_tx
+            .send(ConnectionRequest::Disconnect(notifier, properties))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -190,8 +212,13 @@ impl Client {
         properties: SubscribeProperties,
     ) -> Result<CompletionToken<SubAck>, ClientError> {
         let (notifier, token) = completion_pair();
-        self.ctrl_tx
-            .send(ControlRequest::Subscribe(notifier, qos, properties))
+        self.sub_tx
+            .send(SubscriptionRequest::Subscribe(
+                notifier,
+                topic_filter,
+                qos,
+                properties,
+            ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -206,8 +233,12 @@ impl Client {
         properties: UnsubscribeProperties,
     ) -> Result<CompletionToken<UnsubAck>, ClientError> {
         let (notifier, token) = completion_pair();
-        self.ctrl_tx
-            .send(ControlRequest::Unsubscribe(notifier, properties))
+        self.sub_tx
+            .send(SubscriptionRequest::Unsubscribe(
+                notifier,
+                topic_filter,
+                properties,
+            ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -231,25 +262,25 @@ impl Receiver {
 }
 
 /// Runs the MQTT client event loop, keeping the client operational.
-pub struct EventLoop {
+pub struct EventLoop<BP>
+where
+    BP: BufferPool,
+{
     // TODO: Should this be called Connection instead? I think that's semantically clearer, but, it precludes us
     // from providing Events for certain things that aren't connection related, e.g. outgoing publish, etc, although
     // it's unclear if those things are even valuable.
     // Furthermore, it's somewhat confusing if the actual connect method is not on the Connection.
     // ConnectionEventLoop?
     // It'll really come down to what events get provided here I guess.
-
-    // NOTE: We use different channels for publishes vs. control packets to allow for
-    // prioritization of operations we want to process here.
-    /// Channel for receiving outgoing PUBLISH requests from a `Client`
-    o_pub_rx: tokio::sync::mpsc::Receiver<PublishRequest>,
-    /// Channel for receiving all other outgoing control packet requests from a `Client`
-    o_ctrl_rx: tokio::sync::mpsc::Receiver<ControlRequest>,
-    /// Channel for sending incoming PUBLISH packets to the `Receiver`
-    i_pub_tx: tokio::sync::mpsc::Sender<(Publish, AckHandle)>,
+    session: Session<BP::Shared>,
+    reader_pool: BP,
+    writer_pool: BP,
 }
 
-impl EventLoop {
+impl<BP> EventLoop<BP>
+where
+    BP: BufferPool,
+{
     /// Polls for an event from the event loop.
     /// As long as the event loop is being polled, the MQTT client will continue to run.
     pub async fn poll(&mut self) -> Event {
@@ -268,36 +299,9 @@ pub enum Event {
 }
 
 // TODO: this has to be clonable
+// TODO: where should this live?
 pub enum AckHandle {
     QoS0,
     QoS1(PubAckToken),
     QoS2(PubRecToken),
-}
-
-/// Request to send a PUBLISH packet.
-enum PublishRequest {
-    PublishQoS0(CompletionNotifier<()>, TopicName, Bytes, PublishProperties),
-    PublishQoS1(
-        CompletionNotifier<PubAck>,
-        TopicName,
-        Bytes,
-        PublishProperties,
-    ),
-    PublishQoS2(
-        CompletionNotifier<(PubRec, Option<PubRelToken>)>,
-        TopicName,
-        Bytes,
-        PublishProperties,
-    ),
-}
-
-/// Request to send a non-PUBLISH control packet.
-enum ControlRequest {
-    // NOTE: A PUBLISH *is* a control packet, but it is not included here as it has a dedicated
-    // channel and enum to allow for prioritization.
-    Connect(CompletionNotifier<ConnAck>, ConnectProperties),
-    Disconnect(CompletionNotifier<()>, DisconnectProperties),
-    Reauthenticate(CompletionNotifier<()>),
-    Subscribe(CompletionNotifier<SubAck>, QoS, SubscribeProperties),
-    Unsubscribe(CompletionNotifier<UnsubAck>, UnsubscribeProperties),
 }

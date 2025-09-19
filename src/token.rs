@@ -9,8 +9,8 @@
 
 use crate::error::ClientError;
 use crate::packet::{
-    PubAck, PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties,
-    PubRejectReason, PubRel, PubRelProperties, SubAck, UnsubAck, ConnAck,
+    ConnAck, PubAck, PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties,
+    PubRejectReason, PubRel, PubRelProperties, SubAck, UnsubAck,
 };
 
 mod completion;
@@ -20,17 +20,23 @@ pub(crate) use completion::{CompletionNotifier, completion_pair};
 // Aliases for completion notifier types.
 // For internal use where we'd prefer to avoid the mix of user-facing and internal packet types.
 pub(crate) type ConnectCompletionNotifier = CompletionNotifier<ConnAck>;
+pub(crate) type DisconnectCompletionNotifier = CompletionNotifier<()>;
 pub(crate) type PublishQoS0CompletionNotifier = CompletionNotifier<()>;
 pub(crate) type PublishQoS1CompletionNotifier = CompletionNotifier<PubAck>;
 pub(crate) type PublishQoS2CompletionNotifier = CompletionNotifier<(PubRec, Option<PubRelToken>)>;
 pub(crate) type SubscribeCompletionNotifier = CompletionNotifier<SubAck>;
 pub(crate) type UnsubscribeCompletionNotifier = CompletionNotifier<UnsubAck>;
+pub(crate) type PubAckCompletionNotifier = CompletionNotifier<()>;
 pub(crate) type PubRecCompletionNotifier = CompletionNotifier<(PubRel, PubCompToken)>;
 pub(crate) type PubRelCompletionNotifier = CompletionNotifier<PubComp>;
+pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
 
 // TODO: These tokens for acknowledgement should likely get their own submodule, and `token` should strictly be for re-exports.
 // However, it may also make sense for them to be implemented alongside whatever mechanism tracks acknowledgements.
 // For now the stubs are here.
+
+// TODO: Consider a design where the drop of the token w/ weak refs or something triggers the op
+// Maybe an internal struct Arc shared by all of them so there's no need to have more than one tx
 
 // NOTE: It is unlikely that `Clone` can be derived in the final implementation, it will likely have to be manually implemented.
 
