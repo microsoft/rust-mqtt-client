@@ -76,6 +76,7 @@ impl<S: Shared> Session<S> {
     }
 
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
     pub fn transition_connected(&mut self, connack: ConnAck<S>) {
         unimplemented!()
     }
