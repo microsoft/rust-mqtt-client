@@ -26,7 +26,7 @@ pub enum CompletionError {
     Cancelled,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CompletionToken<T>(Shared<oneshot::Receiver<Result<T, CompletionError>>>)
 where
     T: Clone;
@@ -50,6 +50,7 @@ where
 }
 
 /// Notifier half of a completion pair
+#[derive(Debug)]
 pub struct CompletionNotifier<T>(oneshot::Sender<Result<T, CompletionError>>)
 where
     T: Clone;

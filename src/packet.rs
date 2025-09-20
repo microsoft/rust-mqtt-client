@@ -12,6 +12,7 @@
 use bytes::Bytes;
 
 use crate::error::OperationFailure;
+pub use crate::mqtt_proto::PacketIdentifier;
 use crate::topic::TopicName;
 
 #[derive(Debug, Clone)]

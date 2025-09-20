@@ -9,22 +9,39 @@
 
 use crate::error::ClientError;
 use crate::packet::{
-    PubAckProperties, PubComp, PubCompProperties, PubRecProperties, PubRejectReason, PubRel,
-    PubRelProperties,
+    ConnAck, PubAck, PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties,
+    PubRejectReason, PubRel, PubRelProperties, SubAck, UnsubAck,
 };
 
 mod completion;
 pub use completion::CompletionToken;
 pub(crate) use completion::{CompletionNotifier, completion_pair};
 
+// Aliases for completion notifier types.
+// For internal use where we'd prefer to avoid the mix of user-facing and internal packet types.
+pub(crate) type ConnectCompletionNotifier = CompletionNotifier<ConnAck>;
+pub(crate) type DisconnectCompletionNotifier = CompletionNotifier<()>;
+pub(crate) type PublishQoS0CompletionNotifier = CompletionNotifier<()>;
+pub(crate) type PublishQoS1CompletionNotifier = CompletionNotifier<PubAck>;
+pub(crate) type PublishQoS2CompletionNotifier = CompletionNotifier<(PubRec, Option<PubRelToken>)>;
+pub(crate) type SubscribeCompletionNotifier = CompletionNotifier<SubAck>;
+pub(crate) type UnsubscribeCompletionNotifier = CompletionNotifier<UnsubAck>;
+pub(crate) type PubAckCompletionNotifier = CompletionNotifier<()>;
+pub(crate) type PubRecCompletionNotifier = CompletionNotifier<(PubRel, PubCompToken)>;
+pub(crate) type PubRelCompletionNotifier = CompletionNotifier<PubComp>;
+pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
+
 // TODO: These tokens for acknowledgement should likely get their own submodule, and `token` should strictly be for re-exports.
 // However, it may also make sense for them to be implemented alongside whatever mechanism tracks acknowledgements.
 // For now the stubs are here.
 
+// TODO: Consider a design where the drop of the token w/ weak refs or something triggers the op
+// Maybe an internal struct Arc shared by all of them so there's no need to have more than one tx
+
 // NOTE: It is unlikely that `Clone` can be derived in the final implementation, it will likely have to be manually implemented.
 
 /// Token that allows the user to acknowledge a received PUBLISH on QoS 1 with a PUBACK.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PubAckToken {}
 
 impl PubAckToken {
@@ -73,7 +90,7 @@ impl Drop for PubAckToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBLISH on QoS 2 with a PUBREC.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PubRecToken {}
 
 impl PubRecToken {
@@ -117,7 +134,7 @@ impl Drop for PubRecToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PubRelToken {}
 impl PubRelToken {
     /// Confirm the PUBREC was received by issuing a PUBREL.
@@ -144,7 +161,7 @@ impl Drop for PubRelToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PubCompToken {}
 
 impl PubCompToken {
