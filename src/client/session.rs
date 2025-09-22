@@ -127,6 +127,7 @@ impl<S: Shared> Session<S> {
             self.pkid_pool.release_pkid(pkid);
         }
 
+        // If session is ended, additional state changes must be taken
         if let Some(SessionExpiryInterval::Duration(0)) =
             disconnect.other_properties.session_expiry_interval
         {
