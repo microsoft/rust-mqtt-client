@@ -16,7 +16,7 @@ use futures_util::future::{self, FutureExt as _};
 use crate::buffer_pool::BufferPool;
 use crate::client::{
     channel_data::{ConnectionRequest, PublishRequest, SubscriptionRequest},
-    session::{CompletedOperation, ConnectOperation, Session},
+    session::{CompletedOperation, ConnectionTransportConfig, Session},
 };
 use crate::error::ClientError;
 use crate::io::{Reader, Writer};
@@ -293,6 +293,8 @@ where
     pub async fn poll(&mut self) -> Event {
         loop {
             if let Some((reader, writer)) = &mut self.io {
+                // The session is currently connected, so check for outgoing packets from the session
+                // or incoming packets from the reader.
                 let next = {
                     let next_outgoing_packet_f = pin!(self.session.next_outgoing_packet());
                     let read_f = pin!(reader.read());
@@ -306,6 +308,7 @@ where
                     }
                 };
                 match next {
+                    // Outgoing packet from session
                     future::Either::Left(mut packet) => {
                         let mut disconnect = false;
                         while let Some(packet_) = packet {
@@ -322,11 +325,13 @@ where
                             packet = self.session.next_outgoing_packet().now_or_never().flatten();
                         }
                         writer.flush().await.expect("TODO: error handling");
+                        // If we wrote a DISCONNECT packet, also close the connection.
                         if disconnect {
                             self.io = None;
                         }
                     }
 
+                    // Incoming packet from reader
                     future::Either::Right(Ok(mut raw_packet)) => {
                         let packet = Packet::decode(
                             raw_packet.first_byte,
@@ -357,7 +362,7 @@ where
                                 .complete_inflight(CompletedOperation::PublishQoS2(pubrec)),
 
                             Packet::Disconnect(disconnect) => {
-                                self.session.server_disconnect(Some(disconnect));
+                                self.session.server_disconnect(disconnect);
                             }
 
                             Packet::Publish(publish) => self.session.incoming_publish(publish),
@@ -369,21 +374,25 @@ where
                     }
 
                     future::Either::Right(Err(err)) => {
-                        self.session.server_disconnect(None);
+                        self.session.transport_disconnect(err);
                     }
                 }
             } else {
-                let connect_operation = self.session.connect().await;
-                let (reader, writer) = match connect_operation {
-                    ConnectOperation::Tcp { hostname, port } => crate::io::tokio_tcp::connect(
-                        (hostname, port),
-                        &self.reader_pool,
-                        &self.writer_pool,
-                    )
-                    .await
-                    .expect("TODO: error handling"),
+                // The session is currently disconnected. Wait for the session to provide a connection transport config.
 
-                    ConnectOperation::Tls { hostname } => crate::io::tokio_tls::connect(
+                let connection_transport = self.session.connection_transport_config().await;
+                let (reader, writer) = match connection_transport {
+                    ConnectionTransportConfig::Tcp { hostname, port } => {
+                        crate::io::tokio_tcp::connect(
+                            (hostname, port),
+                            &self.reader_pool,
+                            &self.writer_pool,
+                        )
+                        .await
+                        .expect("TODO: error handling")
+                    }
+
+                    ConnectionTransportConfig::Tls { hostname } => crate::io::tokio_tls::connect(
                         &hostname,
                         &self.reader_pool,
                         &self.writer_pool,
@@ -391,14 +400,14 @@ where
                     .await
                     .expect("TODO: error handling"),
 
-                    ConnectOperation::Ws { request } => {
+                    ConnectionTransportConfig::Ws { request } => {
                         crate::io::tokio_ws::connect(request, &self.reader_pool)
                             .await
                             .expect("TODO: error handling")
                     }
                 };
+                // Connection has been established. Loop and poll for packets.
                 self.io = Some((reader, writer));
-                todo!("how to establish initial connection");
             }
         }
     }

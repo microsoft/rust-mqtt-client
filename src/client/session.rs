@@ -40,7 +40,7 @@ pub struct Session<S: Shared> {
     connected: bool,
 }
 
-pub(crate) enum ConnectOperation {
+pub(crate) enum ConnectionTransportConfig {
     Tcp {
         hostname: String,
         port: u16,
@@ -81,7 +81,7 @@ impl<S: Shared> Session<S> {
     /// Returns parameters for establishing a new connection.
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
     #[allow(clippy::unused_self)]
-    pub async fn connect(&mut self) -> ConnectOperation {
+    pub async fn connection_transport_config(&mut self) -> ConnectionTransportConfig {
         unimplemented!()
     }
 
@@ -169,7 +169,14 @@ impl<S: Shared> Session<S> {
     /// Trigger a disconnect and adjust state based on the information in the incoming `Disconnect` packet
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
     #[allow(clippy::unused_self)]
-    pub fn server_disconnect(&mut self, disconnect: Option<Disconnect<S>>) {
+    pub fn server_disconnect(&mut self, disconnect: Disconnect<S>) {
+        unimplemented!()
+    }
+
+    /// Trigger a disconnect and adjust state based on the error from the underlying transport
+    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
+    pub fn transport_disconnect(&mut self, err: std::io::Error) {
         unimplemented!()
     }
 
