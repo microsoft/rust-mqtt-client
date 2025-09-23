@@ -40,6 +40,19 @@ pub struct Session<S: Shared> {
     connected: bool,
 }
 
+pub(crate) enum ConnectionTransportConfig {
+    Tcp {
+        hostname: String,
+        port: u16,
+    },
+    Tls {
+        hostname: String,
+    },
+    Ws {
+        request: async_tungstenite::tungstenite::handshake::client::Request,
+    },
+}
+
 impl<S: Shared> Session<S> {
     pub fn new(
         conn_rx: Receiver<ConnectionRequest>,
@@ -63,6 +76,13 @@ impl<S: Shared> Session<S> {
             inflight: InflightTracker::default(),
             connected: false,
         }
+    }
+
+    /// Returns parameters for establishing a new connection.
+    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
+    pub async fn connection_transport_config(&mut self) -> ConnectionTransportConfig {
+        unimplemented!()
     }
 
     /// Returns the next outgoing MQTT packet to be sent over the network
@@ -103,8 +123,8 @@ impl<S: Shared> Session<S> {
         }
     }
 
-    /// Trigger a disconnect and adjust state based on the information in the `Disconnect` packet
-    pub fn transition_disconnected(&mut self, disconnect: &Disconnect<S>) {
+    /// Trigger a disconnect and adjust state based on the information in the outgoing `Disconnect` packet
+    pub fn client_disconnect(&mut self, disconnect: &Disconnect<S>) {
         // NOTE: When we cancel CompletionNotifiers here, we don't care about the Result because
         // if it fails, that just means the user no longer has the corresponding CompletionToken
 
@@ -144,6 +164,20 @@ impl<S: Shared> Session<S> {
 
             // TODO: PUBREL, PUBREC, PUBCOMP
         }
+    }
+
+    /// Trigger a disconnect and adjust state based on the information in the incoming `Disconnect` packet
+    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
+    pub fn server_disconnect(&mut self, disconnect: Disconnect<S>) {
+        unimplemented!()
+    }
+
+    /// Trigger a disconnect and adjust state based on the error from the underlying transport
+    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
+    pub fn transport_disconnect(&mut self, err: std::io::Error) {
+        unimplemented!()
     }
 
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove

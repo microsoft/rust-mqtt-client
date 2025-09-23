@@ -8,14 +8,19 @@
 #![allow(dead_code)]
 #![allow(clippy::unused_async)]
 
+use std::pin::pin;
+
 use bytes::Bytes;
+use futures_util::future::{self, FutureExt as _};
 
 use crate::buffer_pool::BufferPool;
 use crate::client::{
     channel_data::{ConnectionRequest, PublishRequest, SubscriptionRequest},
-    session::Session,
+    session::{CompletedOperation, ConnectionTransportConfig, Session},
 };
 use crate::error::ClientError;
+use crate::io::{Reader, Writer};
+use crate::mqtt_proto::{Packet, ProtocolVersion};
 use crate::packet::{
     AuthProperties, ConnAck, ConnectProperties, DisconnectProperties, PacketIdentifier, PubAck,
     PubRec, Publish, PublishProperties, QoS, SubAck, SubscribeProperties, UnsubAck,
@@ -68,6 +73,7 @@ where
         session,
         reader_pool,
         writer_pool,
+        io: None,
     };
     let receiver = Receiver { rx: i_pub_rx };
     (client, event_loop, receiver)
@@ -275,6 +281,7 @@ where
     session: Session<BP::Shared>,
     reader_pool: BP,
     writer_pool: BP,
+    io: Option<(Reader<BP>, Writer<BP>)>,
 }
 
 impl<BP> EventLoop<BP>
@@ -284,7 +291,125 @@ where
     /// Polls for an event from the event loop.
     /// As long as the event loop is being polled, the MQTT client will continue to run.
     pub async fn poll(&mut self) -> Event {
-        unimplemented!()
+        loop {
+            if let Some((reader, writer)) = &mut self.io {
+                // The session is currently connected, so check for outgoing packets from the session
+                // or incoming packets from the reader.
+                let next = {
+                    let next_outgoing_packet_f = pin!(self.session.next_outgoing_packet());
+                    let read_f = pin!(reader.read());
+                    let f = future::select(next_outgoing_packet_f, read_f);
+                    match f.await {
+                        future::Either::Left((packet, _)) => future::Either::Left(packet),
+                        future::Either::Right((Ok(raw_packet), _)) => {
+                            future::Either::Right(Ok(raw_packet))
+                        }
+                        future::Either::Right((Err(err), _)) => future::Either::Right(Err(err)),
+                    }
+                };
+                match next {
+                    // Outgoing packet from session
+                    future::Either::Left(mut packet) => {
+                        let mut disconnect = false;
+                        while let Some(packet_) = packet {
+                            if matches!(packet_, Packet::Disconnect(_)) {
+                                disconnect = true;
+                            }
+                            writer
+                                .write(&packet_, ProtocolVersion::V5)
+                                .await
+                                .expect("TODO: error handling");
+                            if disconnect {
+                                break;
+                            }
+                            packet = self.session.next_outgoing_packet().now_or_never().flatten();
+                        }
+                        writer.flush().await.expect("TODO: error handling");
+                        // If we wrote a DISCONNECT packet, also close the connection.
+                        if disconnect {
+                            self.io = None;
+                        }
+                    }
+
+                    // Incoming packet from reader
+                    future::Either::Right(Ok(mut raw_packet)) => {
+                        let packet = Packet::decode(
+                            raw_packet.first_byte,
+                            &mut raw_packet.rest,
+                            ProtocolVersion::V5,
+                        )
+                        .expect("TODO: error handling");
+
+                        match packet {
+                            Packet::ConnAck(connack) => self
+                                .session
+                                .complete_inflight(CompletedOperation::Connect(connack)),
+
+                            Packet::SubAck(suback) => self
+                                .session
+                                .complete_inflight(CompletedOperation::Subscribe(suback)),
+
+                            Packet::UnsubAck(unsuback) => self
+                                .session
+                                .complete_inflight(CompletedOperation::Unsubscribe(unsuback)),
+
+                            Packet::PubAck(puback) => self
+                                .session
+                                .complete_inflight(CompletedOperation::PublishQoS1(puback)),
+
+                            Packet::PubRec(pubrec) => self
+                                .session
+                                .complete_inflight(CompletedOperation::PublishQoS2(pubrec)),
+
+                            Packet::Disconnect(disconnect) => {
+                                self.session.server_disconnect(disconnect);
+                            }
+
+                            Packet::Publish(publish) => self.session.incoming_publish(publish),
+
+                            Packet::PingResp(_) => (),
+
+                            packet => todo!("unhandled packet {packet:?}"),
+                        }
+                    }
+
+                    future::Either::Right(Err(err)) => {
+                        self.session.transport_disconnect(err);
+                    }
+                }
+            } else {
+                // The session is currently disconnected. Wait for the session to provide a connection transport config.
+
+                let connection_transport = self.session.connection_transport_config().await;
+                let (reader, writer) = match connection_transport {
+                    ConnectionTransportConfig::Tcp { hostname, port } => {
+                        crate::io::tokio_tcp::connect(
+                            (hostname, port),
+                            &self.reader_pool,
+                            &self.writer_pool,
+                        )
+                        .await
+                        .expect("TODO: error handling")
+                    }
+
+                    ConnectionTransportConfig::Tls { hostname } => crate::io::tokio_tls::connect(
+                        &hostname,
+                        &self.reader_pool,
+                        &self.writer_pool,
+                    )
+                    .await
+                    .expect("TODO: error handling"),
+
+                    ConnectionTransportConfig::Ws { request } => {
+                        crate::io::tokio_ws::connect(request, &self.reader_pool)
+                            .await
+                            .expect("TODO: error handling")
+                    }
+                };
+                // Connection has been established. Loop and poll for packets.
+                self.io = Some((reader, writer));
+            }
+        }
     }
 }
 
