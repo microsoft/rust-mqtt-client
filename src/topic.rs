@@ -11,6 +11,8 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
+use crate::{buffer_pool, mqtt_proto};
+
 /// MQTT topic level separator
 const LEVEL_SEPARATOR: &str = "/";
 /// MQTT topic multi-level wildcard
@@ -54,7 +56,18 @@ pub struct TopicName {
 }
 
 impl TopicName {
-    /// Create a new [`TopicName`] from a [`String`]
+    /// Create a new [`TopicName`] from a string slice or equivalent
+    ///
+    /// # Arguments
+    /// * `topic_name` - The MQTT topic name
+    ///
+    /// # Errors
+    /// [`TopicParseError`] - If the topic name is invalid for an MQTT topic name
+    pub fn new<S: AsRef<str>>(topic_name: S) -> Result<TopicName, TopicParseError> {
+        Self::from_string(topic_name.as_ref().to_string())
+    }
+
+    /// Create a new [`TopicName`] from an owned [`String`]
     ///
     /// # Arguments
     /// * `topic_name` - The MQTT topic name
@@ -132,8 +145,7 @@ impl FromStr for TopicName {
     /// # Errors
     /// [`TopicParseError`] - If the topic name is invalid for an MQTT topic name
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let topic_name = s.to_string();
-        TopicName::from_string(topic_name)
+        TopicName::new(s)
     }
 }
 
@@ -158,6 +170,16 @@ impl fmt::Display for TopicName {
     }
 }
 
+impl<S> From<mqtt_proto::Topic<mqtt_proto::ByteStr<S>>> for TopicName
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::Topic<mqtt_proto::ByteStr<S>>) -> Self {
+        // Safe to unwrap since the mqtt_proto::Topic constructor validates the topic name
+        TopicName::from_str(value.as_str()).expect("mqtt_proto validated already")
+    }
+}
+
 /// Represents an MQTT topic filter
 #[derive(Debug, Clone)]
 pub struct TopicFilter {
@@ -168,7 +190,18 @@ pub struct TopicFilter {
 }
 
 impl TopicFilter {
-    /// Create a new [`TopicFilter`] from a [`String`]
+    /// Create a new [`TopicFilter`] from a string slice or equivalent
+    ///
+    /// # Arguments
+    /// * `topic_name` - The MQTT topic name
+    ///
+    /// # Errors
+    /// [`TopicParseError`] - If the topic name is invalid for an MQTT topic name
+    pub fn new<S: AsRef<str>>(topic_name: S) -> Result<TopicFilter, TopicParseError> {
+        Self::from_string(topic_name.as_ref().to_string())
+    }
+
+    /// Create a new [`TopicFilter`] from an owned [`String`]
     ///
     /// # Arguments
     /// * `topic_filter` - The MQTT topic filter
@@ -294,8 +327,7 @@ impl FromStr for TopicFilter {
     /// # Errors
     /// [`TopicParseError`] - If the topic filter is invalid for an MQTT topic filter
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let topic_filter = s.to_string();
-        TopicFilter::from_string(topic_filter)
+        TopicFilter::new(s)
     }
 }
 
