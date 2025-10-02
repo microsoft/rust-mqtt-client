@@ -335,7 +335,7 @@ where
                     let varint = decode_varint(&mut src)?.ok_or(DecodeError::IncompletePacket)?;
                     let new_src_len = src.len();
                     let value = NonZeroU32::new(varint)
-                        .ok_or(DecodeError::InvalidMaximumPacketSize(varint))?;
+                        .ok_or(DecodeError::InvalidSubscriptionIdentifier(varint))?;
                     (value, original_src_len - new_src_len)
                 };
                 src.drain(varint_len);

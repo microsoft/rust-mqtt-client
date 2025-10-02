@@ -347,9 +347,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::buffer_pool::{Shared, tests::SharedImpl};
     use matches::assert_matches;
+    use std::num::NonZeroU32;
     use test_case::test_case;
 
     use super::{
