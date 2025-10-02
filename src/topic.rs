@@ -420,7 +420,6 @@ mod tests {
     #[test_case("sport//tennis//player1"; "Multi-level topic name with zero-length levels in middle")]
     #[test_case("/"; "Multi-level topic name with only zero-length levels")]
     #[test_case("$shareholders/finance/bonds/banker1"; "Non-shared subscription topic containing $share")]
-
     fn valid_topic_name(topic_name: &str) {
         assert!(TopicName::is_valid_topic_name(topic_name));
         assert!(TopicName::from_str(topic_name).is_ok());
