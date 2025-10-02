@@ -1044,10 +1044,10 @@ pub enum DecodeError {
     InvalidMaximumPacketSize(u32),
     #[error("receive maximum set to invalid value {0}")]
     InvalidReceiveMaximum(u16),
-    #[error("topic alias set to invalid value {0}")]
-    InvalidTopicAlias(u16),
     #[error("subscription identifier set to invalid value {0}")]
     InvalidSubscriptionIdentifier(u32),
+    #[error("topic alias set to invalid value {0}")]
+    InvalidTopicAlias(u16),
     #[error("unrecognized authenticate reason code 0x{0:02X}")]
     UnrecognizedAuthenticateReasonCode(u8),
     #[error("unrecognized connect reason code 0x{0:02X}")]
