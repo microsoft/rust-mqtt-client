@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::num::NonZeroU32;
+
 use derive_where::derive_where;
 
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
@@ -137,7 +139,7 @@ pub struct SubscribeOtherProperties<S>
 where
     S: Shared,
 {
-    pub subscription_identifier: Option<u32>,
+    pub subscription_identifier: Option<NonZeroU32>,
     pub user_properties: UserProperties<S>,
 }
 
@@ -347,6 +349,7 @@ where
 mod tests {
     use crate::buffer_pool::{Shared, tests::SharedImpl};
     use matches::assert_matches;
+    use std::num::NonZeroU32;
     use test_case::test_case;
 
     use super::{
@@ -392,7 +395,7 @@ mod tests {
                 }
             ],
             other_properties: SubscribeOtherProperties {
-                subscription_identifier: Some(1),
+                subscription_identifier: Some(NonZeroU32::new(1).unwrap()),
                 user_properties: vec![(byte_str("cat"), byte_str("dog"))],
             },
         }),
