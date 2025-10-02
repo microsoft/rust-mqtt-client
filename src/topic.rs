@@ -175,8 +175,7 @@ where
     S: buffer_pool::Shared,
 {
     fn from(value: mqtt_proto::Topic<mqtt_proto::ByteStr<S>>) -> Self {
-        // Safe to unwrap since the mqtt_proto::Topic constructor validates the topic name
-        TopicName::from_str(value.as_str()).expect("mqtt_proto validated already")
+        TopicName::new(value).expect("mqtt_proto validated already")
     }
 }
 
@@ -352,6 +351,15 @@ impl fmt::Display for TopicFilter {
     }
 }
 
+impl<S> From<mqtt_proto::Filter<mqtt_proto::ByteStr<S>>> for TopicFilter
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::Filter<mqtt_proto::ByteStr<S>>) -> Self {
+        TopicFilter::new(value).expect("mqtt_proto validated already")
+    }
+}
+
 /// Check if the given [`TopicName`] is a match for the given [`TopicFilter`]
 ///
 /// # Arguments
@@ -375,8 +383,8 @@ pub fn topic_matches(topic_name: &TopicName, topic_filter: &TopicFilter) -> bool
     {
         match filter_level {
             MULTI_LEVEL_WILDCARD => return true,
-            SINGLE_LEVEL_WILDCARD => continue,
-            _ if name_level == filter_level => continue,
+            SINGLE_LEVEL_WILDCARD => (),
+            _ if name_level == filter_level => (),
             _ => return false,
         }
     }
