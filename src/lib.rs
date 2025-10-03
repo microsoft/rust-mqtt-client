@@ -16,6 +16,7 @@ pub mod error;
 pub mod packet;
 pub mod token;
 pub mod topic;
+pub mod topic_alt;
 
 // NOTE: Any dispatching or connection management would be supplementary components.
 // I am in favor of providing them, but they are built on top of these core components and would be optional.
