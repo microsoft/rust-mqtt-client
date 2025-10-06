@@ -6,7 +6,7 @@
 // TODO: Remove when possible.
 #![allow(dead_code)]
 
-use futures::future::{FutureExt, Shared};
+use futures_util::future::{FutureExt, Shared};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;

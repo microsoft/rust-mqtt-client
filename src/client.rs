@@ -312,8 +312,9 @@ where
                     future::Either::Left(mut packet) => {
                         let mut disconnect = false;
                         while let Some(packet_) = packet {
-                            if matches!(packet_, Packet::Disconnect(_)) {
+                            if let Packet::Disconnect(disconnect_) = &packet_ {
                                 disconnect = true;
+                                self.session.client_disconnect(disconnect_);
                             }
                             writer
                                 .write(&packet_, ProtocolVersion::V5)
@@ -362,7 +363,7 @@ where
                                 .complete_inflight(CompletedOperation::PublishQoS2(pubrec)),
 
                             Packet::Disconnect(disconnect) => {
-                                self.session.server_disconnect(disconnect);
+                                self.session.server_disconnect(&disconnect);
                             }
 
                             Packet::Publish(publish) => self.session.incoming_publish(publish),
@@ -374,7 +375,7 @@ where
                     }
 
                     future::Either::Right(Err(err)) => {
-                        self.session.transport_disconnect(err);
+                        self.session.transport_disconnect(&err);
                     }
                 }
             } else {
