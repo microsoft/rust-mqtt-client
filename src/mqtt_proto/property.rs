@@ -223,7 +223,7 @@ generate_enum_and_enum_ref! {
     SharedSubscriptionAvailable(bool),
 
     /// Ref: 3.8.2.1.2 Subscription Identifier
-    SubscriptionIdentifier(u32),
+    SubscriptionIdentifier(NonZeroU32),
 
     /// Ref: 3.2.2.3.12 Subscription Identifiers Available
     SubscriptionIdentifiersAvailable(bool),
@@ -334,7 +334,9 @@ where
                     let original_src_len = src.len();
                     let varint = decode_varint(&mut src)?.ok_or(DecodeError::IncompletePacket)?;
                     let new_src_len = src.len();
-                    (varint, original_src_len - new_src_len)
+                    let value = NonZeroU32::new(varint)
+                        .ok_or(DecodeError::InvalidSubscriptionIdentifier(varint))?;
+                    (value, original_src_len - new_src_len)
                 };
                 src.drain(varint_len);
                 Self::SubscriptionIdentifier(varint)
@@ -694,6 +696,7 @@ where
             }
 
             Self::SubscriptionIdentifier(&varint) => {
+                let varint = varint.get();
                 dst.try_put_u8(0x0B)
                     .ok_or(EncodeError::InsufficientBuffer)?;
                 encode_varint(varint, dst)?;

@@ -1,15 +1,15 @@
-# MQTT Client Proposal
+# MQTT Client Overview
 
-Proposed MQTT crate will have three components which collectively provide client functionality:
+In-progress MQTT crate has three components which collectively provide client functionality:
     - `EventLoop` / `Connection` (semantics pending)
-    - `Client` (better name?)
+    - `Client`
     - `Receiver`
 
 ## EventLoop / Connection
 
-Basically, a "do work" loop that keeps the client running.
+Basically, a "do work" loop that keeps the client connection running.
 
-There is a discussion that should be had regarding the exact granularity of these events (i.e. does this report all packet traffic in addition to client events?)
+We are still discussing the exact granularity and final form of event reporting as we assess implementation needs.
 
 ```rust
 loop {
@@ -31,14 +31,12 @@ loop {
 ## "Client"
 
 Used for sending outgoing data:
-- Connect
-- Disconnect
 - Publish
 - Subscribe
 - Unsubscribe
 - Reauthorize
 
-APIs not finalized as there is a lot of complexity around result reporting.
+Currently also triggers connect/disconnect, but this functionality may be moved to EventLoop/Connection
 
 ### Simple
 ```rust
@@ -80,7 +78,7 @@ match pub_ack.as_result() {
 
 ### QoS2
 ```rust
-let client_result: Result<CompletionToken<PubAck>, ClientError> = client.publish_qos2(
+let client_result: Result<CompletionToken<PubRec>, ClientError> = client.publish_qos2(
     TopicName::from("test/topic").unwrap(), // Topic
     "Hello, MQTT!".into(),                  // Payload (bytes)
     PublishProperties::default()            // Properties
@@ -106,13 +104,13 @@ if pub_rec.is_success() {
 
 Broadly, the idea is that there are distinct failure types that are able to be reported at different times:
 1) Failure of the client to accept the message (i.e. the connection struct was dropped and not running)
-2) Failure of the message to be delivered over MQTT (e.g. in-flight subscribe cancelled due to connection loss)
+2) Failure of the message to be delivered once accepted into the client (e.g. in-flight subscribe cancelled due to connection loss)
 3) Failure reported to the client by the broker (i.e. MQTT error codes)
 
 ## Receiver
 Incoming channel/stream that receives incoming Publishes, along with an optional acknowledgement mechanism. The receiver receives **all** messages, and it is up to the application to send them where they need to go (see "dispatching" section)
 
-### Automatic Ack
+### Automatic acknowledgement
 ```rust
 loop {
     while let Some((publish, _)) = receiver.recv().await {
@@ -121,7 +119,7 @@ loop {
 }
 ```
 
-### Manual Ack
+### Manual acknowledgement
 ```rust
 loop {
     while let Some((publish, ack_handle)) = receiver.recv().await {
@@ -131,12 +129,12 @@ loop {
             AckHandle::QoS0 => {
                 println!("Publish does not require acknowledgment (QoS 0)");
             }
-            AckHandle::QoS1 => {
+            AckHandle::QoS1(puback_token) => {
                 let ct = puback_token.accept(PubAckProperties::default()).await.unwrap();
                 ct.await.unwrap();
                 println!("Publish acknowledged! (QoS 1)");
             }
-            AckHandle::QoS2 => {
+            AckHandle::QoS2(pubrec_token) => {
                 let ct = pubrec_token.accept(PubRecProperties::default()).await.unwrap();
                 let (pubrel, pubcomp_token) = ct.await.unwrap();
                 let ct = pubcomp_token.confirm(PubCompProperties::default()).await.unwrap();
@@ -154,8 +152,8 @@ If dropped without explicit acknowledgement by the user, the `AckHandle` will tr
 
 In order to be maximally compatible with generic brokers (and in partiular, our MQ broker), a `PubAckToken` (used with QoS1) is only valid for a given connection epoch - that is to say that if the connection is lost, any `CompletionToken` returned by the acknowledgement of an `PubAckToken` will return an error indicating cancellation. The associated publish will be redelivered upon next connect (assuming it was not expired by the broker in the meantime).
 
-If using QoS2, `PubRecToken` and `PubCompToken` are not subject to this limitation.
+If using QoS2, `PubRecToken` and `PubCompToken` are not subject to this limitation as all brokers are required to redeliver.
 
 ### Dispatching
 
-There is, of course, a need for messages to be able to be dispatched to other locations for processing, as you will not want to block the receive loop. This is a common pattern, and one we will need for our own SDKs, as will presumably most consumers of this library. There would need to be an additional optional component for dispatching messages, although it would need to operate independently of the three components of the "client" and thus is not part of this current discussion.
+There is, of course, a need for messages to be able to be dispatched to other locations for processing, as you will not want to block the receive loop. This is a common pattern, and one we will need for our own SDKs, as will presumably many consumers of this library. There would need to be an additional optional component for dispatching messages, although it would need to operate independently of the three components of the "client" and thus is not part of this current architecture, but it is being kept in mind.

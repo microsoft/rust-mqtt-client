@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::num::NonZeroU16;
+use std::num::{NonZeroU16, NonZeroU32};
 
 use derive_where::derive_where;
 
@@ -38,7 +38,7 @@ where
     pub response_topic: Option<Topic<ByteStr<S>>>,
     pub correlation_data: Option<CorrelationData<S>>,
     pub user_properties: UserProperties<S>,
-    pub subscription_identifiers: Vec<u32>,
+    pub subscription_identifiers: Vec<NonZeroU32>,
     pub content_type: Option<ByteStr<S>>,
 }
 
@@ -325,7 +325,7 @@ mod tests {
                 topic_alias: Some(NonZeroU16::new(16).unwrap()),
                 response_topic: Some(topic("response/topic")),
                 correlation_data: Some(correlation_data("cd")),
-                subscription_identifiers: vec![1,2],
+                subscription_identifiers: vec![NonZeroU32::new(1).unwrap(), NonZeroU32::new(2).unwrap()],
                 content_type: Some(byte_str("stuff")),
             },
         }),
