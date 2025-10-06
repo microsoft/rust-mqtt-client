@@ -54,7 +54,7 @@ Result reporting will have a tiered approach that looks something like this:
 ### QoS1
 ```rust
 let client_result: Result<CompletionToken<PubAck>, ClientError> = client.publish_qos1(
-    TopicName::from("test/topic").unwrap(), // Topic
+    TopicName::new("test/topic").unwrap(), // Topic
     "Hello, MQTT!".into(),                  // Payload (bytes)
     PublishProperties::default()            // Properties
 ).await;
