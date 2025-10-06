@@ -5,9 +5,9 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::mqtt_proto;
 use crate::buffer_pool;
 use crate::buffer_pool::BufferPool;
+use crate::mqtt_proto;
 
 /// Error type for validating topics.
 #[derive(Debug, Error)]
@@ -20,7 +20,7 @@ pub struct TopicName(mqtt_proto::Topic<mqtt_proto::ByteStr<buffer_pool::SharedIm
 
 impl TopicName {
     /// Constructs a new `TopicName` after validating the input string.
-    /// 
+    ///
     /// # Errors
     /// Returns an error if the topic is invalid.
     /// See <https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901241>.
@@ -69,7 +69,7 @@ pub struct TopicFilter(mqtt_proto::Filter<mqtt_proto::ByteStr<buffer_pool::Share
 
 impl TopicFilter {
     /// Constructs a new `TopicFilter` after validating the input string.
-    /// 
+    ///
     /// # Errors
     /// Returns an error if the topic filter is invalid.
     /// See <https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901241>.
