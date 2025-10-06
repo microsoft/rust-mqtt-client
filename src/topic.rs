@@ -65,6 +65,7 @@ impl From<mqtt_proto::Topic<mqtt_proto::ByteStr<buffer_pool::SharedImpl>>> for T
 }
 
 /// MQTT Topic Filter as described in MQTT v5, section "4.7 Topic Names and Topic Filters".
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct TopicFilter(mqtt_proto::Filter<mqtt_proto::ByteStr<buffer_pool::SharedImpl>>);
 
 impl TopicFilter {
