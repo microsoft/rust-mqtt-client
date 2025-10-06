@@ -17,9 +17,9 @@ use crate::client::{
     session::pkid::PkidPool,
 };
 use crate::mqtt_proto::{
-    ConnAck, Connect, ConnectSessionExpiryInterval, Disconnect, KeepAlive, Packet,
-    PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish,
-    SessionExpiryInterval, SubAck, Subscribe, UnsubAck, Unsubscribe,
+    ConnAck, Connect, ConnectReasonCode, ConnectSessionExpiryInterval, Disconnect, KeepAlive,
+    Packet, PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel,
+    Publish, SessionExpiryInterval, SubAck, Subscribe, UnsubAck, Unsubscribe,
 };
 use crate::token::{
     ConnectCompletionNotifier, PubRecCompletionNotifier, PubRelCompletionNotifier,
@@ -42,6 +42,8 @@ pub struct Session<S: Shared> {
     inflight: InflightTracker<S>,
     //ack_order: AckOrderer, // TODO
     connected: bool,
+    transient: bool,
+    pingreq: Option<PingReqTimer>,
 }
 
 pub(crate) enum ConnectionTransportConfig {
@@ -72,7 +74,6 @@ impl<S: Shared> Session<S> {
             sub_rx,
             ack_rx,
             i_pub_tx,
-            pingreq: None,
         };
         Self {
             ch,
@@ -80,6 +81,8 @@ impl<S: Shared> Session<S> {
             outgoing_queue: Default::default(),
             inflight: InflightTracker::default(),
             connected: false,
+            transient: false,
+            pingreq: None,
         }
     }
 
@@ -95,7 +98,7 @@ impl<S: Shared> Session<S> {
     pub async fn next_outgoing_packet(&mut self) -> Option<Packet<S>> {
         match (self.connected, &mut self.inflight.connect) {
             // If we're currently disconnected, then only poll `conn_rx` and generate a `Connect`
-            (false, inflight_connect @ None) => {
+            (false, None) => {
                 let (notifier, _properties) = loop {
                     match self.ch.conn_rx.recv().await? {
                         ConnectionRequest::Connect(notifier, properties) => {
@@ -106,8 +109,9 @@ impl<S: Shared> Session<S> {
                         ConnectionRequest::Disconnect(..) => (),
                     }
                 };
-                *inflight_connect = Some(notifier);
+                self.inflight.connect = Some(notifier);
                 // TODO: Get values from properties
+                self.transient = false;
                 Some(Packet::Connect(Connect {
                     username: None,
                     password: None,
@@ -123,12 +127,16 @@ impl<S: Shared> Session<S> {
             }
 
             // If we're currently disconnected and waiting for CONNACK, then yield `Pending`
+            // TODO: This is wrong since this will block forever, but it's temporary until
+            // EventLoop is changed to use separate types for connected and disconnected states.
             (false, Some(_)) => std::future::pending().await,
 
             // If we're currently connected, then poll self.ch
             (true, _) => {
                 #[allow(unreachable_code)] // TODO: Remove when todo!()s are resolved
-                let packet = match poll_connected_channels(&mut self.ch).await {
+                let packet = match poll_connected_channels(&mut self.ch, self.pingreq.as_mut())
+                    .await
+                {
                     ConnectedChannelsOutgoingPacket::AcknowledgementRequest(ack_req) => {
                         match ack_req {
                             AcknowledgementRequest::PubAck(..) => Packet::PubAck(PubAck {
@@ -240,10 +248,25 @@ impl<S: Shared> Session<S> {
             CompletedOperation::Connect(connack) => {
                 if let Some(notifier) = self.inflight.connect.take() {
                     #[allow(clippy::collapsible_if)] // TODO: remove
-                    if connack.is_success() {
+                    if let ConnectReasonCode::Success { session_present } = connack.reason_code {
                         self.connected = true;
+
+                        if !session_present {
+                            // Previous session, if any, is not present on the server.
+                            self.session_expired();
+                        }
+
+                        if matches!(
+                            connack.other_properties.session_expiry_interval,
+                            Some(SessionExpiryInterval::Duration(0))
+                        ) && !self.transient
+                        {
+                            // We asked for a persistent session but the server overrode it to transient.
+                            self.transient = true;
+                        }
+
                         // TODO: Get PINGREQ duration from connect properties
-                        self.ch.pingreq = Some(PingReqTimer::new(Duration::from_secs(5)));
+                        self.pingreq = Some(PingReqTimer::new(Duration::from_secs(5)));
                     }
                     // TODO: Convert connack to user-facing type and complete notifier
                     //let connack = connack.into()
@@ -270,61 +293,65 @@ impl<S: Shared> Session<S> {
 
     /// Trigger a disconnect and adjust state based on the information in the outgoing `Disconnect` packet
     pub fn client_disconnect(&mut self, disconnect: &Disconnect<S>) {
-        // NOTE: When we cancel CompletionNotifiers here, we don't care about the Result because
-        // if it fails, that just means the user no longer has the corresponding CompletionToken
+        log::info!("client disconnected by request {disconnect:?}");
 
-        // Set connection state
-        self.connected = false;
-        self.ch.pingreq = None;
-        // Remove and cancel any in-flight CONNECT
-        if let Some(notifier) = self.inflight.connect.take() {
-            let _ = notifier.cancel();
-        }
-        // Remove and cancel all in-flight SUBSCRIBEs
-        for (pkid, notifier) in self.inflight.subscribe.drain() {
-            let _ = notifier.cancel();
-            self.pkid_pool.release_pkid(pkid);
-        }
-        // Remove and cancel all in-flight UNSUBSCRIBEs
-        for (pkid, notifier) in self.inflight.unsubscribe.drain() {
-            let _ = notifier.cancel();
-            self.pkid_pool.release_pkid(pkid);
-        }
+        self.disconnected();
 
-        // If session is ended, additional state changes must be taken
+        // If the disconnect overrides the session to be transient
         if let Some(SessionExpiryInterval::Duration(0)) =
             disconnect.other_properties.session_expiry_interval
         {
-            // Remove and cancel all in-flight QoS 1 PUBLISHes
-            for (pkid, (_, notifier)) in self.inflight.publish_qos1.drain() {
-                let _ = notifier.cancel();
-                self.pkid_pool.release_pkid(pkid);
-            }
-            // Remove and cancel all in-flight QoS 2 PUBLISHes
-            for (pkid, (_, notifier)) in self.inflight.publish_qos2.drain() {
-                let _ = notifier.cancel();
-                self.pkid_pool.release_pkid(pkid);
-            }
+            self.transient = true;
+        }
 
-            // TODO: PUBREL, PUBREC, PUBCOMP
+        if self.transient {
+            self.session_expired();
         }
     }
 
     /// Trigger a disconnect and adjust state based on the information in the incoming `Disconnect` packet
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
     #[allow(clippy::unused_self)]
-    pub fn server_disconnect(&mut self, disconnect: Disconnect<S>) {
+    pub fn server_disconnect(&mut self, disconnect: &Disconnect<S>) {
+        log::error!("client disconnected due to server {disconnect:?}");
+
+        self.disconnected();
+
+        // NOTE: Server disconnect cannot override session expiry interval of client.
+
+        if self.transient {
+            self.session_expired();
+        }
+    }
+
+    /// Trigger a disconnect and adjust state based on the error from the underlying transport
+    pub fn transport_disconnect(&mut self, err: &std::io::Error) {
+        log::error!("client disconnected due to tranport error {err}");
+
+        self.disconnected();
+
+        if self.transient {
+            self.session_expired();
+        }
+    }
+
+    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
+    #[allow(clippy::unused_self)]
+    pub fn incoming_publish(&mut self, publish: Publish<S>) {
+        unimplemented!()
+    }
+
+    /// The connection has been closed for any reason.
+    fn disconnected(&mut self) {
         // NOTE: When we cancel CompletionNotifiers here, we don't care about the Result because
         // if it fails, that just means the user no longer has the corresponding CompletionToken
 
-        // Set connection state
         self.connected = false;
-        self.ch.pingreq = None;
+        self.pingreq = None;
         // Remove and cancel any in-flight CONNECT
         // This shouldn't happen, since DISCONNECT requires an existing connection to be issued.
         if let Some(notifier) = self.inflight.connect.take() {
             let _ = notifier.cancel();
-            log::warn!("Received DISCONNECT while CONNECT packet in-flight");
         }
         // Remove and cancel all in-flight SUBSCRIBEs
         for (pkid, notifier) in self.inflight.subscribe.drain() {
@@ -336,37 +363,26 @@ impl<S: Shared> Session<S> {
             let _ = notifier.cancel();
             self.pkid_pool.release_pkid(pkid);
         }
+    }
 
-        // If session is ended, additional state changes must be taken
-        if let Some(SessionExpiryInterval::Duration(0)) =
-            disconnect.other_properties.session_expiry_interval
-        {
-            // Remove and cancel all in-flight QoS 1 PUBLISHes
-            for (pkid, (_, notifier)) in self.inflight.publish_qos1.drain() {
-                let _ = notifier.cancel();
-                self.pkid_pool.release_pkid(pkid);
-            }
-            // Remove and cancel all in-flight QoS 2 PUBLISHes
-            for (pkid, (_, notifier)) in self.inflight.publish_qos2.drain() {
-                let _ = notifier.cancel();
-                self.pkid_pool.release_pkid(pkid);
-            }
-
-            // TODO: PUBREL, PUBREC, PUBCOMP
+    /// Perform state changes when the session is known to be expired on the server:
+    ///
+    /// 1. The connection closed, and it had originally been established with session expiry interval == 0
+    /// 2. The client closed the connect via a DISCONNECT with session expiry interval == 0
+    /// 3. A new connection was established and the CONNACK says session present == false
+    fn session_expired(&mut self) {
+        // Remove and cancel all in-flight QoS 1 PUBLISHes
+        for (pkid, (_, notifier)) in self.inflight.publish_qos1.drain() {
+            let _ = notifier.cancel();
+            self.pkid_pool.release_pkid(pkid);
         }
-    }
+        // Remove and cancel all in-flight QoS 2 PUBLISHes
+        for (pkid, (_, notifier)) in self.inflight.publish_qos2.drain() {
+            let _ = notifier.cancel();
+            self.pkid_pool.release_pkid(pkid);
+        }
 
-    /// Trigger a disconnect and adjust state based on the error from the underlying transport
-    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
-    #[allow(clippy::unused_self)]
-    pub fn transport_disconnect(&mut self, err: std::io::Error) {
-        unimplemented!()
-    }
-
-    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
-    #[allow(clippy::unused_self)]
-    pub fn incoming_publish(&mut self, publish: Publish<S>) {
-        unimplemented!()
+        // TODO: PUBREL, PUBREC, PUBCOMP
     }
 }
 
@@ -405,7 +421,6 @@ struct Channels {
     ack_rx: Receiver<AcknowledgementRequest>,
     /// Channel for sending incoming PUBLISH requests
     i_pub_tx: Sender<IncomingPublish>,
-    pingreq: Option<PingReqTimer>,
 }
 
 enum ConnectedChannelsOutgoingPacket {
@@ -415,15 +430,15 @@ enum ConnectedChannelsOutgoingPacket {
     PingReq,
 }
 
+// Poll for outgoing ACKs, then for outgoing SUBSCRIBEs, then for outgoing PUBLISHes.
+// If any of them yields an item, reset the PINGREQ timer, else poll for outgoing PINGREQs.
 fn poll_connected_channels(
     ch: &mut Channels,
+    mut pingreq: Option<&mut PingReqTimer>,
 ) -> impl Future<Output = ConnectedChannelsOutgoingPacket> {
-    futures_util::future::poll_fn(|cx| {
-        // Poll for outgoing ACKs, then for outgoing SUBSCRIBEs, then for outgoing PUBLISHes.
-        // If any of them yields an item, reset the PINGREQ timer, else poll for outgoing PINGREQs.
-
+    futures_util::future::poll_fn(move |cx| {
         if let Poll::Ready(Some(ack_req)) = ch.ack_rx.poll_recv(cx) {
-            if let Some(pingreq) = &mut ch.pingreq {
+            if let Some(ref mut pingreq) = pingreq {
                 pingreq.reset();
             }
             return Poll::Ready(ConnectedChannelsOutgoingPacket::AcknowledgementRequest(
@@ -432,7 +447,7 @@ fn poll_connected_channels(
         }
 
         if let Poll::Ready(Some(sub_req)) = ch.sub_rx.poll_recv(cx) {
-            if let Some(pingreq) = &mut ch.pingreq {
+            if let Some(ref mut pingreq) = pingreq {
                 pingreq.reset();
             }
             return Poll::Ready(ConnectedChannelsOutgoingPacket::SubscriptionRequest(
@@ -441,13 +456,13 @@ fn poll_connected_channels(
         }
 
         if let Poll::Ready(Some(publish)) = ch.o_pub_rx.poll_recv(cx) {
-            if let Some(pingreq) = &mut ch.pingreq {
+            if let Some(ref mut pingreq) = pingreq {
                 pingreq.reset();
             }
             return Poll::Ready(ConnectedChannelsOutgoingPacket::PublishRequest(publish));
         }
 
-        if let Some(pingreq) = &mut ch.pingreq
+        if let Some(ref mut pingreq) = pingreq
             && let Poll::Ready(()) = Pin::new(&mut *pingreq).poll(cx)
         {
             pingreq.reset();
