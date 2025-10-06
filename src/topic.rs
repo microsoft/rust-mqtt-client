@@ -29,7 +29,8 @@ impl TopicName {
         S: AsRef<str>,
     {
         let mut o = buffer_pool::BufferPoolImpl.take_empty_owned();
-        let bs = mqtt_proto::ByteStr::new(&mut o, &s).unwrap();
+        let bs = mqtt_proto::ByteStr::new(&mut o, &s)
+            .expect("Cannot fail due to being backed by SharedImpl");
         let topic = mqtt_proto::Topic::new(bs)?;
         Ok(TopicName(topic))
     }
@@ -79,7 +80,8 @@ impl TopicFilter {
         S: AsRef<str>,
     {
         let mut o = buffer_pool::BufferPoolImpl.take_empty_owned();
-        let bs = mqtt_proto::ByteStr::new(&mut o, &s).unwrap();
+        let bs = mqtt_proto::ByteStr::new(&mut o, &s)
+            .expect("Cannot fail due to being backed by SharedImpl");
         let filter = mqtt_proto::Filter::new(bs)?;
         Ok(TopicFilter(filter))
     }
