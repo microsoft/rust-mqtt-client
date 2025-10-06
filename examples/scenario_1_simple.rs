@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use azure_mqtt::buffer_pool::bytes::BufferPoolImpl;
 use azure_mqtt::client::{
     AckHandle, Client, ClientOptions, Event, EventLoop, Receiver, new_client,
 };
@@ -18,7 +17,7 @@ async fn main() {
         client_id: "my_client".to_string(),
         queue_size: 10,
     };
-    let (client, event_loop, receiver) = new_client(options, BufferPoolImpl, BufferPoolImpl);
+    let (client, event_loop, receiver) = new_client(options);
 
     tokio::select! {
         () = connection_runner(event_loop) => {
@@ -77,7 +76,7 @@ async fn program(client: Client) {
     }
 }
 
-async fn connection_runner(mut event_loop: EventLoop<BufferPoolImpl>) {
+async fn connection_runner(mut event_loop: EventLoop) {
     loop {
         match event_loop.poll().await {
             Event::Connected => {

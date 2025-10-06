@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#![allow(dead_code, unused_imports)]
+
 use std::{
     mem::{MaybeUninit, size_of},
     ptr,
