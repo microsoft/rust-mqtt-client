@@ -79,7 +79,7 @@ match pub_ack.as_result() {
 ### QoS2
 ```rust
 let client_result: Result<CompletionToken<PubRec>, ClientError> = client.publish_qos2(
-    TopicName::from("test/topic").unwrap(), // Topic
+    TopicName::new("test/topic").unwrap(), // Topic
     "Hello, MQTT!".into(),                  // Payload (bytes)
     PublishProperties::default()            // Properties
 ).await;
