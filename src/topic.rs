@@ -115,7 +115,7 @@ impl fmt::Display for TopicFilter {
 }
 
 #[cfg(test)]
-#[allow(clippy::similar_names)]
+#[allow(clippy::similar_names)]     // clippy doesn't like tn/tf variables
 mod tests {
     use super::{TopicFilter, TopicName};
     use crate::{
