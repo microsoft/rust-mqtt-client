@@ -7,8 +7,8 @@ use derive_where::derive_where;
 
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
-    ByteStr, CorrelationData, DecodeError, EncodeError, PacketIdentifierDupQoS, PacketMeta,
-    Property, PropertyRef, ProtocolVersion, PublicationOtherProperties, SharedExt as _, Topic,
+    BinaryData, ByteStr, DecodeError, EncodeError, PacketIdentifierDupQoS, PacketMeta, Property,
+    PropertyRef, ProtocolVersion, PublicationOtherProperties, SharedExt as _, Topic,
     UserProperties,
 };
 
@@ -36,7 +36,7 @@ where
     pub message_expiry_interval: Option<u32>,
     pub topic_alias: Option<NonZeroU16>,
     pub response_topic: Option<Topic<ByteStr<S>>>,
-    pub correlation_data: Option<CorrelationData<S>>,
+    pub correlation_data: Option<BinaryData<S>>,
     pub user_properties: UserProperties<S>,
     pub subscription_identifiers: Vec<NonZeroU32>,
     pub content_type: Option<ByteStr<S>>,
@@ -267,7 +267,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::mqtt_proto::{Packet, PacketIdentifier, byte_str, correlation_data, topic};
+    use crate::mqtt_proto::{Packet, PacketIdentifier, binary_data, byte_str, topic};
 
     encode_decode_v3! {
         Packet::Publish(Publish {
@@ -324,7 +324,7 @@ mod tests {
                 message_expiry_interval: Some(10),
                 topic_alias: Some(NonZeroU16::new(16).unwrap()),
                 response_topic: Some(topic("response/topic")),
-                correlation_data: Some(correlation_data("cd")),
+                correlation_data: Some(binary_data("cd")),
                 subscription_identifiers: vec![NonZeroU32::new(1).unwrap(), NonZeroU32::new(2).unwrap()],
                 content_type: Some(byte_str("stuff")),
             },
@@ -341,7 +341,7 @@ mod tests {
             other_properties: PublishOtherProperties {
                 response_topic: Some(topic("cute")),
                 user_properties: vec![(byte_str("genus"), byte_str("felix"))],
-                correlation_data: Some(correlation_data(b"corr_data")),
+                correlation_data: Some(binary_data(b"corr_data")),
                 ..Default::default()
             },
         };

@@ -623,8 +623,8 @@ mod tests {
 
     use crate::mqtt_proto::{
         Authentication, BinaryData, DecodeError, EncodeError, Packet, ProtocolVersion, Publication,
-        PublicationOtherProperties, QoS, SessionExpiryInterval, binary_data, byte_str,
-        correlation_data, tests, topic,
+        PublicationOtherProperties, QoS, SessionExpiryInterval, binary_data, byte_str, tests,
+        topic,
     };
     use crate::mqtt_proto::{Connect, ConnectOtherProperties};
 
@@ -746,7 +746,7 @@ mod tests {
                         payload_is_utf8: true,
                         message_expiry_interval: Some(10),
                         response_topic: Some(topic("response")),
-                        correlation_data: Some(correlation_data(b"correlation")),
+                        correlation_data: Some(binary_data(b"correlation")),
                         user_properties: vec![(byte_str("foo"), byte_str("bar"))],
                         content_type: Some(byte_str("content")),
                     },
