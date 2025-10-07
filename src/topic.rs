@@ -10,8 +10,9 @@ use thiserror::Error;
 use crate::mqtt_proto;
 
 // Implementation note:
-// Use wrapped `mqtt_proto` types to avoid validation duplication.
-// Use `String` as the backing store for parity with other user-facing conversions.
+// - Use wrapped `mqtt_proto` types to avoid validation duplication.
+// - Use `String` as the backing store for parity with other user-facing conversions and flexibility
+//   when converting to an arbitrary buffer at lower levels
 
 /// Error type for validating topics.
 #[derive(Debug, Error)]
@@ -115,7 +116,7 @@ impl fmt::Display for TopicFilter {
 }
 
 #[cfg(test)]
-#[allow(clippy::similar_names)]     // clippy doesn't like tn/tf variables
+#[allow(clippy::similar_names)] // clippy doesn't like tn/tf variables
 mod tests {
     use super::{TopicFilter, TopicName};
     use crate::{
