@@ -7,7 +7,6 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use azure_mqtt::buffer_pool::bytes::BufferPoolImpl;
 use azure_mqtt::client::{
     AckHandle, Client, ClientOptions, Event, EventLoop, Receiver, new_client,
 };
@@ -24,7 +23,7 @@ async fn main() {
         client_id: "my_client".to_string(),
         queue_size: 10,
     };
-    let (client, event_loop, receiver) = new_client(options, BufferPoolImpl, BufferPoolImpl);
+    let (client, event_loop, receiver) = new_client(options);
 
     let (get_tx, get_rx) = unbounded_channel();
     let (update_tx, update_rx) = unbounded_channel();
@@ -44,7 +43,7 @@ async fn main() {
     }
 }
 
-async fn mqtt_run(mut event_loop: EventLoop<BufferPoolImpl>, disconnect_notify: Arc<Notify>) {
+async fn mqtt_run(mut event_loop: EventLoop, disconnect_notify: Arc<Notify>) {
     loop {
         match event_loop.poll().await {
             Event::Connected => {
