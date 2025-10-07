@@ -115,6 +115,7 @@ impl fmt::Display for TopicFilter {
 }
 
 #[cfg(test)]
+#[allow(clippy::similar_names)]
 mod tests {
     use super::{TopicFilter, TopicName};
     use crate::{
