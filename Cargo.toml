@@ -33,7 +33,7 @@ parking_lot = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 test-case = { version = "3", default-features = false }
 thiserror = { version = "2", default-features = false }
-tokio = { version = "1.38", default-features = false, features = ["io-util", "net", "sync"] }
+tokio = { version = "1.38", default-features = false, features = ["io-util", "net", "sync", "time"] }
 tokio-openssl = { version = "0.6", default-features = false }
 unicode-properties = { version = "0.1", default-features = false, features = [
     "general-category",
@@ -42,7 +42,7 @@ unicode-properties = { version = "0.1", default-features = false, features = [
 [dev-dependencies]
 matches = { version = "0.1", default-features = false }
 test-case = { version = "3.1", default-features = false }
-tokio = { version = "1.38", default-features = false, features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.38", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }
 
 [lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }

@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use tokio::sync::Notify;
 
-use azure_mqtt::buffer_pool::bytes::BufferPoolImpl;
 use azure_mqtt::client::{Client, ClientOptions, Event, EventLoop, Receiver, new_client};
 use azure_mqtt::packet::{ConnectProperties, QoS, SubscribeProperties};
 use azure_mqtt::topic::TopicFilter;
@@ -19,8 +18,7 @@ async fn main() {
         client_id: "downstream_client".to_string(),
         queue_size: 10,
     };
-    let (ds_client, ds_event_loop, ds_receiver) =
-        new_client(options, BufferPoolImpl, BufferPoolImpl);
+    let (ds_client, ds_event_loop, ds_receiver) = new_client(options);
     let ds_disconnect_notify = Arc::new(Notify::new());
 
     // Upstream client
@@ -28,7 +26,7 @@ async fn main() {
         client_id: "upstream_client".to_string(),
         queue_size: 10,
     };
-    let (us_client, us_event_loop, _) = new_client(options, BufferPoolImpl, BufferPoolImpl);
+    let (us_client, us_event_loop, _) = new_client(options);
     let us_disconnect_notify = Arc::new(Notify::new());
 
     tokio::select! {
@@ -50,7 +48,7 @@ async fn main() {
     }
 }
 
-async fn mqtt_run(mut event_loop: EventLoop<BufferPoolImpl>, disconnect_notify: Arc<Notify>) {
+async fn mqtt_run(mut event_loop: EventLoop, disconnect_notify: Arc<Notify>) {
     loop {
         match event_loop.poll().await {
             Event::Connected => {

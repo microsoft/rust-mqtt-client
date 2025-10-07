@@ -13,7 +13,7 @@ use std::pin::pin;
 use bytes::Bytes;
 use futures_util::future::{self, FutureExt as _};
 
-use crate::buffer_pool::BufferPool;
+use crate::buffer_pool::{BufferPoolImpl, SharedImpl};
 use crate::client::{
     channel_data::{ConnectionRequest, PublishRequest, SubscriptionRequest},
     session::{CompletedOperation, ConnectionTransportConfig, Session},
@@ -39,14 +39,7 @@ mod session;
 
 /// Creates the three components needed to run the MQTT client
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
-pub fn new_client<BP>(
-    options: ClientOptions,
-    reader_pool: BP,
-    writer_pool: BP,
-) -> (Client, EventLoop<BP>, Receiver)
-where
-    BP: BufferPool,
-{
+pub fn new_client(options: ClientOptions) -> (Client, EventLoop, Receiver) {
     // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
     // owned by the internal session state. If this becomes a performance bottleneck, revisit.
     let (conn_tx, conn_rx) = tokio::sync::mpsc::channel(1);
@@ -71,8 +64,8 @@ where
     );
     let event_loop = EventLoop {
         session,
-        reader_pool,
-        writer_pool,
+        reader_pool: BufferPoolImpl,
+        writer_pool: BufferPoolImpl,
         io: None,
     };
     let receiver = Receiver { rx: i_pub_rx };
@@ -268,26 +261,20 @@ impl Receiver {
 }
 
 /// Runs the MQTT client event loop, keeping the client operational.
-pub struct EventLoop<BP>
-where
-    BP: BufferPool,
-{
+pub struct EventLoop {
     // TODO: Should this be called Connection instead? I think that's semantically clearer, but, it precludes us
     // from providing Events for certain things that aren't connection related, e.g. outgoing publish, etc, although
     // it's unclear if those things are even valuable.
     // Furthermore, it's somewhat confusing if the actual connect method is not on the Connection.
     // ConnectionEventLoop?
     // It'll really come down to what events get provided here I guess.
-    session: Session<BP::Shared>,
-    reader_pool: BP,
-    writer_pool: BP,
-    io: Option<(Reader<BP>, Writer<BP>)>,
+    session: Session<SharedImpl>,
+    reader_pool: BufferPoolImpl,
+    writer_pool: BufferPoolImpl,
+    io: Option<(Reader<BufferPoolImpl>, Writer<BufferPoolImpl>)>,
 }
 
-impl<BP> EventLoop<BP>
-where
-    BP: BufferPool,
-{
+impl EventLoop {
     /// Polls for an event from the event loop.
     /// As long as the event loop is being polled, the MQTT client will continue to run.
     pub async fn poll(&mut self) -> Event {
