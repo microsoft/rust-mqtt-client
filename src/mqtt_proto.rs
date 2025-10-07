@@ -1309,7 +1309,7 @@ mod tests {
             PingResp = 0,
             PubAck<SharedImpl> = 64,
             PubComp<SharedImpl> = 64,
-            Publish<SharedImpl> = 240,
+            Publish<SharedImpl> = 232,
             PubRec<SharedImpl> = 64,
             PubRel<SharedImpl> = 64,
             SubAck<SharedImpl> = 88,
@@ -1319,7 +1319,7 @@ mod tests {
 
             Packet<SharedImpl> = 256,
 
-            Publication<SharedImpl> = 216,
+            Publication<SharedImpl> = 208,
         ]);
     }
 }
