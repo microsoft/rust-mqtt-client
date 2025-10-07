@@ -1,13 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! MQTT Topic Name and Topic Filter types
+
 use std::fmt;
 
 use thiserror::Error;
 
-use crate::buffer_pool;
-use crate::buffer_pool::BufferPool;
 use crate::mqtt_proto;
+
+// Implementation note:
+// Use wrapped `mqtt_proto` types to avoid validation duplication.
+// Use `String` as the backing store for parity with other user-facing conversions.
 
 /// Error type for validating topics.
 #[derive(Debug, Error)]
@@ -16,7 +20,7 @@ pub struct TopicError(#[from] mqtt_proto::DecodeError);
 
 /// MQTT Topic Name as described in MQTT v5, section "4.7 Topic Names and Topic Filters".
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct TopicName(mqtt_proto::Topic<mqtt_proto::ByteStr<buffer_pool::SharedImpl>>);
+pub struct TopicName(mqtt_proto::Topic<String>);
 
 impl TopicName {
     /// Constructs a new `TopicName` after validating the input string.
@@ -28,11 +32,8 @@ impl TopicName {
     where
         S: AsRef<str>,
     {
-        let mut o = buffer_pool::BufferPoolImpl.take_empty_owned();
-        let bs = mqtt_proto::ByteStr::new(&mut o, &s)
-            .expect("Cannot fail due to being backed by SharedImpl");
-        let topic = mqtt_proto::Topic::new(bs)?;
-        Ok(TopicName(topic))
+        let inner = mqtt_proto::Topic::new(s.as_ref().to_owned())?;
+        Ok(TopicName(inner))
     }
 
     /// Returns the topic name as a string slice.
@@ -45,6 +46,12 @@ impl TopicName {
     pub fn matches_topic_filter(&self, filter: &TopicFilter) -> bool {
         todo!("Implement topic filter matching at mqtt_proto level")
     }
+
+    /// Returns the inner `mqtt_proto::Topic<String>`.
+    #[allow(dead_code)]
+    pub(crate) fn into_inner(self) -> mqtt_proto::Topic<String> {
+        self.0
+    }
 }
 
 impl fmt::Display for TopicName {
@@ -53,21 +60,15 @@ impl fmt::Display for TopicName {
     }
 }
 
-impl From<TopicName> for mqtt_proto::Topic<mqtt_proto::ByteStr<buffer_pool::SharedImpl>> {
-    fn from(t: TopicName) -> Self {
-        t.0
-    }
-}
-
-impl From<mqtt_proto::Topic<mqtt_proto::ByteStr<buffer_pool::SharedImpl>>> for TopicName {
-    fn from(t: mqtt_proto::Topic<mqtt_proto::ByteStr<buffer_pool::SharedImpl>>) -> Self {
-        TopicName(t)
+impl From<mqtt_proto::Topic<String>> for TopicName {
+    fn from(value: mqtt_proto::Topic<String>) -> Self {
+        TopicName(value)
     }
 }
 
 /// MQTT Topic Filter as described in MQTT v5, section "4.7 Topic Names and Topic Filters".
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct TopicFilter(mqtt_proto::Filter<mqtt_proto::ByteStr<buffer_pool::SharedImpl>>);
+pub struct TopicFilter(mqtt_proto::Filter<String>);
 
 impl TopicFilter {
     /// Constructs a new `TopicFilter` after validating the input string.
@@ -79,11 +80,8 @@ impl TopicFilter {
     where
         S: AsRef<str>,
     {
-        let mut o = buffer_pool::BufferPoolImpl.take_empty_owned();
-        let bs = mqtt_proto::ByteStr::new(&mut o, &s)
-            .expect("Cannot fail due to being backed by SharedImpl");
-        let filter = mqtt_proto::Filter::new(bs)?;
-        Ok(TopicFilter(filter))
+        let inner = mqtt_proto::Filter::new(s.as_ref().to_owned())?;
+        Ok(TopicFilter(inner))
     }
 
     /// Returns the topic filter as a string slice.
@@ -96,6 +94,18 @@ impl TopicFilter {
     pub fn matches_topic_name(&self, topic: &TopicName) -> bool {
         todo!("Implement topic filter matching at mqtt_proto level")
     }
+
+    /// Returns the inner `mqtt_proto::Filter<String>`.
+    #[allow(dead_code)]
+    pub(crate) fn into_inner(self) -> mqtt_proto::Filter<String> {
+        self.0
+    }
+}
+
+impl From<mqtt_proto::Filter<String>> for TopicFilter {
+    fn from(value: mqtt_proto::Filter<String>) -> Self {
+        TopicFilter(value)
+    }
 }
 
 impl fmt::Display for TopicFilter {
@@ -104,14 +114,39 @@ impl fmt::Display for TopicFilter {
     }
 }
 
-impl From<TopicFilter> for mqtt_proto::Filter<mqtt_proto::ByteStr<buffer_pool::SharedImpl>> {
-    fn from(f: TopicFilter) -> Self {
-        f.0
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::{TopicFilter, TopicName};
+    use crate::{
+        buffer_pool::{self, BufferPool},
+        mqtt_proto,
+    };
 
-impl From<mqtt_proto::Filter<mqtt_proto::ByteStr<buffer_pool::SharedImpl>>> for TopicFilter {
-    fn from(f: mqtt_proto::Filter<mqtt_proto::ByteStr<buffer_pool::SharedImpl>>) -> Self {
-        TopicFilter(f)
+    #[test]
+    fn convert_to_buffered_proto_types() {
+        let tn = TopicName::new("a/b/c").unwrap();
+        let tf = TopicFilter::new("a/b/+").unwrap();
+        let mut o2 = buffer_pool::BufferPoolImpl.take_empty_owned();
+
+        let tn_inner = tn.clone().into_inner(); // clone to retain original for assert
+        let tn_buffered = tn_inner.to_shared(&mut o2).unwrap();
+        assert_eq!(tn.as_str(), tn_buffered.as_str());
+
+        let tf_inner = tf.clone().into_inner(); // clone to retain original for assert
+        let tf_buffered = tf_inner.to_shared(&mut o2).unwrap();
+        assert_eq!(tf.as_str(), tf_buffered.as_str());
+    }
+
+    #[test]
+    fn convert_from_buffered_proto_types() {
+        let mut o1 = buffer_pool::BufferPoolImpl.take_empty_owned();
+        let tn_buffered = mqtt_proto::Topic::new_shared(&mut o1, "a/b/c").unwrap();
+        let tf_buffered = mqtt_proto::Filter::new_shared(&mut o1, "a/b/+").unwrap();
+
+        let tn = TopicName::from(tn_buffered.to_owned());
+        let tf = TopicFilter::from(tf_buffered.to_owned());
+
+        assert_eq!(tn.as_str(), tn_buffered.as_str());
+        assert_eq!(tf.as_str(), tf_buffered.as_str());
     }
 }
