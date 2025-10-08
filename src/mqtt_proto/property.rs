@@ -10,8 +10,8 @@ use std::{
 
 use crate::buffer_pool::{BytesAccumulator, Shared};
 use crate::mqtt_proto::{
-    BinaryData, ByteCounter, ByteStr, ConnectSessionExpiryInterval, CorrelationData, DecodeError,
-    EncodeError, QoS, SharedExt as _, Topic,
+    BinaryData, ByteCounter, ByteStr, ConnectSessionExpiryInterval, DecodeError, EncodeError, QoS,
+    SharedExt as _, Topic,
 };
 use crate::mqtt_proto::{
     decode_remaining_length, decode_varint, encode_remaining_length, encode_varint,
@@ -173,7 +173,7 @@ generate_enum_and_enum_ref! {
     ContentType(ByteStr<S>),
 
     /// Ref: 3.1.3.2.7 Correlation Data
-    CorrelationData(CorrelationData<S>),
+    CorrelationData(BinaryData<S>),
 
     /// Ref: 3.1.2.11.4 Maximum Packet Size
     MaximumPacketSize(NonZeroU32),
@@ -324,7 +324,7 @@ where
 
             0x09 => {
                 let correlation_data =
-                    CorrelationData::decode(src).ok_or(DecodeError::IncompletePacket)?;
+                    BinaryData::decode(src).ok_or(DecodeError::IncompletePacket)?;
                 Self::CorrelationData(correlation_data)
             }
 

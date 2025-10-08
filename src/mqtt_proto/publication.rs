@@ -5,8 +5,8 @@ use derive_where::derive_where;
 
 use crate::buffer_pool::{self, Owned, Shared};
 use crate::mqtt_proto::{
-    ByteStr, CorrelationData, PacketIdentifier, PacketIdentifierDupQoS, Publish,
-    PublishOtherProperties, QoS, Topic, UserProperties,
+    BinaryData, ByteStr, PacketIdentifier, PacketIdentifierDupQoS, Publish, PublishOtherProperties,
+    QoS, Topic, UserProperties,
 };
 
 /// A message that can be published to the server
@@ -139,7 +139,7 @@ where
     pub payload_is_utf8: bool,
     pub message_expiry_interval: Option<u32>,
     pub response_topic: Option<Topic<ByteStr<S>>>,
-    pub correlation_data: Option<CorrelationData<S>>,
+    pub correlation_data: Option<BinaryData<S>>,
     pub user_properties: UserProperties<S>,
     pub content_type: Option<ByteStr<S>>,
 }

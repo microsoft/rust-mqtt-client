@@ -848,86 +848,6 @@ define_u8_code! {
 pub type UserProperty<S> = (ByteStr<S>, ByteStr<S>);
 pub type UserProperties<S> = Vec<UserProperty<S>>;
 
-/// Ref: 3.1.3.2.7 Correlation Data
-#[derive(Clone, Debug)]
-pub enum CorrelationData<S>
-where
-    S: Shared,
-{
-    /// Correlation data of arbitrary length.
-    Variable(BinaryData<S>),
-
-    /// Correlation data of exactly 8 bytes length.
-    Fixed8([u8; 8]),
-}
-
-impl<S> CorrelationData<S>
-where
-    S: Shared,
-{
-    pub fn decode(src: &mut S) -> Option<Self> {
-        Some(Self::Variable(BinaryData::decode(src)?))
-    }
-
-    pub fn encode<B>(&self, dst: &mut B) -> Result<(), EncodeError>
-    where
-        B: BytesAccumulator<Shared = S>,
-    {
-        match self {
-            Self::Variable(b) => b.encode(dst),
-
-            Self::Fixed8(b) => {
-                dst.try_put_u16_be(8)
-                    .ok_or(EncodeError::InsufficientBuffer)?;
-                dst.try_put_slice(b)
-                    .ok_or(EncodeError::InsufficientBuffer)?;
-                Ok(())
-            }
-        }
-    }
-
-    pub fn to_shared<O2>(
-        &self,
-        owned: &mut O2,
-    ) -> Result<CorrelationData<O2::Shared>, buffer_pool::Error>
-    where
-        O2: Owned,
-    {
-        match self {
-            Self::Variable(b) => Ok(CorrelationData::Variable(b.to_shared(owned)?)),
-            Self::Fixed8(b) => Ok(CorrelationData::Fixed8(*b)),
-        }
-    }
-}
-
-impl<S> AsRef<[u8]> for CorrelationData<S>
-where
-    S: Shared,
-{
-    fn as_ref(&self) -> &[u8] {
-        match self {
-            Self::Variable(b) => b.as_ref(),
-            Self::Fixed8(b) => b,
-        }
-    }
-}
-
-impl<S> PartialEq for CorrelationData<S>
-where
-    S: Shared,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.as_ref().eq(other.as_ref())
-    }
-}
-
-impl<S> Eq for CorrelationData<S> where S: Shared {}
-
-#[cfg(test)]
-pub fn correlation_data(s: impl AsRef<[u8]>) -> CorrelationData<buffer_pool::tests::SharedImpl> {
-    CorrelationData::Variable(binary_data(s))
-}
-
 /// A combination of the packet identifier, dup flag and QoS that only allows valid combinations of these three properties.
 /// Used in [`Packet::Publish`]
 #[allow(clippy::enum_variant_names)]
@@ -1389,7 +1309,7 @@ mod tests {
             PingResp = 0,
             PubAck<SharedImpl> = 64,
             PubComp<SharedImpl> = 64,
-            Publish<SharedImpl> = 240,
+            Publish<SharedImpl> = 232,
             PubRec<SharedImpl> = 64,
             PubRel<SharedImpl> = 64,
             SubAck<SharedImpl> = 88,
@@ -1399,7 +1319,7 @@ mod tests {
 
             Packet<SharedImpl> = 256,
 
-            Publication<SharedImpl> = 216,
+            Publication<SharedImpl> = 208,
         ]);
     }
 }
