@@ -42,9 +42,9 @@ Currently also triggers connect/disconnect, but this functionality may be moved 
 ```rust
 // Publish a message to the topic (with no regard for the acknowledgement)
 client.publish_qos1(
-    TopicName::from("test/topic"),  // Topic
-    "Hello, MQTT!".into(),          // Payload (bytes)
-    PublishProperties::default()    // Properties
+    TopicName::new("test/topic").unwrap(),  // Topic
+    "Hello, MQTT!".into(),                  // Payload (bytes)
+    PublishProperties::default()            // Properties
 ).await.unwrap();
 ```
 
@@ -54,9 +54,9 @@ Result reporting will have a tiered approach that looks something like this:
 ### QoS1
 ```rust
 let client_result: Result<CompletionToken<PubAck>, ClientError> = client.publish_qos1(
-    TopicName::from("test/topic"),  // Topic
-    "Hello, MQTT!".into(),          // Payload (bytes)
-    PublishProperties::default()    // Properties
+    TopicName::new("test/topic").unwrap(), // Topic
+    "Hello, MQTT!".into(),                  // Payload (bytes)
+    PublishProperties::default()            // Properties
 ).await;
 let completion_token = client_result.unwrap();
 let completion_result: Result<PubAck, CompletionError> = completion_token.await;
@@ -79,9 +79,9 @@ match pub_ack.as_result() {
 ### QoS2
 ```rust
 let client_result: Result<CompletionToken<PubRec>, ClientError> = client.publish_qos2(
-    TopicName::from("test/topic"),  // Topic
-    "Hello, MQTT!".into(),          // Payload (bytes)
-    PublishProperties::default()    // Properties
+    TopicName::new("test/topic").unwrap(), // Topic
+    "Hello, MQTT!".into(),                  // Payload (bytes)
+    PublishProperties::default()            // Properties
 ).await;
 let completion_token = client_result.unwrap();
 let completion_result: Result<(PubRec, Option<PubRelToken>), CompletionError> = completion_token.await;

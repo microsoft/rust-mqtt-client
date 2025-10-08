@@ -62,17 +62,17 @@ async fn mqtt_receive(
     get_tx: UnboundedSender<(Publish, AckHandle)>,
     update_tx: UnboundedSender<(Publish, AckHandle)>,
 ) {
-    let get_filter = TopicFilter::from(GET_FILTER);
-    let update_filter = TopicFilter::from(UPDATE_FILTER);
+    let get_filter = TopicFilter::new(GET_FILTER).unwrap();
+    let update_filter = TopicFilter::new(UPDATE_FILTER).unwrap();
     loop {
         while let Some((publish, ack_handle)) = receiver.recv().await {
             // NOTE: If you don't want manual ack, simply ignore the ack_token by using a _, and it
             // will be acked automatically on drop.
             // No need for "manual ack" setting on the client.
 
-            if publish.topic_name.matches(&get_filter) {
+            if publish.topic_name.matches_topic_filter(&get_filter) {
                 get_tx.send((publish, ack_handle)).unwrap();
-            } else if publish.topic_name.matches(&update_filter) {
+            } else if publish.topic_name.matches_topic_filter(&update_filter) {
                 update_tx.send((publish, ack_handle)).unwrap();
             } else {
                 println!(
@@ -134,7 +134,7 @@ async fn maintain_document(
     // Subscribe to the get topic
     client
         .subscribe(
-            TopicFilter::from(GET_FILTER),
+            TopicFilter::new(GET_FILTER).unwrap(),
             QoS::AtLeastOnce,
             SubscribeProperties::default(),
         )
@@ -151,7 +151,7 @@ async fn maintain_document(
         // Subscribe to the update topic
         client
             .subscribe(
-                TopicFilter::from(UPDATE_FILTER),
+                TopicFilter::new(UPDATE_FILTER).unwrap(),
                 QoS::AtLeastOnce,
                 SubscribeProperties::default(),
             )

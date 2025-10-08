@@ -1,40 +1,154 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Topic name and filter structures
+//! MQTT Topic Name and Topic Filter types
 
-#![allow(unused_variables)]
+use std::fmt;
 
-// TODO: This may be completely redundant with the topic types in mqtt_proto.
+use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TopicName {}
+use crate::mqtt_proto;
+
+// Implementation note:
+// - Use wrapped `mqtt_proto` types to avoid validation duplication.
+// - Use `String` as the backing store for parity with other user-facing conversions and flexibility
+//   when converting to an arbitrary buffer at lower levels
+
+/// Error type for validating topics.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct TopicError(#[from] mqtt_proto::DecodeError);
+
+/// MQTT Topic Name as described in MQTT v5, section "4.7 Topic Names and Topic Filters".
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TopicName(mqtt_proto::Topic<String>);
 
 impl TopicName {
-    pub fn from(s: &str) -> Self {
-        // Validate the topic name according to MQTT rules
-        // For simplicity, we assume the topic name is valid here
-        TopicName {}
+    /// Constructs a new `TopicName` after validating the input string.
+    ///
+    /// # Errors
+    /// Returns an error if the topic is invalid.
+    /// See <https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901241>.
+    pub fn new<S>(s: S) -> Result<Self, TopicError>
+    where
+        S: AsRef<str>,
+    {
+        let inner = mqtt_proto::Topic::new(s.as_ref().to_owned())?;
+        Ok(TopicName(inner))
     }
 
-    /// Returns true if the `TopicName` matches the given `TopicFilter`
-    pub fn matches(&self, filter: &TopicFilter) -> bool {
-        unimplemented!()
+    /// Returns the topic name as a string slice.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// Returns true if the topic name matches the given topic filter.
+    #[allow(unused_variables)]
+    pub fn matches_topic_filter(&self, filter: &TopicFilter) -> bool {
+        todo!("Implement topic filter matching at mqtt_proto level")
+    }
+
+    /// Returns the inner `mqtt_proto::Topic<String>`.
+    #[allow(dead_code)]
+    pub(crate) fn into_inner(self) -> mqtt_proto::Topic<String> {
+        self.0
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TopicFilter {}
+impl fmt::Display for TopicName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.as_str())
+    }
+}
+
+impl From<mqtt_proto::Topic<String>> for TopicName {
+    fn from(value: mqtt_proto::Topic<String>) -> Self {
+        TopicName(value)
+    }
+}
+
+/// MQTT Topic Filter as described in MQTT v5, section "4.7 Topic Names and Topic Filters".
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TopicFilter(mqtt_proto::Filter<String>);
 
 impl TopicFilter {
-    pub fn from(s: &str) -> Self {
-        // Validate the topic filter according to MQTT rules
-        // For simplicity, we assume the topic filter is valid here
-        TopicFilter {}
+    /// Constructs a new `TopicFilter` after validating the input string.
+    ///
+    /// # Errors
+    /// Returns an error if the topic filter is invalid.
+    /// See <https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901241>.
+    pub fn new<S>(s: S) -> Result<Self, TopicError>
+    where
+        S: AsRef<str>,
+    {
+        let inner = mqtt_proto::Filter::new(s.as_ref().to_owned())?;
+        Ok(TopicFilter(inner))
     }
 
-    /// Returns true if the `TopicFilter` matches the given `TopicName`
-    pub fn matches(&self, name: &TopicName) -> bool {
-        unimplemented!()
+    /// Returns the topic filter as a string slice.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// Returns true if the topic filter matches the given topic name.
+    #[allow(unused_variables)]
+    pub fn matches_topic_name(&self, topic: &TopicName) -> bool {
+        todo!("Implement topic filter matching at mqtt_proto level")
+    }
+
+    /// Returns the inner `mqtt_proto::Filter<String>`.
+    #[allow(dead_code)]
+    pub(crate) fn into_inner(self) -> mqtt_proto::Filter<String> {
+        self.0
+    }
+}
+
+impl From<mqtt_proto::Filter<String>> for TopicFilter {
+    fn from(value: mqtt_proto::Filter<String>) -> Self {
+        TopicFilter(value)
+    }
+}
+
+impl fmt::Display for TopicFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.as_str())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::similar_names)] // clippy doesn't like tn/tf variables
+mod tests {
+    use super::{TopicFilter, TopicName};
+    use crate::{
+        buffer_pool::{self, BufferPool},
+        mqtt_proto,
+    };
+
+    #[test]
+    fn convert_to_buffered_proto_types() {
+        let tn = TopicName::new("a/b/c").unwrap();
+        let tf = TopicFilter::new("a/b/+").unwrap();
+        let mut o2 = buffer_pool::BufferPoolImpl.take_empty_owned();
+
+        let tn_inner = tn.clone().into_inner(); // clone to retain original for assert
+        let tn_buffered = tn_inner.to_shared(&mut o2).unwrap();
+        assert_eq!(tn.as_str(), tn_buffered.as_str());
+
+        let tf_inner = tf.clone().into_inner(); // clone to retain original for assert
+        let tf_buffered = tf_inner.to_shared(&mut o2).unwrap();
+        assert_eq!(tf.as_str(), tf_buffered.as_str());
+    }
+
+    #[test]
+    fn convert_from_buffered_proto_types() {
+        let mut o1 = buffer_pool::BufferPoolImpl.take_empty_owned();
+        let tn_buffered = mqtt_proto::Topic::new_shared(&mut o1, "a/b/c").unwrap();
+        let tf_buffered = mqtt_proto::Filter::new_shared(&mut o1, "a/b/+").unwrap();
+
+        let tn = TopicName::from(tn_buffered.to_owned());
+        let tf = TopicFilter::from(tf_buffered.to_owned());
+
+        assert_eq!(tn.as_str(), tn_buffered.as_str());
+        assert_eq!(tf.as_str(), tf_buffered.as_str());
     }
 }
