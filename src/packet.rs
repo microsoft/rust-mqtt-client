@@ -9,19 +9,14 @@
 // TODO: This may not be necessary in it's entirety - this is a straight port of API proposal stubs.
 // Remove items as necessary.
 
+use std::num::{NonZeroU16, NonZeroU32};
+
 use bytes::Bytes;
 
 use crate::error::OperationFailure;
+use crate::{buffer_pool, mqtt_proto};
 pub use crate::mqtt_proto::PacketIdentifier;
 use crate::topic::TopicName;
-
-#[derive(Debug, Clone)]
-pub struct Publish {
-    pub topic_name: TopicName,
-    pub payload: Bytes,
-    pub qos: QoS,
-    pub properties: PublishProperties,
-}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum QoS {
@@ -29,6 +24,13 @@ pub enum QoS {
     AtLeastOnce = 1,
     ExactlyOnce = 2,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PayloadFormatIndicator {
+    Unspecified = 0,
+    UTF8 = 1,
+}
+
 
 #[derive(Debug, Clone)]
 pub struct ConnectProperties {}
@@ -39,52 +41,84 @@ impl Default for ConnectProperties {
 }
 
 #[derive(Debug, Clone)]
-pub struct DisconnectProperties {}
-impl Default for DisconnectProperties {
-    fn default() -> Self {
-        DisconnectProperties {}
+pub struct ConnAck {
+    pub reason: ConnAckReason,
+    pub properties: ConnectProperties,
+}
+
+impl ConnAck {
+    pub fn is_success(&self) -> bool {
+        unimplemented!()
+    }
+
+    pub fn as_result(&self) -> Result<(), OperationFailure> {
+        unimplemented!()
     }
 }
 
+
+
+
+
+// TODO: Implement
 #[derive(Debug, Clone)]
-pub struct PublishProperties {}
+pub struct Publish {
+    pub topic_name: TopicName,
+    pub payload: Bytes,
+    pub qos: QoS,
+    pub properties: PublishProperties,
+}
+
+
+#[derive(Debug, Clone)]
+pub struct PublishProperties {
+    pub payload_format_indicator: PayloadFormatIndicator,
+    pub message_expiry_interval: Option<u32>,
+    pub topic_alias: Option<NonZeroU16>,
+    pub response_topic: Option<TopicName>,
+    pub correlation_data: Option<Bytes>,
+    pub user_properties: Vec<(String, String)>,
+    pub subscription_identifiers: Vec<NonZeroU32>,
+    pub content_type: Option<String>,
+}
+
+// TODO: can we derive this?
 impl Default for PublishProperties {
     fn default() -> Self {
-        PublishProperties {}
+        PublishProperties {
+            payload_format_indicator: PayloadFormatIndicator::Unspecified,
+            message_expiry_interval: None,
+            topic_alias: None,
+            response_topic: None,
+            correlation_data: None,
+            user_properties: Vec::new(),
+            subscription_identifiers: Vec::new(),
+            content_type: None,
+        }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SubscribeProperties {}
-impl Default for SubscribeProperties {
-    fn default() -> Self {
-        SubscribeProperties {}
+impl <S> From<mqtt_proto::PublishOtherProperties<S>> for PublishProperties
+where
+    S: buffer_pool::Shared
+{
+    fn from(value: mqtt_proto::PublishOtherProperties<S>) -> PublishProperties {
+        let payload_format_indicator = 
+            if value.payload_is_utf8 { PayloadFormatIndicator::UTF8 } else { PayloadFormatIndicator::Unspecified };
+        PublishProperties {
+            payload_format_indicator,
+            message_expiry_interval: value.message_expiry_interval,
+            topic_alias: value.topic_alias,
+            response_topic: value.response_topic.map(|s| s.to_owned().into()),
+            correlation_data: value.correlation_data.map(|s| Bytes::copy_from_slice(s.as_ref())),
+            user_properties: value.user_properties.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            subscription_identifiers: value.subscription_identifiers,
+            content_type: value.content_type.map(|s| s.to_string()),
+        }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct UnsubscribeProperties {}
-impl Default for UnsubscribeProperties {
-    fn default() -> Self {
-        UnsubscribeProperties {}
-    }
-}
 
-#[derive(Debug, Clone)]
-pub struct AuthProperties {}
-impl Default for AuthProperties {
-    fn default() -> Self {
-        AuthProperties {}
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AckProperties {}
-impl Default for AckProperties {
-    fn default() -> Self {
-        AckProperties {}
-    }
-}
 
 // NOTE: These are aliased for clarity on specific packet types
 pub type PubAckProperties = AckProperties; // For QoS 1
@@ -106,21 +140,6 @@ impl Default for PubCompProperties {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ConnAck {
-    pub reason: ConnAckReason,
-    pub properties: ConnectProperties,
-}
-
-impl ConnAck {
-    pub fn is_success(&self) -> bool {
-        unimplemented!()
-    }
-
-    pub fn as_result(&self) -> Result<(), OperationFailure> {
-        unimplemented!()
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PubAck {
@@ -164,6 +183,56 @@ pub struct PubRel {
 pub struct PubComp {
     pub reason: PubCompReason,
     pub properties: PubCompProperties,
+}
+
+
+
+
+
+
+
+
+////////////////////////////////////////////////////////////////////
+
+
+#[derive(Debug, Clone)]
+pub struct DisconnectProperties {}
+impl Default for DisconnectProperties {
+    fn default() -> Self {
+        DisconnectProperties {}
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SubscribeProperties {}
+impl Default for SubscribeProperties {
+    fn default() -> Self {
+        SubscribeProperties {}
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnsubscribeProperties {}
+impl Default for UnsubscribeProperties {
+    fn default() -> Self {
+        UnsubscribeProperties {}
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthProperties {}
+impl Default for AuthProperties {
+    fn default() -> Self {
+        AuthProperties {}
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AckProperties {}
+impl Default for AckProperties {
+    fn default() -> Self {
+        AckProperties {}
+    }
 }
 
 #[derive(Debug, Clone)]
