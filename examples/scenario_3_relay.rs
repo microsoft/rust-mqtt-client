@@ -89,7 +89,7 @@ async fn maintain_connection(client: Client, disconnect_notify: Arc<Notify>) {
 async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: Client) {
     ds_client
         .subscribe(
-            TopicFilter::from(DOWNSTREAM_SUB_FILTER),
+            TopicFilter::new(DOWNSTREAM_SUB_FILTER).unwrap(),
             QoS::AtLeastOnce,
             SubscribeProperties::default(),
         )

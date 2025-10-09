@@ -48,7 +48,7 @@ async fn program(client: Client) {
     let subscribe_properties = SubscribeProperties::default();
     let ct = client
         .subscribe(
-            TopicFilter::from("test/topic"),
+            TopicFilter::new("test/topic").unwrap(),
             QoS::AtLeastOnce,
             subscribe_properties,
         )
@@ -64,7 +64,7 @@ async fn program(client: Client) {
         let publish_properties = PublishProperties::default();
         client
             .publish_qos1(
-                TopicName::from("test/topic"),
+                TopicName::new("test/topic").unwrap(),
                 "Hello, MQTT!".into(),
                 publish_properties,
             )
