@@ -39,3 +39,9 @@ pub struct CompletionError {}
 pub struct OperationFailure {
     pub reason: String,
 }
+
+impl From<String> for OperationFailure {
+    fn from(value: String) -> Self {
+        OperationFailure { reason: value }
+    }
+}

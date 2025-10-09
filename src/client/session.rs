@@ -144,7 +144,6 @@ impl<S: Shared> Session<S> {
                                 reason_code: todo!(),
                                 other_properties: todo!(),
                             }),
-
                             AcknowledgementRequest::PubComp(..) => Packet::PubComp(PubComp {
                                 packet_identifier: todo!(),
                                 reason_code: todo!(),
