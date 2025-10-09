@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 
 use azure_mqtt::client::{Client, ClientOptions, Event, EventLoop, Receiver, new_client};
-use azure_mqtt::packet::{ConnectProperties, QoS, SubscribeProperties};
+use azure_mqtt::packet::{ConnectProperties, DeliveryQoS, QoS, SubscribeProperties};
 use azure_mqtt::topic::TopicFilter;
 
 const DOWNSTREAM_SUB_FILTER: &str = "downstream/#";
@@ -104,7 +104,7 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
         // NOTE: Technically we only need to handle QoS1 and QoS0 here since we are subscribing at QoS1,
         // but let's be complete.
         match publish.qos {
-            QoS::AtMostOnce => {
+            DeliveryQoS::AtMostOnce => {
                 let ct = us_client
                     .publish_qos0(publish.topic_name, publish.payload, publish.properties)
                     .await
@@ -120,7 +120,7 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
                     }
                 }
             }
-            QoS::AtLeastOnce => {
+            DeliveryQoS::AtLeastOnce(_) => {
                 let ct = us_client
                     .publish_qos1(publish.topic_name, publish.payload, publish.properties)
                     .await
@@ -136,7 +136,7 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
                     }
                 }
             }
-            QoS::ExactlyOnce => {
+            DeliveryQoS::ExactlyOnce(_) => {
                 let ct = us_client
                     .publish_qos2(publish.topic_name, publish.payload, publish.properties)
                     .await
