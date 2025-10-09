@@ -17,9 +17,9 @@ use crate::client::{
     session::pkid::PkidPool,
 };
 use crate::mqtt_proto::{
-    ConnAck, Connect, ConnectReasonCode, ConnectSessionExpiryInterval, Disconnect, KeepAlive,
-    Packet, PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel,
-    Publish, SessionExpiryInterval, SubAck, Subscribe, UnsubAck, Unsubscribe,
+    ConnAck, Connect, ConnectOtherProperties, ConnectReasonCode, Disconnect, KeepAlive, Packet,
+    PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish,
+    SessionExpiryInterval, SubAck, Subscribe, UnsubAck, Unsubscribe,
 };
 use crate::token::{
     ConnectCompletionNotifier, PubRecCompletionNotifier, PubRelCompletionNotifier,
@@ -119,10 +119,10 @@ impl<S: Shared> Session<S> {
                     client_id: None,
                     clean_start: true,
                     keep_alive: KeepAlive::Infinite,
-                    session_expiry_interval: ConnectSessionExpiryInterval(
-                        SessionExpiryInterval::Infinite,
-                    ),
-                    other_properties: Default::default(),
+                    other_properties: ConnectOtherProperties {
+                        session_expiry_interval: SessionExpiryInterval::Infinite,
+                        ..Default::default()
+                    },
                 }))
             }
 

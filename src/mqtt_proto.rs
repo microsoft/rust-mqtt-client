@@ -210,7 +210,7 @@ mod connack;
 pub use connack::{ConnAck, ConnAckOtherProperties, ConnectReasonCode, ConnectionRefusedReason};
 
 mod connect;
-pub use connect::{Connect, ConnectOtherProperties, ConnectSessionExpiryInterval};
+pub use connect::{Connect, ConnectOtherProperties};
 
 mod disconnect;
 pub use disconnect::{Disconnect, DisconnectOtherProperties, DisconnectReasonCode};
