@@ -962,6 +962,7 @@ mod test {
 
     use paste::paste;
 
+    #[allow(clippy::needless_pass_by_value)]
     fn compare_as_buffered<T, U>(packet: T, proto_packet: U)
     where
         T: IntoBuffered<U, OwnedImpl>,
@@ -972,6 +973,7 @@ mod test {
         assert_eq!(buffered, proto_packet);
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn compare_as_unbuffered<T, U>(packet: T, proto_packet: U)
     where
         T: From<U> + PartialEq + std::fmt::Debug,
