@@ -138,14 +138,22 @@ pub struct PubAck {
 
 impl PubAck {
     pub fn is_success(&self) -> bool {
-        matches!(self.reason, PubAckReason::Success | PubAckReason::NoMatchingSubscribers)
+        matches!(
+            self.reason,
+            PubAckReason::Success | PubAckReason::NoMatchingSubscribers
+        )
     }
 
     pub fn as_result(&self) -> Result<(), OperationFailure> {
         if self.is_success() {
             Ok(())
         } else {
-            Err("placeholder".into())
+            let s = if let Some(reason_string) = &self.properties.reason_string {
+                format!(" ({:?} - {reason_string})", self.reason)
+            } else {
+                format!(" ({:?})", self.reason)
+            };
+            Err(s.into())
         }
     }
 }
@@ -173,11 +181,23 @@ pub struct PubRec {
 
 impl PubRec {
     pub fn is_success(&self) -> bool {
-        todo!()
+        matches!(
+            self.reason,
+            PubRecReason::Success | PubRecReason::NoMatchingSubscribers
+        )
     }
 
     pub fn as_result(&self) -> Result<(), OperationFailure> {
-        todo!()
+        if self.is_success() {
+            Ok(())
+        } else {
+            let s = if let Some(reason_string) = &self.properties.reason_string {
+                format!(" ({:?} - {reason_string})", self.reason)
+            } else {
+                format!(" ({:?})", self.reason)
+            };
+            Err(s.into())
+        }
     }
 }
 
