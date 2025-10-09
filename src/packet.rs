@@ -243,7 +243,7 @@ pub struct PubComp {
     pub properties: PubCompProperties,
 }
 
-impl <S> From<mqtt_proto::PubComp<S>> for PubComp
+impl<S> From<mqtt_proto::PubComp<S>> for PubComp
 where
     S: buffer_pool::Shared,
 {
@@ -955,7 +955,6 @@ mod test {
     use crate::buffer_pool::{
         BufferPool as _,
         tests::{BufferPoolImpl, OwnedImpl, SharedImpl},
-        //tests::SharedImpl,
     };
     use crate::mqtt_proto::{binary_data, byte_str, topic};
     use crate::packet::{self, IntoBuffered, PacketIdentifier};
@@ -1004,7 +1003,7 @@ mod test {
             )*
         };
     }
-    
+
     // Macro to define conversion tests for a packet
     // - internal to public conversion for the whole packet
     // - bidirectional conversion for the properties of the packet
@@ -1102,7 +1101,6 @@ mod test {
             },
         }
     );
-
 
     test_packet_conversions!(
         puback,
@@ -1207,7 +1205,4 @@ mod test {
             },
         }
     );
-
 }
-
-
