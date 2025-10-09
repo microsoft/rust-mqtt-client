@@ -87,7 +87,7 @@ pub enum PayloadFormatIndicator {
 //////////////////// Packets ////////////////////
 
 /// CONNACK packet
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnAck {
     pub reason: ConnAckReason,
     pub properties: ConnAckProperties,
@@ -104,7 +104,7 @@ impl ConnAck {
 }
 
 /// PUBLISH packet
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Publish {
     pub payload: Bytes,
     pub qos: DeliveryQoS,
@@ -129,7 +129,7 @@ where
 }
 
 /// PUBACK packet
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubAck {
     pub packet_identifier: PacketIdentifier,
     pub reason: PubAckReason,
@@ -172,7 +172,7 @@ where
 }
 
 /// PUBREC packet
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubRec {
     pub packet_identifier: PacketIdentifier,
     pub reason: PubRecReason,
@@ -214,27 +214,53 @@ where
     }
 }
 
-// TODO
-#[derive(Debug, Clone)]
+// PUBREL packet
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubRel {
     pub packet_identifier: PacketIdentifier,
     pub reason: PubRelReason,
     pub properties: PubRelProperties,
 }
 
-// TODO
-#[derive(Debug, Clone)]
+impl<S> From<mqtt_proto::PubRel<S>> for PubRel
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::PubRel<S>) -> PubRel {
+        PubRel {
+            packet_identifier: value.packet_identifier,
+            reason: value.reason_code.into(),
+            properties: value.other_properties.into(),
+        }
+    }
+}
+
+// PUBCOMP packet
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubComp {
     pub packet_identifier: PacketIdentifier,
     pub reason: PubCompReason,
     pub properties: PubCompProperties,
 }
 
+impl <S> From<mqtt_proto::PubComp<S>> for PubComp
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::PubComp<S>) -> PubComp {
+        PubComp {
+            packet_identifier: value.packet_identifier,
+            reason: value.reason_code.into(),
+            properties: value.other_properties.into(),
+        }
+    }
+}
+
 /// MQTT SUBACK
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubAck {
     pub reason: SubAckReason,
-    pub properties: SubscribeProperties,
+    pub properties: SubAckProperties,
 }
 
 impl SubAck {
@@ -248,10 +274,10 @@ impl SubAck {
 }
 
 /// MQTT UNSUBACK
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsubAck {
     pub reason: UnsubAckReason,
-    pub properties: UnsubscribeProperties,
+    pub properties: UnsubAckProperties,
 }
 
 impl UnsubAck {
@@ -267,15 +293,15 @@ impl UnsubAck {
 //////////////////// Properties ////////////////////
 
 // TODO
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ConnectProperties {}
 
 // TODO
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ConnAckProperties {}
 
 /// Properties for a PUBLISH
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PublishProperties {
     pub payload_format_indicator: PayloadFormatIndicator,
     pub message_expiry_interval: Option<u32>,
@@ -362,7 +388,7 @@ where
 }
 
 /// Properties for a PUBACK
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PubAckProperties {
     pub reason_string: Option<String>,
     pub user_properties: Vec<(String, String)>,
@@ -403,7 +429,7 @@ where
 }
 
 /// Properties for a PUBREC
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PubRecProperties {
     pub reason_string: Option<String>,
     pub user_properties: Vec<(String, String)>,
@@ -444,7 +470,7 @@ where
 }
 
 /// Properties for a PUBREL
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PubRelProperties {
     pub reason_string: Option<String>,
     pub user_properties: Vec<(String, String)>,
@@ -485,7 +511,7 @@ where
 }
 
 // Properties for a PUBCOMP
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PubCompProperties {
     pub reason_string: Option<String>,
     pub user_properties: Vec<(String, String)>,
@@ -526,26 +552,26 @@ where
 }
 
 // TODO
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SubscribeProperties {}
 
 // TODO
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SubAckProperties {}
 
 // TODO
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct UnsubscribeProperties {}
 
 // TODO
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct UnsubAckProperties {}
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DisconnectProperties {}
 
 // TODO
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AuthProperties {}
 
 //////////////////// Reasons ////////////////////
@@ -926,21 +952,84 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::buffer_pool::{self, BufferPool};
-    use crate::mqtt_proto;
-    use crate::packet::{self, IntoBuffered};
+    use crate::buffer_pool::{
+        BufferPool as _,
+        tests::{BufferPoolImpl, OwnedImpl, SharedImpl},
+        //tests::SharedImpl,
+    };
+    use crate::mqtt_proto::{binary_data, byte_str, topic};
+    use crate::packet::{self, IntoBuffered, PacketIdentifier};
+    use crate::{mqtt_proto, topic};
+
+    use paste::paste;
 
     fn compare_as_buffered<T, U>(packet: T, proto_packet: U)
     where
-        T: IntoBuffered<U, buffer_pool::OwnedImpl>,
+        T: IntoBuffered<U, OwnedImpl>,
         U: PartialEq + std::fmt::Debug,
     {
-        let mut owned = buffer_pool::BufferPoolImpl.take_empty_owned();
+        let mut owned = BufferPoolImpl.take_empty_owned();
         let buffered = packet.into_buffered(&mut owned).unwrap();
         assert_eq!(buffered, proto_packet);
     }
 
+    fn compare_as_unbuffered<T, U>(packet: T, proto_packet: U)
+    where
+        T: From<U> + PartialEq + std::fmt::Debug,
+        U: PartialEq + std::fmt::Debug,
+    {
+        let unbuffered: T = proto_packet.into();
+        assert_eq!(unbuffered, packet);
+    }
+
+    macro_rules! test_internal_to_public_conversion {
+        ($( $test_name:ident, $public_packet:expr, $internal_packet:expr );* $(;)?) => {
+            $(
+                #[test]
+                fn $test_name() {
+                    compare_as_unbuffered($public_packet, $internal_packet)
+                }
+            )*
+        };
+    }
+
+    macro_rules! test_bidirectional_conversion {
+        ($( $test_name:ident, $public_packet:expr, $internal_packet:expr );* $(;)?) => {
+            $(
+                #[test]
+                fn $test_name() {
+                    compare_as_unbuffered($public_packet.clone(), $internal_packet.clone());
+                    compare_as_buffered($public_packet, $internal_packet);
+                }
+            )*
+        };
+    }
+    
+    // Macro to define conversion tests for a packet
+    // - internal to public conversion for the whole packet
+    // - bidirectional conversion for the properties of the packet
+    macro_rules! test_packet_conversions {
+        ($( $packet_name:ident, $public_packet:expr, $internal_packet:expr );* $(;)?) => {
+            $(
+                paste! {
+                    test_internal_to_public_conversion!(
+                        [<$packet_name _to_public>],
+                        $public_packet.clone(),
+                        $internal_packet.clone()
+                    );
+                    test_bidirectional_conversion!(
+                        [<$packet_name _properties_conversion>],
+                        $public_packet.properties,
+                        $internal_packet.other_properties
+                    );
+                }
+
+            )*
+        };
+    }
+
     #[test]
+    /// Validate that default values for property structures are the same on the public and internal types
     fn property_defaults() {
         // TODO: expand to include all defaultable types
 
@@ -966,6 +1055,159 @@ mod test {
         );
     }
 
-    #[test]
-    fn packet_conversion() {}
+    test_packet_conversions!(
+        publish,
+        packet::Publish {
+            payload: "payload".into(),
+            qos: packet::DeliveryQoS::AtLeastOnce(packet::DeliveryInfo {
+                dup: true,
+                packet_identifier: PacketIdentifier::new(42).unwrap(),
+            }),
+            retain: true,
+            topic_name: topic::TopicName::new("topic/name").unwrap(),
+            properties: packet::PublishProperties {
+                payload_format_indicator: packet::PayloadFormatIndicator::UTF8,
+                message_expiry_interval: Some(3600),
+                topic_alias: Some(1.try_into().unwrap()),
+                response_topic: Some(topic::TopicName::new("response/topic").unwrap()),
+                correlation_data: Some("correlation".into()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+                subscription_identifiers: vec![1.try_into().unwrap(), 42.try_into().unwrap()],
+                content_type: Some("content/type".to_string()),
+            },
+        },
+        mqtt_proto::Publish {
+            payload: SharedImpl::from_static(b"payload"),
+            packet_identifier_dup_qos: mqtt_proto::PacketIdentifierDupQoS::AtLeastOnce(
+                PacketIdentifier::new(42).unwrap(),
+                true,
+            ),
+            retain: true,
+            topic_name: topic("topic/name"),
+            other_properties: mqtt_proto::PublishOtherProperties {
+                payload_is_utf8: true,
+                message_expiry_interval: Some(3600),
+                topic_alias: Some(1.try_into().unwrap()),
+                response_topic: Some(topic("response/topic")),
+                correlation_data: Some(binary_data("correlation")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+                subscription_identifiers: vec![1.try_into().unwrap(), 42.try_into().unwrap()],
+                content_type: Some(byte_str("content/type")),
+            },
+        }
+    );
+
+
+    test_packet_conversions!(
+        puback,
+        packet::PubAck {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason: packet::PubAckReason::NotAuthorized,
+            properties: packet::PubAckProperties {
+                reason_string: Some("Not authorized".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+            },
+        },
+        mqtt_proto::PubAck {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason_code: mqtt_proto::PubAckReasonCode::NotAuthorized,
+            other_properties: mqtt_proto::PubAckOtherProperties {
+                reason_string: Some(byte_str("Not authorized")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+            },
+        }
+    );
+
+    test_packet_conversions!(
+        pubrec,
+        packet::PubRec {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason: packet::PubRecReason::NotAuthorized,
+            properties: packet::PubRecProperties {
+                reason_string: Some("Not authorized".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+            },
+        },
+        mqtt_proto::PubRec {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason_code: mqtt_proto::PubRecReasonCode::NotAuthorized,
+            other_properties: mqtt_proto::PubRecOtherProperties {
+                reason_string: Some(byte_str("Not authorized")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+            },
+        }
+    );
+
+    test_packet_conversions!(
+        pubrel,
+        packet::PubRel {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason: packet::PubRelReason::PacketIdentifierNotFound,
+            properties: packet::PubRelProperties {
+                reason_string: Some("Packet ID not found".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+            },
+        },
+        mqtt_proto::PubRel {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason_code: mqtt_proto::PubRelReasonCode::PacketIdentifierNotFound,
+            other_properties: mqtt_proto::PubRelOtherProperties {
+                reason_string: Some(byte_str("Packet ID not found")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+            },
+        }
+    );
+
+    test_packet_conversions!(
+        pubcomp,
+        packet::PubComp {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason: packet::PubCompReason::PacketIdentifierNotFound,
+            properties: packet::PubCompProperties {
+                reason_string: Some("Packet ID not found".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+            },
+        },
+        mqtt_proto::PubComp {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason_code: mqtt_proto::PubCompReasonCode::PacketIdentifierNotFound,
+            other_properties: mqtt_proto::PubCompOtherProperties {
+                reason_string: Some(byte_str("Packet ID not found")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+            },
+        }
+    );
+
 }
+
+
