@@ -132,9 +132,8 @@ mod tests {
     };
     use crate::io::WritableStream;
     use crate::mqtt_proto::{
-        Connect, ConnectSessionExpiryInterval, Filter, KeepAlive, Packet, PacketIdentifier,
-        ProtocolVersion, QoS, SessionExpiryInterval, Subscribe, SubscribeOptions, SubscribeTo,
-        byte_str,
+        Connect, Filter, KeepAlive, Packet, PacketIdentifier, ProtocolVersion, QoS, Subscribe,
+        SubscribeOptions, SubscribeTo, byte_str,
     };
 
     use super::Writer;
@@ -186,7 +185,6 @@ mod tests {
             client_id: None,
             clean_start: true,
             keep_alive: KeepAlive::Infinite,
-            session_expiry_interval: ConnectSessionExpiryInterval(SessionExpiryInterval::Infinite),
             other_properties: Default::default(),
         });
 
@@ -203,18 +201,17 @@ mod tests {
         });
 
         let stream = MockWritableStream {
-            expected_writes: [
-                vec![
-                    // CONNECT
-                    &b"\x10\x12\x00\x04\x4d\x51\x54\x54\x05\x02\x00\x00\x05\x11\xff\xff\xff\xff\x00\x00"[..],
-                    // Start of SUBSCRIBE
-                    &b"\x82\x09\x00\x01\x00"[..],
-                    // SUBSCRIBE topic filter string
-                    &b"\x00\x03\x66\x6f\x6f"[..],
-                    // End of SUBSCRIBE
-                    &b"\x09"[..],
-                ],
-            ].into(),
+            expected_writes: [vec![
+                // CONNECT
+                &b"\x10\x0d\x00\x04\x4d\x51\x54\x54\x05\x02\x00\x00\x00\x00\x00"[..],
+                // Start of SUBSCRIBE
+                &b"\x82\x09\x00\x01\x00"[..],
+                // SUBSCRIBE topic filter string
+                &b"\x00\x03\x66\x6f\x6f"[..],
+                // End of SUBSCRIBE
+                &b"\x09"[..],
+            ]]
+            .into(),
         };
         let pool = BufferPoolImpl;
         let mut writer = Writer::new(
