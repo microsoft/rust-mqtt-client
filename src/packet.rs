@@ -259,36 +259,79 @@ where
 /// MQTT SUBACK
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubAck {
+    pub packet_identifier: PacketIdentifier,
     pub reason: SubAckReason,
     pub properties: SubAckProperties,
 }
 
 impl SubAck {
     pub fn is_success(&self) -> bool {
-        todo!()
+        matches!(
+            self.reason,
+            SubAckReason::GrantedQoS0 | SubAckReason::GrantedQoS1 | SubAckReason::GrantedQoS2
+        )
     }
 
     pub fn as_result(&self) -> Result<(), OperationFailure> {
-        todo!()
+        if self.is_success() {
+            Ok(())
+        } else {
+            let s = if let Some(reason_string) = &self.properties.reason_string {
+                format!(" ({:?} - {reason_string})", self.reason)
+            } else {
+                format!(" ({:?})", self.reason)
+            };
+            Err(s.into())
+        }
     }
 }
+
+// impl<S> From<mqtt_proto::SubAck<S>> for SubAck
+// where
+//     S: buffer_pool::Shared,
+// {
+//     fn from(value: mqtt_proto::SubAck<S>) -> SubAck {
+//         SubAck {
+//             reason: value.reason_codes[0].into(), // TODO: handle multiple reason codes
+//             properties: value.other_properties.into(),
+//         }
+//     }
+// }
 
 /// MQTT UNSUBACK
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsubAck {
-    pub reason: UnsubAckReason,
+    pub packet_identifier: PacketIdentifier,
+    pub reasons: Vec<UnsubAckReason>,
     pub properties: UnsubAckProperties,
 }
 
 impl UnsubAck {
     pub fn is_success(&self) -> bool {
-        todo!()
+        self.reasons.iter().all(|r| matches!(r, UnsubAckReason::Success | UnsubAckReason::NoSubscriptionExisted))
     }
 
     pub fn as_result(&self) -> Result<(), OperationFailure> {
-        todo!()
+        if self.is_success() {
+            Ok(())
+        } else {
+            let mut s = String::new();
+            for reason in &self.reasons {
+                if !matches!(reason, UnsubAckReason::Success | UnsubAckReason::NoSubscriptionExisted) {
+                    if !s.is_empty() {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&format!("{:?}", reason));
+                }
+            }
+            if let Some(reason_string) = &self.properties.reason_string {
+                s.push_str(&format!(" - {reason_string}"));
+            }
+            Err(s.into())
+        }
     }
 }
+
 
 //////////////////// Properties ////////////////////
 
@@ -510,7 +553,7 @@ where
     }
 }
 
-// Properties for a PUBCOMP
+/// Properties for a PUBCOMP
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PubCompProperties {
     pub reason_string: Option<String>,
@@ -551,22 +594,130 @@ where
     }
 }
 
-// TODO
+/// Properties for a SUBSCRIBE
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct SubscribeProperties {}
+pub struct SubscribeProperties {
+    pub subscription_identifier: Option<NonZeroU32>,
+    pub user_properties: Vec<(String, String)>,
+}
 
-// TODO
+impl<S> From<mqtt_proto::SubscribeOtherProperties<S>> for SubscribeProperties
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::SubscribeOtherProperties<S>) -> SubscribeProperties {
+        SubscribeProperties {
+            subscription_identifier: value.subscription_identifier,
+            user_properties: value
+                .user_properties
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::SubscribeOtherProperties<O::Shared>, O> for SubscribeProperties
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::SubscribeOtherProperties<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::SubscribeOtherProperties {
+            subscription_identifier: self.subscription_identifier,
+            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
+        })
+    }
+}
+
+/// Properties for a SUBACK
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct SubAckProperties {}
+pub struct SubAckProperties {
+    pub reason_string: Option<String>,
+    pub user_properties: Vec<(String, String)>,
+}
 
-// TODO
+impl<S> From<mqtt_proto::SubAckOtherProperties<S>> for SubAckProperties
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::SubAckOtherProperties<S>) -> SubAckProperties {
+        SubAckProperties {
+            reason_string: value.reason_string.map(|s| s.to_string()),
+            user_properties: value
+                .user_properties
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::SubAckOtherProperties<O::Shared>, O> for SubAckProperties
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::SubAckOtherProperties<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::SubAckOtherProperties {
+            reason_string: self
+                .reason_string
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
+        })
+    }
+}
+
+/// Properties for an UNSUBSCRIBE
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct UnsubscribeProperties {}
+pub struct UnsubscribeProperties {
+    pub user_properties: Vec<(String, String)>,
+}
 
-// TODO
+impl<S> From<mqtt_proto::UnsubscribeOtherProperties<S>> for UnsubscribeProperties
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::UnsubscribeOtherProperties<S>) -> UnsubscribeProperties {
+        UnsubscribeProperties {
+            user_properties: value
+                .user_properties
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::UnsubscribeOtherProperties<O::Shared>, O> for UnsubscribeProperties
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::UnsubscribeOtherProperties<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::UnsubscribeOtherProperties {
+            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
+        })
+    }
+}
+
+/// Properties for a UNSUBACK
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct UnsubAckProperties {}
+pub struct UnsubAckProperties {
+    pub reason_string: Option<String>,
+    pub user_properties: Vec<(String, String)>,
+}
 
+// TODO: reason codes are not 
+
+/// Properties for a DISCONNECT
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DisconnectProperties {}
 
