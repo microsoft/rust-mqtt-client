@@ -6,12 +6,14 @@
 // TODO: This may not be necessary in it's entirety - this is a straight port of API proposal stubs.
 // Remove items as necessary.
 
+use std::fmt::Write as _;
 use std::num::{NonZeroU16, NonZeroU32};
 
 use bytes::Bytes;
 
 use crate::error::OperationFailure;
-pub use crate::mqtt_proto::PacketIdentifier; // TODO: repalce instead of re-export
+// TODO: Replace instead of re-export?
+pub use crate::mqtt_proto::{PacketIdentifier, SessionExpiryInterval};
 use crate::topic::TopicName;
 use crate::{buffer_pool, mqtt_proto};
 
@@ -260,43 +262,58 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubAck {
     pub packet_identifier: PacketIdentifier,
-    pub reason: SubAckReason,
+    pub reasons: Vec<SubAckReason>,
     pub properties: SubAckProperties,
 }
 
 impl SubAck {
     pub fn is_success(&self) -> bool {
-        matches!(
-            self.reason,
-            SubAckReason::GrantedQoS0 | SubAckReason::GrantedQoS1 | SubAckReason::GrantedQoS2
-        )
+        self.reasons.iter().all(|r| {
+            matches!(
+                r,
+                SubAckReason::GrantedQoS0 | SubAckReason::GrantedQoS1 | SubAckReason::GrantedQoS2
+            )
+        })
     }
 
     pub fn as_result(&self) -> Result<(), OperationFailure> {
         if self.is_success() {
             Ok(())
         } else {
-            let s = if let Some(reason_string) = &self.properties.reason_string {
-                format!(" ({:?} - {reason_string})", self.reason)
-            } else {
-                format!(" ({:?})", self.reason)
-            };
+            let mut s = String::new();
+            for reason in &self.reasons {
+                if !matches!(
+                    reason,
+                    SubAckReason::GrantedQoS0
+                        | SubAckReason::GrantedQoS1
+                        | SubAckReason::GrantedQoS2
+                ) {
+                    if !s.is_empty() {
+                        s.push_str(", ");
+                    }
+                    let _ = write!(s, "{reason:?}");
+                }
+            }
+            if let Some(reason_string) = &self.properties.reason_string {
+                let _ = write!(s, " - {reason_string}");
+            }
             Err(s.into())
         }
     }
 }
 
-// impl<S> From<mqtt_proto::SubAck<S>> for SubAck
-// where
-//     S: buffer_pool::Shared,
-// {
-//     fn from(value: mqtt_proto::SubAck<S>) -> SubAck {
-//         SubAck {
-//             reason: value.reason_codes[0].into(), // TODO: handle multiple reason codes
-//             properties: value.other_properties.into(),
-//         }
-//     }
-// }
+impl<S> From<mqtt_proto::SubAck<S>> for SubAck
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::SubAck<S>) -> SubAck {
+        SubAck {
+            packet_identifier: value.packet_identifier,
+            reasons: value.reason_codes.into_iter().map(Into::into).collect(),
+            properties: value.other_properties.into(),
+        }
+    }
+}
 
 /// MQTT UNSUBACK
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,7 +325,12 @@ pub struct UnsubAck {
 
 impl UnsubAck {
     pub fn is_success(&self) -> bool {
-        self.reasons.iter().all(|r| matches!(r, UnsubAckReason::Success | UnsubAckReason::NoSubscriptionExisted))
+        self.reasons.iter().all(|r| {
+            matches!(
+                r,
+                UnsubAckReason::Success | UnsubAckReason::NoSubscriptionExisted
+            )
+        })
     }
 
     pub fn as_result(&self) -> Result<(), OperationFailure> {
@@ -317,21 +339,36 @@ impl UnsubAck {
         } else {
             let mut s = String::new();
             for reason in &self.reasons {
-                if !matches!(reason, UnsubAckReason::Success | UnsubAckReason::NoSubscriptionExisted) {
+                if !matches!(
+                    reason,
+                    UnsubAckReason::Success | UnsubAckReason::NoSubscriptionExisted
+                ) {
                     if !s.is_empty() {
                         s.push_str(", ");
                     }
-                    s.push_str(&format!("{:?}", reason));
+                    let _ = write!(s, "{reason:?}");
                 }
             }
             if let Some(reason_string) = &self.properties.reason_string {
-                s.push_str(&format!(" - {reason_string}"));
+                let _ = write!(s, " - {reason_string}");
             }
             Err(s.into())
         }
     }
 }
 
+impl<S> From<mqtt_proto::UnsubAck<S>> for UnsubAck
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::UnsubAck<S>) -> UnsubAck {
+        UnsubAck {
+            packet_identifier: value.packet_identifier,
+            reasons: value.reason_codes.into_iter().map(Into::into).collect(),
+            properties: value.other_properties.into(),
+        }
+    }
+}
 
 //////////////////// Properties ////////////////////
 
@@ -341,7 +378,9 @@ pub struct ConnectProperties {}
 
 // TODO
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct ConnAckProperties {}
+pub struct ConnAckProperties {
+    
+}
 
 /// Properties for a PUBLISH
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -715,11 +754,89 @@ pub struct UnsubAckProperties {
     pub user_properties: Vec<(String, String)>,
 }
 
-// TODO: reason codes are not 
+impl<S> From<mqtt_proto::UnsubAckOtherProperties<S>> for UnsubAckProperties
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::UnsubAckOtherProperties<S>) -> UnsubAckProperties {
+        UnsubAckProperties {
+            reason_string: value.reason_string.map(|s| s.to_string()),
+            user_properties: value
+                .user_properties
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::UnsubAckOtherProperties<O::Shared>, O> for UnsubAckProperties
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::UnsubAckOtherProperties<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::UnsubAckOtherProperties {
+            reason_string: self
+                .reason_string
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
+        })
+    }
+}
 
 /// Properties for a DISCONNECT
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct DisconnectProperties {}
+pub struct DisconnectProperties {
+    pub session_expiry_interval: Option<SessionExpiryInterval>,
+    pub reason_string: Option<String>,
+    pub user_properties: Vec<(String, String)>,
+    pub server_reference: Option<String>,
+}
+
+impl<S> From<mqtt_proto::DisconnectOtherProperties<S>> for DisconnectProperties
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::DisconnectOtherProperties<S>) -> DisconnectProperties {
+        DisconnectProperties {
+            session_expiry_interval: value.session_expiry_interval,
+            reason_string: value.reason_string.map(|s| s.to_string()),
+            user_properties: value
+                .user_properties
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            server_reference: value.server_reference.map(|s| s.to_string()),
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::DisconnectOtherProperties<O::Shared>, O> for DisconnectProperties
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::DisconnectOtherProperties<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::DisconnectOtherProperties {
+            session_expiry_interval: self.session_expiry_interval,
+            reason_string: self
+                .reason_string
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
+            server_reference: self
+                .server_reference
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+        })
+    }
+}
 
 // TODO
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -1010,6 +1127,64 @@ pub enum SubAckReason {
     WildcardSubscriptionsNotSupported = 0xA2,
 }
 
+impl From<mqtt_proto::SubscribeReasonCode> for SubAckReason {
+    fn from(value: mqtt_proto::SubscribeReasonCode) -> SubAckReason {
+        match value {
+            mqtt_proto::SubscribeReasonCode::GrantedQoS0 => SubAckReason::GrantedQoS0,
+            mqtt_proto::SubscribeReasonCode::GrantedQoS1 => SubAckReason::GrantedQoS1,
+            mqtt_proto::SubscribeReasonCode::GrantedQoS2 => SubAckReason::GrantedQoS2,
+            mqtt_proto::SubscribeReasonCode::UnspecifiedError => SubAckReason::UnspecifiedError,
+            mqtt_proto::SubscribeReasonCode::ImplementationSpecificError => {
+                SubAckReason::ImplementationSpecificError
+            }
+            mqtt_proto::SubscribeReasonCode::NotAuthorized => SubAckReason::NotAuthorized,
+            mqtt_proto::SubscribeReasonCode::TopicFilterInvalid => SubAckReason::TopicFilterInvalid,
+            mqtt_proto::SubscribeReasonCode::PacketIdentifierInUse => {
+                SubAckReason::PacketIdentifierInUse
+            }
+            mqtt_proto::SubscribeReasonCode::QuotaExceeded => SubAckReason::QuotaExceeded,
+            mqtt_proto::SubscribeReasonCode::SharedSubscriptionsNotSupported => {
+                SubAckReason::SharedSubscriptionsNotSupported
+            }
+            mqtt_proto::SubscribeReasonCode::SubscriptionIdentifiersNotSupported => {
+                SubAckReason::SubscriptionIdentifiersNotSupported
+            }
+            mqtt_proto::SubscribeReasonCode::WildcardSubscriptionsNotSupported => {
+                SubAckReason::WildcardSubscriptionsNotSupported
+            }
+        }
+    }
+}
+
+impl From<SubAckReason> for mqtt_proto::SubscribeReasonCode {
+    fn from(value: SubAckReason) -> mqtt_proto::SubscribeReasonCode {
+        match value {
+            SubAckReason::GrantedQoS0 => mqtt_proto::SubscribeReasonCode::GrantedQoS0,
+            SubAckReason::GrantedQoS1 => mqtt_proto::SubscribeReasonCode::GrantedQoS1,
+            SubAckReason::GrantedQoS2 => mqtt_proto::SubscribeReasonCode::GrantedQoS2,
+            SubAckReason::UnspecifiedError => mqtt_proto::SubscribeReasonCode::UnspecifiedError,
+            SubAckReason::ImplementationSpecificError => {
+                mqtt_proto::SubscribeReasonCode::ImplementationSpecificError
+            }
+            SubAckReason::NotAuthorized => mqtt_proto::SubscribeReasonCode::NotAuthorized,
+            SubAckReason::TopicFilterInvalid => mqtt_proto::SubscribeReasonCode::TopicFilterInvalid,
+            SubAckReason::PacketIdentifierInUse => {
+                mqtt_proto::SubscribeReasonCode::PacketIdentifierInUse
+            }
+            SubAckReason::QuotaExceeded => mqtt_proto::SubscribeReasonCode::QuotaExceeded,
+            SubAckReason::SharedSubscriptionsNotSupported => {
+                mqtt_proto::SubscribeReasonCode::SharedSubscriptionsNotSupported
+            }
+            SubAckReason::SubscriptionIdentifiersNotSupported => {
+                mqtt_proto::SubscribeReasonCode::SubscriptionIdentifiersNotSupported
+            }
+            SubAckReason::WildcardSubscriptionsNotSupported => {
+                mqtt_proto::SubscribeReasonCode::WildcardSubscriptionsNotSupported
+            }
+        }
+    }
+}
+
 /// Reason code for a UNSUBACK
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnsubAckReason {
@@ -1020,6 +1195,50 @@ pub enum UnsubAckReason {
     NotAuthorized = 0x87,
     TopicFilterInvalid = 0x8F,
     PacketIdentifierInUse = 0x91,
+}
+
+impl From<mqtt_proto::UnsubAckReasonCode> for UnsubAckReason {
+    fn from(value: mqtt_proto::UnsubAckReasonCode) -> UnsubAckReason {
+        match value {
+            mqtt_proto::UnsubAckReasonCode::Success => UnsubAckReason::Success,
+            mqtt_proto::UnsubAckReasonCode::NoSubscriptionExisted => {
+                UnsubAckReason::NoSubscriptionExisted
+            }
+            mqtt_proto::UnsubAckReasonCode::UnspecifiedError => UnsubAckReason::UnspecifiedError,
+            mqtt_proto::UnsubAckReasonCode::ImplementationSpecificError => {
+                UnsubAckReason::ImplementationSpecificError
+            }
+            mqtt_proto::UnsubAckReasonCode::NotAuthorized => UnsubAckReason::NotAuthorized,
+            mqtt_proto::UnsubAckReasonCode::TopicFilterInvalid => {
+                UnsubAckReason::TopicFilterInvalid
+            }
+            mqtt_proto::UnsubAckReasonCode::PacketIdentifierInUse => {
+                UnsubAckReason::PacketIdentifierInUse
+            }
+        }
+    }
+}
+
+impl From<UnsubAckReason> for mqtt_proto::UnsubAckReasonCode {
+    fn from(value: UnsubAckReason) -> mqtt_proto::UnsubAckReasonCode {
+        match value {
+            UnsubAckReason::Success => mqtt_proto::UnsubAckReasonCode::Success,
+            UnsubAckReason::NoSubscriptionExisted => {
+                mqtt_proto::UnsubAckReasonCode::NoSubscriptionExisted
+            }
+            UnsubAckReason::UnspecifiedError => mqtt_proto::UnsubAckReasonCode::UnspecifiedError,
+            UnsubAckReason::ImplementationSpecificError => {
+                mqtt_proto::UnsubAckReasonCode::ImplementationSpecificError
+            }
+            UnsubAckReason::NotAuthorized => mqtt_proto::UnsubAckReasonCode::NotAuthorized,
+            UnsubAckReason::TopicFilterInvalid => {
+                mqtt_proto::UnsubAckReasonCode::TopicFilterInvalid
+            }
+            UnsubAckReason::PacketIdentifierInUse => {
+                mqtt_proto::UnsubAckReasonCode::PacketIdentifierInUse
+            }
+        }
+    }
 }
 
 /// Reason code for a DISCONNECT
@@ -1056,6 +1275,158 @@ pub enum DisconnectReason {
     MaximumConnectTime = 0xA0,
     SubscriptionIdentifiersNotSupported = 0xA1,
     WildcardSubscriptionsNotSupported = 0xA2,
+}
+
+impl From<mqtt_proto::DisconnectReasonCode> for DisconnectReason {
+    fn from(value: mqtt_proto::DisconnectReasonCode) -> DisconnectReason {
+        match value {
+            mqtt_proto::DisconnectReasonCode::Normal => DisconnectReason::NormalDisconnection,
+            mqtt_proto::DisconnectReasonCode::DisconnectWithWillMessage => {
+                DisconnectReason::DisconnectWithWillMessage
+            }
+            mqtt_proto::DisconnectReasonCode::UnspecifiedError => {
+                DisconnectReason::UnspecifiedError
+            }
+            mqtt_proto::DisconnectReasonCode::MalformedPacket => DisconnectReason::MalformedPacket,
+            mqtt_proto::DisconnectReasonCode::ProtocolError => DisconnectReason::ProtocolError,
+            mqtt_proto::DisconnectReasonCode::ImplementationSpecificError => {
+                DisconnectReason::ImplementationSpecificError
+            }
+            mqtt_proto::DisconnectReasonCode::NotAuthorized => DisconnectReason::NotAuthorized,
+            mqtt_proto::DisconnectReasonCode::ServerBusy => DisconnectReason::ServerBusy,
+            mqtt_proto::DisconnectReasonCode::ServerShuttingDown => {
+                DisconnectReason::ServerShuttingDown
+            }
+            mqtt_proto::DisconnectReasonCode::KeepAliveTimeout => {
+                DisconnectReason::KeepAliveTimeout
+            }
+            mqtt_proto::DisconnectReasonCode::SessionTakenOver => {
+                DisconnectReason::SessionTakenOver
+            }
+            mqtt_proto::DisconnectReasonCode::TopicFilterInvalid => {
+                DisconnectReason::TopicFilterInvalid
+            }
+            mqtt_proto::DisconnectReasonCode::TopicNameInvalid => {
+                DisconnectReason::TopicNameInvalid
+            }
+            mqtt_proto::DisconnectReasonCode::ReceiveMaximumExceeded => {
+                DisconnectReason::ReceiveMaximumExceeded
+            }
+            mqtt_proto::DisconnectReasonCode::TopicAliasInvalid => {
+                DisconnectReason::TopicAliasInvalid
+            }
+            mqtt_proto::DisconnectReasonCode::PacketTooLarge => DisconnectReason::PacketTooLarge,
+            mqtt_proto::DisconnectReasonCode::MessageRateTooHigh => {
+                DisconnectReason::MessageRateTooHigh
+            }
+            mqtt_proto::DisconnectReasonCode::QuotaExceeded => DisconnectReason::QuotaExceeded,
+            mqtt_proto::DisconnectReasonCode::AdministrativeAction => {
+                DisconnectReason::AdministrativeAction
+            }
+            mqtt_proto::DisconnectReasonCode::PayloadFormatInvalid => {
+                DisconnectReason::PayloadFormatInvalid
+            }
+            mqtt_proto::DisconnectReasonCode::RetainNotSupported => {
+                DisconnectReason::RetainNotSupported
+            }
+            mqtt_proto::DisconnectReasonCode::QosNotSupported => DisconnectReason::QoSNotSupported,
+            mqtt_proto::DisconnectReasonCode::UseAnotherServer => {
+                DisconnectReason::UseAnotherServer
+            }
+            mqtt_proto::DisconnectReasonCode::ServerMoved => DisconnectReason::ServerMoved,
+            mqtt_proto::DisconnectReasonCode::SharedSubscriptionsNotSupported => {
+                DisconnectReason::SharedSubscriptionsNotSupported
+            }
+            mqtt_proto::DisconnectReasonCode::ConnectionRateExceeded => {
+                DisconnectReason::ConnectionRateExceeded
+            }
+            mqtt_proto::DisconnectReasonCode::MaximumConnectTime => {
+                DisconnectReason::MaximumConnectTime
+            }
+            mqtt_proto::DisconnectReasonCode::SubscriptionIdentifiersNotSupported => {
+                DisconnectReason::SubscriptionIdentifiersNotSupported
+            }
+            mqtt_proto::DisconnectReasonCode::WildcardSubscriptionsNotSupported => {
+                DisconnectReason::WildcardSubscriptionsNotSupported
+            }
+        }
+    }
+}
+
+impl From<DisconnectReason> for mqtt_proto::DisconnectReasonCode {
+    fn from(value: DisconnectReason) -> mqtt_proto::DisconnectReasonCode {
+        match value {
+            DisconnectReason::NormalDisconnection => mqtt_proto::DisconnectReasonCode::Normal,
+            DisconnectReason::DisconnectWithWillMessage => {
+                mqtt_proto::DisconnectReasonCode::DisconnectWithWillMessage
+            }
+            DisconnectReason::UnspecifiedError => {
+                mqtt_proto::DisconnectReasonCode::UnspecifiedError
+            }
+            DisconnectReason::MalformedPacket => mqtt_proto::DisconnectReasonCode::MalformedPacket,
+            DisconnectReason::ProtocolError => mqtt_proto::DisconnectReasonCode::ProtocolError,
+            DisconnectReason::ImplementationSpecificError => {
+                mqtt_proto::DisconnectReasonCode::ImplementationSpecificError
+            }
+            DisconnectReason::NotAuthorized => mqtt_proto::DisconnectReasonCode::NotAuthorized,
+            DisconnectReason::ServerBusy => mqtt_proto::DisconnectReasonCode::ServerBusy,
+            DisconnectReason::ServerShuttingDown => {
+                mqtt_proto::DisconnectReasonCode::ServerShuttingDown
+            }
+            DisconnectReason::KeepAliveTimeout => {
+                mqtt_proto::DisconnectReasonCode::KeepAliveTimeout
+            }
+            DisconnectReason::SessionTakenOver => {
+                mqtt_proto::DisconnectReasonCode::SessionTakenOver
+            }
+            DisconnectReason::TopicFilterInvalid => {
+                mqtt_proto::DisconnectReasonCode::TopicFilterInvalid
+            }
+            DisconnectReason::TopicNameInvalid => {
+                mqtt_proto::DisconnectReasonCode::TopicNameInvalid
+            }
+            DisconnectReason::ReceiveMaximumExceeded => {
+                mqtt_proto::DisconnectReasonCode::ReceiveMaximumExceeded
+            }
+            DisconnectReason::TopicAliasInvalid => {
+                mqtt_proto::DisconnectReasonCode::TopicAliasInvalid
+            }
+            DisconnectReason::PacketTooLarge => mqtt_proto::DisconnectReasonCode::PacketTooLarge,
+            DisconnectReason::MessageRateTooHigh => {
+                mqtt_proto::DisconnectReasonCode::MessageRateTooHigh
+            }
+            DisconnectReason::QuotaExceeded => mqtt_proto::DisconnectReasonCode::QuotaExceeded,
+            DisconnectReason::AdministrativeAction => {
+                mqtt_proto::DisconnectReasonCode::AdministrativeAction
+            }
+            DisconnectReason::PayloadFormatInvalid => {
+                mqtt_proto::DisconnectReasonCode::PayloadFormatInvalid
+            }
+            DisconnectReason::RetainNotSupported => {
+                mqtt_proto::DisconnectReasonCode::RetainNotSupported
+            }
+            DisconnectReason::QoSNotSupported => mqtt_proto::DisconnectReasonCode::QosNotSupported,
+            DisconnectReason::UseAnotherServer => {
+                mqtt_proto::DisconnectReasonCode::UseAnotherServer
+            }
+            DisconnectReason::ServerMoved => mqtt_proto::DisconnectReasonCode::ServerMoved,
+            DisconnectReason::SharedSubscriptionsNotSupported => {
+                mqtt_proto::DisconnectReasonCode::SharedSubscriptionsNotSupported
+            }
+            DisconnectReason::ConnectionRateExceeded => {
+                mqtt_proto::DisconnectReasonCode::ConnectionRateExceeded
+            }
+            DisconnectReason::MaximumConnectTime => {
+                mqtt_proto::DisconnectReasonCode::MaximumConnectTime
+            }
+            DisconnectReason::SubscriptionIdentifiersNotSupported => {
+                mqtt_proto::DisconnectReasonCode::SubscriptionIdentifiersNotSupported
+            }
+            DisconnectReason::WildcardSubscriptionsNotSupported => {
+                mqtt_proto::DisconnectReasonCode::WildcardSubscriptionsNotSupported
+            }
+        }
+    }
 }
 
 /// Reason code for an AUTH
@@ -1160,7 +1531,7 @@ mod test {
     // Macro to define conversion tests for a packet
     // - internal to public conversion for the whole packet
     // - bidirectional conversion for the properties of the packet
-    macro_rules! test_packet_conversions {
+    macro_rules! test_packet_and_property_conversions {
         ($( $packet_name:ident, $public_packet:expr, $internal_packet:expr );* $(;)?) => {
             $(
                 paste! {
@@ -1173,6 +1544,21 @@ mod test {
                         [<$packet_name _properties_conversion>],
                         $public_packet.properties,
                         $internal_packet.other_properties
+                    );
+                }
+
+            )*
+        };
+    }
+
+    macro_rules! test_property_converions {
+        ($( $properties_name:ident, $public_properties:expr, $internal_properties:expr );* $(;)?) => {
+            $(
+                paste! {
+                    test_bidirectional_conversion!(
+                        [<$properties_name _properties_conversion>],
+                        $public_properties,
+                        $internal_properties
                     );
                 }
 
@@ -1205,9 +1591,29 @@ mod test {
             packet::PubCompProperties::default(),
             mqtt_proto::PubCompOtherProperties::default(),
         );
+        compare_as_buffered(
+            packet::SubscribeProperties::default(),
+            mqtt_proto::SubscribeOtherProperties::default(),
+        );
+        compare_as_buffered(
+            packet::SubAckProperties::default(),
+            mqtt_proto::SubAckOtherProperties::default(),
+        );
+        compare_as_buffered(
+            packet::UnsubscribeProperties::default(),
+            mqtt_proto::UnsubscribeOtherProperties::default(),
+        );
+        compare_as_buffered(
+            packet::UnsubAckProperties::default(),
+            mqtt_proto::UnsubAckOtherProperties::default(),
+        );
+        compare_as_buffered(
+            packet::DisconnectProperties::default(),
+            mqtt_proto::DisconnectOtherProperties::default(),
+        );
     }
 
-    test_packet_conversions!(
+    test_packet_and_property_conversions!(
         publish,
         packet::Publish {
             payload: "payload".into(),
@@ -1255,7 +1661,7 @@ mod test {
         }
     );
 
-    test_packet_conversions!(
+    test_packet_and_property_conversions!(
         puback,
         packet::PubAck {
             packet_identifier: PacketIdentifier::new(42).unwrap(),
@@ -1281,7 +1687,7 @@ mod test {
         }
     );
 
-    test_packet_conversions!(
+    test_packet_and_property_conversions!(
         pubrec,
         packet::PubRec {
             packet_identifier: PacketIdentifier::new(42).unwrap(),
@@ -1307,7 +1713,7 @@ mod test {
         }
     );
 
-    test_packet_conversions!(
+    test_packet_and_property_conversions!(
         pubrel,
         packet::PubRel {
             packet_identifier: PacketIdentifier::new(42).unwrap(),
@@ -1333,7 +1739,7 @@ mod test {
         }
     );
 
-    test_packet_conversions!(
+    test_packet_and_property_conversions!(
         pubcomp,
         packet::PubComp {
             packet_identifier: PacketIdentifier::new(42).unwrap(),
@@ -1356,6 +1762,126 @@ mod test {
                     (byte_str("key2"), byte_str("value2")),
                 ],
             },
+        }
+    );
+
+    test_property_converions!(
+        subscribe,
+        packet::SubscribeProperties {
+            subscription_identifier: Some(42.try_into().unwrap()),
+            user_properties: vec![
+                ("key1".to_string(), "value1".to_string()),
+                ("key2".to_string(), "value2".to_string()),
+            ],
+        },
+        mqtt_proto::SubscribeOtherProperties {
+            subscription_identifier: Some(42.try_into().unwrap()),
+            user_properties: vec![
+                (byte_str("key1"), byte_str("value1")),
+                (byte_str("key2"), byte_str("value2")),
+            ],
+        }
+    );
+
+    test_packet_and_property_conversions!(
+        suback,
+        packet::SubAck {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reasons: vec![
+                packet::SubAckReason::GrantedQoS0,
+                packet::SubAckReason::NotAuthorized,
+            ],
+            properties: packet::SubAckProperties {
+                reason_string: Some("Not authorized".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+            },
+        },
+        mqtt_proto::SubAck {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason_codes: vec![
+                mqtt_proto::SubscribeReasonCode::GrantedQoS0,
+                mqtt_proto::SubscribeReasonCode::NotAuthorized,
+            ],
+            other_properties: mqtt_proto::SubAckOtherProperties {
+                reason_string: Some(byte_str("Not authorized")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+            },
+        }
+    );
+
+    test_property_converions!(
+        unsubscribe,
+        packet::UnsubscribeProperties {
+            user_properties: vec![
+                ("key1".to_string(), "value1".to_string()),
+                ("key2".to_string(), "value2".to_string()),
+            ],
+        },
+        mqtt_proto::UnsubscribeOtherProperties {
+            user_properties: vec![
+                (byte_str("key1"), byte_str("value1")),
+                (byte_str("key2"), byte_str("value2")),
+            ],
+        }
+    );
+
+    test_packet_and_property_conversions!(
+        unsuback,
+        packet::UnsubAck {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reasons: vec![
+                packet::UnsubAckReason::Success,
+                packet::UnsubAckReason::NotAuthorized,
+            ],
+            properties: packet::UnsubAckProperties {
+                reason_string: Some("Not authorized".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+            },
+        },
+        mqtt_proto::UnsubAck {
+            packet_identifier: PacketIdentifier::new(42).unwrap(),
+            reason_codes: vec![
+                mqtt_proto::UnsubAckReasonCode::Success,
+                mqtt_proto::UnsubAckReasonCode::NotAuthorized,
+            ],
+            other_properties: mqtt_proto::UnsubAckOtherProperties {
+                reason_string: Some(byte_str("Not authorized")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+            },
+        }
+    );
+
+    test_property_converions!(
+        disconnect,
+        packet::DisconnectProperties {
+            session_expiry_interval: Some(packet::SessionExpiryInterval::Duration(3600)),
+            reason_string: Some("Normal disconnection".to_string()),
+            user_properties: vec![
+                ("key1".to_string(), "value1".to_string()),
+                ("key2".to_string(), "value2".to_string()),
+            ],
+            server_reference: Some("server/ref".to_string()),
+        },
+        mqtt_proto::DisconnectOtherProperties {
+            session_expiry_interval: Some(packet::SessionExpiryInterval::Duration(3600)),
+            reason_string: Some(byte_str("Normal disconnection")),
+            user_properties: vec![
+                (byte_str("key1"), byte_str("value1")),
+                (byte_str("key2"), byte_str("value2")),
+            ],
+            server_reference: Some(byte_str("server/ref")),
         }
     );
 }
