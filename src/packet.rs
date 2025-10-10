@@ -13,7 +13,7 @@ use bytes::Bytes;
 
 use crate::error::OperationFailure;
 // TODO: Replace instead of re-export?
-pub use crate::mqtt_proto::{PacketIdentifier, SessionExpiryInterval};
+pub use crate::mqtt_proto::{KeepAlive, PacketIdentifier, SessionExpiryInterval};
 use crate::topic::TopicName;
 use crate::{buffer_pool, mqtt_proto};
 
@@ -27,6 +27,26 @@ pub enum QoS {
     AtMostOnce = 0,
     AtLeastOnce = 1,
     ExactlyOnce = 2,
+}
+
+impl From<mqtt_proto::QoS> for QoS {
+    fn from(value: mqtt_proto::QoS) -> QoS {
+        match value {
+            mqtt_proto::QoS::AtMostOnce => QoS::AtMostOnce,
+            mqtt_proto::QoS::AtLeastOnce => QoS::AtLeastOnce,
+            mqtt_proto::QoS::ExactlyOnce => QoS::ExactlyOnce,
+        }
+    }
+}
+
+impl From<QoS> for mqtt_proto::QoS {
+    fn from(value: QoS) -> mqtt_proto::QoS {
+        match value {
+            QoS::AtMostOnce => mqtt_proto::QoS::AtMostOnce,
+            QoS::AtLeastOnce => mqtt_proto::QoS::AtLeastOnce,
+            QoS::ExactlyOnce => mqtt_proto::QoS::ExactlyOnce,
+        }
+    }
 }
 
 /// Quality of Service for an incoming PUBLISH packet, containing additional delivery info
@@ -91,17 +111,46 @@ pub enum PayloadFormatIndicator {
 /// CONNACK packet
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnAck {
+    pub session_present: bool,
     pub reason: ConnAckReason,
     pub properties: ConnAckProperties,
 }
 
 impl ConnAck {
     pub fn is_success(&self) -> bool {
-        todo!()
+        matches!(self.reason, ConnAckReason::Success)
     }
 
     pub fn as_result(&self) -> Result<(), OperationFailure> {
-        todo!()
+        if self.is_success() {
+            Ok(())
+        } else {
+            let reason = if let Some(s) = &self.properties.reason_string {
+                format!("{:?} - {s}", self.reason)
+            } else {
+                format!("{:?}", self.reason)
+            };
+            Err(OperationFailure { reason })
+        }
+    }
+}
+
+impl<S> From<mqtt_proto::ConnAck<S>> for ConnAck
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::ConnAck<S>) -> ConnAck {
+        let (reason, session_present) = match value.reason_code {
+            mqtt_proto::ConnectReasonCode::Success { session_present } => {
+                (ConnAckReason::Success, session_present)
+            }
+            mqtt_proto::ConnectReasonCode::Refused(reason) => (reason.into(), false),
+        };
+        ConnAck {
+            session_present,
+            reason,
+            properties: value.other_properties.into(),
+        }
     }
 }
 
@@ -372,14 +421,187 @@ where
 
 //////////////////// Properties ////////////////////
 
-// TODO
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct ConnectProperties {}
+/// Properties for a CONNECT
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectProperties {
+    pub session_expiry_interval: SessionExpiryInterval, //TODO: double-check default
+    pub receive_maximum: NonZeroU16,
+    pub maximum_packet_size: NonZeroU32,
+    pub topic_alias_maximum: u16,
+    pub request_response_information: bool,
+    pub request_problem_information: bool,
+    pub user_properties: Vec<(String, String)>,
+    //pub authentication                    // TODO: Add auth support
+}
 
-// TODO
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+impl Default for ConnectProperties {
+    fn default() -> Self {
+        ConnectProperties {
+            session_expiry_interval: SessionExpiryInterval::Duration(0),
+            receive_maximum: NonZeroU16::MAX,
+            maximum_packet_size: NonZeroU32::MAX,
+            topic_alias_maximum: 0,
+            request_response_information: false,
+            request_problem_information: true,
+            user_properties: Vec::new(),
+        }
+    }
+}
+
+impl<S> From<mqtt_proto::ConnectOtherProperties<S>> for ConnectProperties
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::ConnectOtherProperties<S>) -> ConnectProperties {
+        ConnectProperties {
+            session_expiry_interval: value.session_expiry_interval,
+            receive_maximum: value.receive_maximum,
+            maximum_packet_size: value.maximum_packet_size,
+            topic_alias_maximum: value.topic_alias_maximum,
+            request_response_information: value.request_response_information,
+            request_problem_information: value.request_problem_information,
+            user_properties: value
+                .user_properties
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::ConnectOtherProperties<O::Shared>, O> for ConnectProperties
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::ConnectOtherProperties<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::ConnectOtherProperties {
+            session_expiry_interval: self.session_expiry_interval,
+            receive_maximum: self.receive_maximum,
+            maximum_packet_size: self.maximum_packet_size,
+            topic_alias_maximum: self.topic_alias_maximum,
+            request_response_information: self.request_response_information,
+            request_problem_information: self.request_problem_information,
+            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
+            authentication: None, // TODO: Add auth support
+        })
+    }
+}
+
+/// Properties for a CONNACK
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ConnAckProperties {
-    
+    pub session_expiry_interval: Option<SessionExpiryInterval>,
+    pub receive_maximum: NonZeroU16,
+    pub maximum_qos: QoS,
+    pub retain_available: bool,
+    pub maximum_packet_size: NonZeroU32,
+    pub assigned_client_identifier: Option<String>,
+    pub topic_alias_maximum: u16,
+    pub reason_string: Option<String>,
+    pub user_properties: Vec<(String, String)>,
+    pub wildcard_subscription_available: bool,
+    pub subscription_identifiers_available: bool,
+    pub shared_subscription_available: bool,
+    pub server_keep_alive: Option<KeepAlive>,
+    pub response_information: Option<String>,
+    pub server_reference: Option<String>,
+    //pub authentication                    // TODO: Add auth support
+}
+
+impl Default for ConnAckProperties {
+    fn default() -> Self {
+        ConnAckProperties {
+            session_expiry_interval: None,
+            receive_maximum: NonZeroU16::MAX,
+            maximum_qos: QoS::ExactlyOnce,
+            retain_available: true,
+            maximum_packet_size: NonZeroU32::MAX,
+            assigned_client_identifier: None,
+            topic_alias_maximum: 0,
+            reason_string: None,
+            user_properties: Vec::new(),
+            wildcard_subscription_available: true,
+            subscription_identifiers_available: true,
+            shared_subscription_available: true,
+            server_keep_alive: None,
+            response_information: None,
+            server_reference: None,
+        }
+    }
+}
+
+impl<S> From<mqtt_proto::ConnAckOtherProperties<S>> for ConnAckProperties
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::ConnAckOtherProperties<S>) -> ConnAckProperties {
+        ConnAckProperties {
+            session_expiry_interval: value.session_expiry_interval,
+            receive_maximum: value.receive_maximum,
+            maximum_qos: value.maximum_qos.into(),
+            retain_available: value.retain_available,
+            maximum_packet_size: value.maximum_packet_size,
+            assigned_client_identifier: value.assigned_client_id.map(|s| s.to_string()),
+            topic_alias_maximum: value.topic_alias_maximum,
+            reason_string: value.reason_string.map(|s| s.to_string()),
+            user_properties: value
+                .user_properties
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            wildcard_subscription_available: value.wildcard_subscription_available,
+            subscription_identifiers_available: value.subscription_identifiers_available,
+            shared_subscription_available: value.shared_subscription_available,
+            server_keep_alive: value.server_keep_alive,
+            response_information: value.response_information.map(|s| s.to_string()),
+            server_reference: value.server_reference.map(|s| s.to_string()),
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::ConnAckOtherProperties<O::Shared>, O> for ConnAckProperties
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::ConnAckOtherProperties<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::ConnAckOtherProperties {
+            session_expiry_interval: self.session_expiry_interval,
+            receive_maximum: self.receive_maximum,
+            maximum_qos: self.maximum_qos.into(),
+            retain_available: self.retain_available,
+            maximum_packet_size: self.maximum_packet_size,
+            assigned_client_id: self
+                .assigned_client_identifier
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+            topic_alias_maximum: self.topic_alias_maximum,
+            reason_string: self
+                .reason_string
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
+            wildcard_subscription_available: self.wildcard_subscription_available,
+            subscription_identifiers_available: self.subscription_identifiers_available,
+            shared_subscription_available: self.shared_subscription_available,
+            server_keep_alive: self.server_keep_alive,
+            response_information: self
+                .response_information
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+            server_reference: self
+                .server_reference
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+            authentication: None, // TODO: Add auth support
+        })
+    }
 }
 
 /// Properties for a PUBLISH
@@ -869,6 +1091,61 @@ pub enum ConnAckReason {
     UseAnotherServer = 0x9C,
     ServerMoved = 0x9D,
     ConnectionRateExceeded = 0x9F,
+}
+
+// NOTE: Unlike all other reason code enums, ConnAckReason cannot be converted back into an
+// mqtt_proto equivalent, because there is a nesting of success vs. failure, so there is no valid
+// target for Success 0x00
+impl From<mqtt_proto::ConnectionRefusedReason> for ConnAckReason {
+    fn from(value: mqtt_proto::ConnectionRefusedReason) -> ConnAckReason {
+        match value {
+            mqtt_proto::ConnectionRefusedReason::UnspecifiedError => {
+                ConnAckReason::UnspecifiedError
+            }
+            mqtt_proto::ConnectionRefusedReason::MalformedPacket => ConnAckReason::MalformedPacket,
+            mqtt_proto::ConnectionRefusedReason::ProtocolError => ConnAckReason::ProtocolError,
+            mqtt_proto::ConnectionRefusedReason::ImplementationSpecificError => {
+                ConnAckReason::ImplementationSpecificError
+            }
+            mqtt_proto::ConnectionRefusedReason::UnsupportedProtocolVersion => {
+                ConnAckReason::UnsupportedProtocolVersion
+            }
+            mqtt_proto::ConnectionRefusedReason::ClientIdentifierNotValid => {
+                ConnAckReason::ClientIdentifierNotValid
+            }
+            mqtt_proto::ConnectionRefusedReason::BadUserNameOrPassword => {
+                ConnAckReason::BadUserNameOrPassword
+            }
+            mqtt_proto::ConnectionRefusedReason::NotAuthorized => ConnAckReason::NotAuthorized,
+            mqtt_proto::ConnectionRefusedReason::ServerUnavailable => {
+                ConnAckReason::ServerUnavailable
+            }
+            mqtt_proto::ConnectionRefusedReason::ServerBusy => ConnAckReason::ServerBusy,
+            mqtt_proto::ConnectionRefusedReason::Banned => ConnAckReason::Banned,
+            mqtt_proto::ConnectionRefusedReason::BadAuthenticationMethod => {
+                ConnAckReason::BadAuthenticationMethod
+            }
+            mqtt_proto::ConnectionRefusedReason::TopicNameInvalid => {
+                ConnAckReason::TopicNameInvalid
+            }
+            mqtt_proto::ConnectionRefusedReason::PacketTooLarge => ConnAckReason::PacketTooLarge,
+            mqtt_proto::ConnectionRefusedReason::QuotaExceeded => ConnAckReason::QuotaExceeded,
+            mqtt_proto::ConnectionRefusedReason::PayloadFormatInvalid => {
+                ConnAckReason::PayloadFormatInvalid
+            }
+            mqtt_proto::ConnectionRefusedReason::RetainNotSupported => {
+                ConnAckReason::RetainNotSupported
+            }
+            mqtt_proto::ConnectionRefusedReason::QoSNotSupported => ConnAckReason::QoSNotSupported,
+            mqtt_proto::ConnectionRefusedReason::UseAnotherServer => {
+                ConnAckReason::UseAnotherServer
+            }
+            mqtt_proto::ConnectionRefusedReason::ServerMoved => ConnAckReason::ServerMoved,
+            mqtt_proto::ConnectionRefusedReason::ConnectionRateExceeded => {
+                ConnAckReason::ConnectionRateExceeded
+            }
+        }
+    }
 }
 
 /// Reason code for a PUBACK
@@ -1474,13 +1751,17 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::buffer_pool::{
-        BufferPool as _,
-        tests::{BufferPoolImpl, OwnedImpl, SharedImpl},
-    };
     use crate::mqtt_proto::{binary_data, byte_str, topic};
-    use crate::packet::{self, IntoBuffered, PacketIdentifier};
+    use crate::packet::{self, IntoBuffered, PacketIdentifier, SessionExpiryInterval};
+    use crate::{
+        buffer_pool::{
+            BufferPool as _,
+            tests::{BufferPoolImpl, OwnedImpl, SharedImpl},
+        },
+        packet::KeepAlive,
+    };
     use crate::{mqtt_proto, topic};
+    use std::num::{NonZeroU16, NonZeroU32};
 
     use paste::paste;
 
@@ -1569,8 +1850,14 @@ mod test {
     #[test]
     /// Validate that default values for property structures are the same on the public and internal types
     fn property_defaults() {
-        // TODO: expand to include all defaultable types
-
+        compare_as_buffered(
+            packet::ConnectProperties::default(),
+            mqtt_proto::ConnectOtherProperties::default(),
+        );
+        compare_as_buffered(
+            packet::ConnAckProperties::default(),
+            mqtt_proto::ConnAckOtherProperties::default(),
+        );
         compare_as_buffered(
             packet::PublishProperties::default(),
             mqtt_proto::PublishOtherProperties::default(),
@@ -1612,6 +1899,89 @@ mod test {
             mqtt_proto::DisconnectOtherProperties::default(),
         );
     }
+
+    test_property_converions!(
+        connect,
+        packet::ConnectProperties {
+            session_expiry_interval: SessionExpiryInterval::Duration(3600),
+            receive_maximum: NonZeroU16::new(100).unwrap(),
+            maximum_packet_size: NonZeroU32::new(1024).unwrap(),
+            topic_alias_maximum: 10,
+            request_response_information: true,
+            request_problem_information: false,
+            user_properties: vec![
+                ("key1".to_string(), "value1".to_string()),
+                ("key2".to_string(), "value2".to_string()),
+            ],
+        },
+        mqtt_proto::ConnectOtherProperties {
+            session_expiry_interval: SessionExpiryInterval::Duration(3600),
+            receive_maximum: NonZeroU16::new(100).unwrap(),
+            maximum_packet_size: NonZeroU32::new(1024).unwrap(),
+            topic_alias_maximum: 10,
+            request_response_information: true,
+            request_problem_information: false,
+            user_properties: vec![
+                (byte_str("key1"), byte_str("value1")),
+                (byte_str("key2"), byte_str("value2")),
+            ],
+            authentication: None, // TODO: add support
+        }
+    );
+
+    test_packet_and_property_conversions!(
+        connack,
+        packet::ConnAck {
+            session_present: true,
+            reason: packet::ConnAckReason::Success,
+            properties: packet::ConnAckProperties {
+                session_expiry_interval: Some(SessionExpiryInterval::Duration(3600)),
+                receive_maximum: NonZeroU16::new(100).unwrap(),
+                maximum_qos: packet::QoS::AtLeastOnce,
+                retain_available: true,
+                maximum_packet_size: NonZeroU32::new(1024).unwrap(),
+                assigned_client_identifier: Some("client_id".to_string()),
+                topic_alias_maximum: 10,
+                reason_string: Some("Not authorized".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+                wildcard_subscription_available: true,
+                subscription_identifiers_available: true,
+                shared_subscription_available: false,
+                server_keep_alive: Some(KeepAlive::Duration(NonZeroU16::new(30).unwrap())),
+                response_information: Some("response info".to_string()),
+                server_reference: Some("server ref".to_string()),
+            },
+        },
+        mqtt_proto::ConnAck {
+            reason_code: mqtt_proto::ConnectReasonCode::Success {
+                session_present: true
+            },
+            other_properties: mqtt_proto::ConnAckOtherProperties {
+                session_expiry_interval: Some(SessionExpiryInterval::Duration(3600)),
+                receive_maximum: NonZeroU16::new(100).unwrap(),
+                maximum_qos: mqtt_proto::QoS::AtLeastOnce,
+                retain_available: true,
+                maximum_packet_size: NonZeroU32::new(1024).unwrap(),
+                assigned_client_id: Some(byte_str("client_id")),
+                topic_alias_maximum: 10,
+                reason_string: Some(byte_str("Not authorized")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+                wildcard_subscription_available: true,
+                subscription_identifiers_available: true,
+                shared_subscription_available: false,
+                server_keep_alive: Some(KeepAlive::Duration(NonZeroU16::new(30).unwrap())),
+                response_information: Some(byte_str("response info")),
+                server_reference: Some(byte_str("server ref")),
+                authentication: None, // TODO: add support
+            },
+        }
+    );
 
     test_packet_and_property_conversions!(
         publish,
