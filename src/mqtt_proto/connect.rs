@@ -28,7 +28,6 @@ where
     pub client_id: Option<ByteStr<S>>,
     pub clean_start: bool,
     pub keep_alive: KeepAlive,
-    pub session_expiry_interval: ConnectSessionExpiryInterval,
     pub other_properties: ConnectOtherProperties<S>,
 }
 
@@ -38,6 +37,7 @@ pub struct ConnectOtherProperties<S>
 where
     S: Shared,
 {
+    pub session_expiry_interval: SessionExpiryInterval,
     pub receive_maximum: NonZeroU16,
     pub maximum_packet_size: NonZeroU32,
     pub topic_alias_maximum: u16,
@@ -46,12 +46,6 @@ where
     pub user_properties: UserProperties<S>,
     pub authentication: Option<Authentication<S>>,
 }
-
-/// A wrapper around [`SessionExpiryInterval`] to have different encoding semantics.
-/// `ConnectSessionExpiryInterval` is not emitted when it is 0 to match the semantics of
-/// the Session Expiry Interval property in CONNECT packets.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct ConnectSessionExpiryInterval(pub SessionExpiryInterval);
 
 impl<S> Connect<S>
 where
@@ -153,8 +147,10 @@ where
             client_id,
             clean_start,
             keep_alive,
-            session_expiry_interval: session_expiry_interval.into(),
-            other_properties: Default::default(),
+            other_properties: ConnectOtherProperties {
+                session_expiry_interval,
+                ..Default::default()
+            },
         })
     }
 
@@ -254,9 +250,9 @@ where
             client_id,
             clean_start,
             keep_alive,
-            session_expiry_interval: session_expiry_interval
-                .map_or_else(Default::default, ConnectSessionExpiryInterval),
             other_properties: ConnectOtherProperties {
+                session_expiry_interval: session_expiry_interval
+                    .unwrap_or(SessionExpiryInterval::Duration(0)),
                 receive_maximum: receive_maximum.unwrap_or(NonZeroU16::MAX),
                 maximum_packet_size: maximum_packet_size.unwrap_or(NonZeroU32::MAX),
                 topic_alias_maximum: topic_alias_maximum.unwrap_or(0),
@@ -304,7 +300,6 @@ where
             client_id,
             clean_start: self.clean_start,
             keep_alive: self.keep_alive,
-            session_expiry_interval: self.session_expiry_interval,
             other_properties: self.other_properties.to_shared(owned)?,
         })
     }
@@ -323,7 +318,6 @@ where
             client_id,
             clean_start,
             keep_alive,
-            session_expiry_interval,
             other_properties,
         } = self;
 
@@ -333,7 +327,6 @@ where
             .field("client_id", client_id)
             .field("clean_start", clean_start)
             .field("keep_alive", keep_alive)
-            .field("session_expiry_interval", session_expiry_interval)
             .field("other_properties", other_properties)
             .finish()
     }
@@ -370,7 +363,6 @@ where
             client_id,
             clean_start,
             keep_alive,
-            session_expiry_interval,
             other_properties,
         } = self;
 
@@ -412,6 +404,7 @@ where
 
         if version.is_v5() {
             let ConnectOtherProperties {
+                session_expiry_interval,
                 receive_maximum,
                 maximum_packet_size,
                 topic_alias_maximum,
@@ -529,6 +522,7 @@ where
         };
 
         Ok(ConnectOtherProperties {
+            session_expiry_interval: self.session_expiry_interval,
             receive_maximum: self.receive_maximum,
             maximum_packet_size: self.maximum_packet_size,
             topic_alias_maximum: self.topic_alias_maximum,
@@ -580,6 +574,7 @@ where
 {
     fn default() -> Self {
         Self {
+            session_expiry_interval: SessionExpiryInterval::Duration(0),
             receive_maximum: NonZeroU16::MAX,
             maximum_packet_size: NonZeroU32::MAX,
             topic_alias_maximum: 0,
@@ -588,27 +583,6 @@ where
             user_properties: vec![],
             authentication: None,
         }
-    }
-}
-
-impl Default for ConnectSessionExpiryInterval {
-    fn default() -> Self {
-        Self(SessionExpiryInterval::Duration(0))
-    }
-}
-
-impl<T> From<T> for ConnectSessionExpiryInterval
-where
-    T: Into<SessionExpiryInterval>,
-{
-    fn from(inner: T) -> Self {
-        Self(inner.into())
-    }
-}
-
-impl From<ConnectSessionExpiryInterval> for u32 {
-    fn from(value: ConnectSessionExpiryInterval) -> Self {
-        value.0.into()
     }
 }
 
@@ -636,8 +610,10 @@ mod tests {
             client_id: Some(byte_str("kittens")),
             clean_start: false,
             keep_alive: 30.into(),
-            session_expiry_interval: SessionExpiryInterval::Infinite.into(),
-            other_properties: Default::default(),
+            other_properties: ConnectOtherProperties {
+                session_expiry_interval: SessionExpiryInterval::Infinite,
+                ..Default::default()
+            },
         }),
 
         Packet::Connect(Connect {
@@ -647,8 +623,10 @@ mod tests {
             client_id: None,
             clean_start: true,
             keep_alive: 30.into(),
-            session_expiry_interval: Default::default(),
-            other_properties: Default::default(),
+            other_properties: ConnectOtherProperties {
+                session_expiry_interval: SessionExpiryInterval::Duration(0),
+                ..Default::default()
+            },
         }),
 
         Packet::Connect(Connect {
@@ -671,7 +649,6 @@ mod tests {
             client_id: Some(byte_str("kittens")),
             clean_start: true,
             keep_alive: 30.into(),
-            session_expiry_interval: Default::default(),
             other_properties: Default::default(),
         }),
     }
@@ -684,8 +661,8 @@ mod tests {
             client_id: None,
             clean_start: true,
             keep_alive: 10.into(),
-            session_expiry_interval: Default::default(),
             other_properties: ConnectOtherProperties {
+                session_expiry_interval: SessionExpiryInterval::Duration(0),
                 receive_maximum: NonZeroU16::new(11).unwrap(),
                 maximum_packet_size: NonZeroU32::new(10).unwrap(),
                 topic_alias_maximum: 10,
@@ -703,8 +680,8 @@ mod tests {
             client_id: None,
             clean_start: false,
             keep_alive: 10.into(),
-            session_expiry_interval: Default::default(),
             other_properties: ConnectOtherProperties {
+                session_expiry_interval: SessionExpiryInterval::Duration(0),
                 receive_maximum: NonZeroU16::new(11).unwrap(),
                 maximum_packet_size: NonZeroU32::new(10).unwrap(),
                 topic_alias_maximum: 10,
@@ -722,8 +699,8 @@ mod tests {
             client_id: Some(byte_str("client_id")),
             clean_start: true,
             keep_alive: 10.into(),
-            session_expiry_interval: Default::default(),
             other_properties: ConnectOtherProperties {
+                session_expiry_interval: SessionExpiryInterval::Duration(0),
                 receive_maximum: NonZeroU16::new(11).unwrap(),
                 maximum_packet_size: NonZeroU32::new(10).unwrap(),
                 topic_alias_maximum: 10,
@@ -757,8 +734,8 @@ mod tests {
             client_id: Some(byte_str("client_id")),
             clean_start: false,
             keep_alive: 10.into(),
-            session_expiry_interval: SessionExpiryInterval::Duration(30).into(),
             other_properties: ConnectOtherProperties {
+                session_expiry_interval: SessionExpiryInterval::Duration(30),
                 receive_maximum: NonZeroU16::new(11).unwrap(),
                 maximum_packet_size: NonZeroU32::new(10).unwrap(),
                 topic_alias_maximum: 10,
@@ -895,7 +872,6 @@ mod tests {
                     client_id: None,
                     clean_start: true,
                     keep_alive: 10.into(),
-                    session_expiry_interval: Default::default(),
                     other_properties: Default::default(),
                 })
             );
@@ -910,7 +886,6 @@ mod tests {
             client_id: None,
             clean_start: true,
             keep_alive: 10.into(),
-            session_expiry_interval: Default::default(),
             other_properties: Default::default(),
         });
         let new_encoding = tests::try_encode(&packet, version);

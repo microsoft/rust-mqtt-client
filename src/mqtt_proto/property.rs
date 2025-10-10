@@ -10,8 +10,7 @@ use std::{
 
 use crate::buffer_pool::{BytesAccumulator, Shared};
 use crate::mqtt_proto::{
-    BinaryData, ByteCounter, ByteStr, ConnectSessionExpiryInterval, DecodeError, EncodeError, QoS,
-    SharedExt as _, Topic,
+    BinaryData, ByteCounter, ByteStr, DecodeError, EncodeError, QoS, SharedExt as _, Topic,
 };
 use crate::mqtt_proto::{
     decode_remaining_length, decode_varint, encode_remaining_length, encode_varint,
@@ -167,7 +166,7 @@ generate_enum_and_enum_ref! {
     AuthenticationMethod(ByteStr<S>),
 
     /// Ref: 3.1.2.11.2 Session Expiry Interval (CONNECT)
-    ConnectSessionExpiryInterval(ConnectSessionExpiryInterval),
+    ConnectSessionExpiryInterval(SessionExpiryInterval),
 
     /// Ref: 3.1.3.2.5 Content Type
     ContentType(ByteStr<S>),
@@ -559,7 +558,7 @@ where
 
             Self::ConnectSessionExpiryInterval(&interval) => {
                 if u32::from(interval) > 0 {
-                    PropertyRef::SessionExpiryInterval(&interval.0).encode(dst)?;
+                    PropertyRef::SessionExpiryInterval(&interval).encode(dst)?;
                 }
             }
 

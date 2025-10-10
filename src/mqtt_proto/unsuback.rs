@@ -17,6 +17,7 @@ where
     S: Shared,
 {
     pub packet_identifier: PacketIdentifier,
+    pub reason_codes: Vec<UnsubAckReasonCode>,
     pub other_properties: UnsubAckOtherProperties<S>,
 }
 
@@ -28,7 +29,6 @@ where
 {
     pub reason_string: Option<ByteStr<S>>,
     pub user_properties: UserProperties<S>,
-    pub reason_codes: Vec<UnsubAckReasonCode>,
 }
 
 define_u8_code! {
@@ -55,6 +55,7 @@ where
     {
         Ok(UnsubAck {
             packet_identifier: self.packet_identifier,
+            reason_codes: self.reason_codes.clone(),
             other_properties: self.other_properties.to_shared(owned)?,
         })
     }
@@ -69,7 +70,7 @@ where
     fn decode(_flags: u8, src: &mut S, version: ProtocolVersion) -> Result<Self, DecodeError> {
         let packet_identifier = src.try_get_packet_identifier()?;
 
-        let other_properties = match version {
+        let (reason_codes, other_properties) = match version {
             ProtocolVersion::V3 => Default::default(),
 
             ProtocolVersion::V5 => {
@@ -91,16 +92,19 @@ where
                     return Err(DecodeError::NoTopics);
                 }
 
-                UnsubAckOtherProperties {
-                    reason_string,
-                    user_properties,
+                (
                     reason_codes,
-                }
+                    UnsubAckOtherProperties {
+                        reason_string,
+                        user_properties,
+                    },
+                )
             }
         };
 
         Ok(Self {
             packet_identifier,
+            reason_codes,
             other_properties,
         })
     }
@@ -111,11 +115,11 @@ where
     {
         let Self {
             packet_identifier,
+            reason_codes,
             other_properties:
                 UnsubAckOtherProperties {
                     reason_string,
                     user_properties,
-                    reason_codes,
                 },
         } = self;
 
@@ -178,7 +182,6 @@ where
         Ok(UnsubAckOtherProperties {
             reason_string,
             user_properties,
-            reason_codes: self.reason_codes.clone(),
         })
     }
 }
@@ -199,6 +202,7 @@ mod tests {
     encode_decode_v3! {
         Packet::UnsubAck(UnsubAck {
             packet_identifier: PacketIdentifier::new(1).unwrap(),
+            reason_codes: vec![],
             other_properties: Default::default(),
         }),
     }
@@ -206,18 +210,18 @@ mod tests {
     encode_decode_v5! {
         Packet::UnsubAck(UnsubAck {
             packet_identifier: PacketIdentifier::new(0x1234).unwrap(),
+            reason_codes: vec![
+                UnsubAckReasonCode::Success,
+                UnsubAckReasonCode::NoSubscriptionExisted,
+                UnsubAckReasonCode::UnspecifiedError,
+                UnsubAckReasonCode::ImplementationSpecificError,
+                UnsubAckReasonCode::NotAuthorized,
+                UnsubAckReasonCode::TopicFilterInvalid,
+                UnsubAckReasonCode::PacketIdentifierInUse,
+            ],
             other_properties: UnsubAckOtherProperties {
                 reason_string: Some(byte_str("reason")),
                 user_properties: vec![(byte_str("foo"), byte_str("bar"))],
-                reason_codes: vec![
-                    UnsubAckReasonCode::Success,
-                    UnsubAckReasonCode::NoSubscriptionExisted,
-                    UnsubAckReasonCode::UnspecifiedError,
-                    UnsubAckReasonCode::ImplementationSpecificError,
-                    UnsubAckReasonCode::NotAuthorized,
-                    UnsubAckReasonCode::TopicFilterInvalid,
-                    UnsubAckReasonCode::PacketIdentifierInUse,
-                ],
             },
         }),
     }
@@ -242,10 +246,10 @@ mod tests {
 
         let packet = Packet::UnsubAck(UnsubAck {
             packet_identifier: PacketIdentifier::new(0x1234).unwrap(),
+            reason_codes: vec![reason],
             other_properties: UnsubAckOtherProperties {
                 reason_string: Some(byte_str(reason_str)),
                 user_properties: vec![],
-                reason_codes: vec![reason],
             },
         });
 
