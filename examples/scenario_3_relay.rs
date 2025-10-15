@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use azure_mqtt::client::{Client, ClientOptions, Disconnected, Receiver, new_client};
+use azure_mqtt::client::{Client, ClientOptions, ConnectHandle, Receiver, new_client};
 use azure_mqtt::packet::{
     ConnectProperties, ConnectionTransportConfig, DeliveryQoS, QoS, SubscribeProperties,
 };
@@ -38,9 +38,9 @@ async fn main() {
     }
 }
 
-async fn mqtt_run(mut disconnected: Disconnected) {
+async fn mqtt_run(mut connect_handle: ConnectHandle) {
     loop {
-        let (connected, _, _) = disconnected
+        let (connected, _, _) = connect_handle
             .connect(
                 ConnectionTransportConfig::Tcp {
                     hostname: "localhost".to_owned(),
@@ -50,7 +50,7 @@ async fn mqtt_run(mut disconnected: Disconnected) {
             )
             .await;
         println!("Connected to MQTT broker");
-        (disconnected, _) = connected.poll().await;
+        (connect_handle, _) = connected.run_until_disconnect().await;
         println!("Disconnected from MQTT broker");
         println!("Connection lost, will reconnect in 5 seconds...");
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;

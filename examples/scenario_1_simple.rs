@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use azure_mqtt::client::{AckHandle, Client, ClientOptions, Connected, Receiver, new_client};
+use azure_mqtt::client::{AckHandle, Client, ClientOptions, Connection, Receiver, new_client};
 use azure_mqtt::packet::{
     ConnectProperties, ConnectionTransportConfig, PubAckProperties, PubCompProperties,
     PubRecProperties, PublishProperties, QoS, SubscribeProperties,
@@ -75,9 +75,8 @@ async fn program(client: Client) {
     }
 }
 
-#[allow(unreachable_code, unused)] // TODO: Remove when todo!()s are resolved
-async fn connection_runner(mut event_loop: Connected) {
-    _ = event_loop.poll().await;
+async fn connection_runner(connection: Connection) {
+    _ = connection.run_until_disconnect().await;
     println!("Disconnected from MQTT broker");
 }
 

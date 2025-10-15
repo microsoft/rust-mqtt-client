@@ -21,7 +21,7 @@ use crate::topic::{TopicFilter, TopicName};
 // It also isn't symmetrical with the IncomingPublish type.
 // Revisit naming.
 
-pub struct DisconnectRequest(DisconnectProperties);
+pub struct DisconnectRequest(pub(crate) DisconnectProperties);
 
 /// Request to send a PUBLISH packet.
 #[allow(clippy::redundant_field_names)]

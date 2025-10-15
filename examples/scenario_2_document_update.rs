@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use azure_mqtt::client::{AckHandle, Client, ClientOptions, Disconnected, Receiver, new_client};
+use azure_mqtt::client::{AckHandle, Client, ClientOptions, ConnectHandle, Receiver, new_client};
 use azure_mqtt::packet::{
     ConnectProperties, ConnectionTransportConfig, Publish, QoS, SubscribeProperties,
 };
@@ -65,7 +65,7 @@ async fn mqtt_receive(
 }
 
 async fn mqtt_run(
-    mut disconnected: Disconnected,
+    mut connect_handle: ConnectHandle,
     client: Client,
     mut get_rx: UnboundedReceiver<(Publish, AckHandle)>,
     mut update_rx: UnboundedReceiver<(Publish, AckHandle)>,
@@ -73,7 +73,7 @@ async fn mqtt_run(
     // Loop so that if we disconnect, we can reconnect.
     loop {
         println!("Attempting to connect to MQTT broker...");
-        let (connected, _, _) = disconnected
+        let (connected, _, _) = connect_handle
             .connect(
                 ConnectionTransportConfig::Tcp {
                     hostname: "localhost".to_owned(),
@@ -85,7 +85,7 @@ async fn mqtt_run(
         println!("Connected to MQTT broker");
 
         tokio::select! {
-            (disconnected_, _) = connected.poll() => {
+            (connect_handle_, _) = connected.run_until_disconnect() => {
                 // Drain the updates channel since we no longer want any of them
                 // and we will be reconnecting with clean start true.
                 // This will implicitly ack the messages, but again, we are discarding the session.
@@ -93,7 +93,7 @@ async fn mqtt_run(
                     update_rx.try_recv().unwrap();
                 }
 
-                disconnected = disconnected_;
+                connect_handle = connect_handle_;
                 println!("Disconnect detected, will reconnect in 5 seconds...");
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }

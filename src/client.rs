@@ -24,9 +24,9 @@ use crate::mqtt_proto::{
     Connect, ConnectOtherProperties, KeepAlive, Packet, ProtocolVersion, SessionExpiryInterval,
 };
 use crate::packet::{
-    AuthProperties, ConnAck, ConnectProperties, ConnectionTransportConfig, PacketIdentifier,
-    PubAck, PubRec, Publish, PublishProperties, QoS, SubAck, SubscribeProperties, UnsubAck,
-    UnsubscribeProperties,
+    AuthProperties, ConnAck, ConnectProperties, ConnectionTransportConfig, Disconnect,
+    DisconnectProperties, PacketIdentifier, PubAck, PubRec, Publish, PublishProperties, QoS,
+    SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
 };
 use crate::token::{CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair};
 use crate::topic::{TopicFilter, TopicName};
@@ -41,7 +41,7 @@ mod session;
 
 /// Creates the three components needed to run the MQTT client
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
-pub fn new_client(options: ClientOptions) -> (Client, Disconnected, Receiver) {
+pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
     // owned by the internal session state. If this becomes a performance bottleneck, revisit.
     let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(1);
@@ -61,7 +61,7 @@ pub fn new_client(options: ClientOptions) -> (Client, Disconnected, Receiver) {
         i_pub_tx,
         PacketIdentifier::new(100).expect("100 is always okay"), // TODO: customizable
     );
-    let event_loop = Disconnected {
+    let connect_handle = ConnectHandle {
         inner: EventLoop {
             session,
             reader_pool: BufferPoolImpl,
@@ -69,7 +69,7 @@ pub fn new_client(options: ClientOptions) -> (Client, Disconnected, Receiver) {
         },
     };
     let receiver = Receiver { rx: i_pub_rx };
-    (client, event_loop, receiver)
+    (client, connect_handle, receiver)
 }
 
 /// Options for configuring the MQTT client
@@ -228,17 +228,17 @@ impl Receiver {
     }
 }
 
-pub struct Disconnected {
+pub struct ConnectHandle {
     inner: EventLoop,
 }
 
-impl Disconnected {
-    // TODO: Return something like Result<(Connected, ConnAck, DisconnectHandle), (Disconnected, ConnAck)>
+impl ConnectHandle {
+    // TODO: Return something like Result<(Connection, ConnAck, DisconnectHandle), (ConnectHandle, ConnAck)>
     pub async fn connect(
         self,
         connection_transport: ConnectionTransportConfig,
         _properties: ConnectProperties,
-    ) -> (Connected, ConnAck, DisconnectHandle) {
+    ) -> (Connection, ConnAck, DisconnectHandle) {
         let mut inner = self.inner;
 
         let (mut reader, mut writer) = match connection_transport {
@@ -302,7 +302,7 @@ impl Disconnected {
 
         inner.session.ch.disconnect_rx = Some(disconnect_rx);
         (
-            Connected {
+            Connection {
                 inner,
                 reader,
                 writer,
@@ -314,16 +314,16 @@ impl Disconnected {
 }
 
 /// Runs the MQTT client event loop, keeping the client operational.
-pub struct Connected {
+pub struct Connection {
     inner: EventLoop,
     reader: Reader<BufferPoolImpl>,
     writer: Writer<BufferPoolImpl>,
 }
 
-impl Connected {
-    /// Polls for an event from the event loop.
-    /// As long as the event loop is being polled, the MQTT client will continue to run.
-    pub async fn poll(mut self) -> (Disconnected, DisconnectedEvent) {
+impl Connection {
+    /// Drives this connection until it is disconnected.
+    /// Packets will only be sent and received while this future is running.
+    pub async fn run_until_disconnect(mut self) -> (ConnectHandle, DisconnectedEvent) {
         let (reader, writer) = (&mut self.reader, &mut self.writer);
 
         loop {
@@ -343,17 +343,17 @@ impl Connected {
             match next {
                 // Outgoing packet from session
                 future::Either::Left(mut packet) => {
-                    let mut disconnect = false;
+                    let mut disconnect = None;
                     while let Some(packet_) = packet {
                         if let Packet::Disconnect(disconnect_) = &packet_ {
-                            disconnect = true;
+                            disconnect = Some(disconnect_.clone().into());
                             self.inner.session.client_disconnect(disconnect_);
                         }
                         writer
                             .write(&packet_, ProtocolVersion::V5)
                             .await
                             .expect("TODO: error handling");
-                        if disconnect {
+                        if disconnect.is_some() {
                             break;
                         }
                         packet = self
@@ -365,10 +365,10 @@ impl Connected {
                     }
                     writer.flush().await.expect("TODO: error handling");
                     // If we wrote a DISCONNECT packet, also close the connection.
-                    if disconnect {
+                    if let Some(disconnect) = disconnect {
                         return (
-                            Disconnected { inner: self.inner },
-                            DisconnectedEvent::UserRequested,
+                            ConnectHandle { inner: self.inner },
+                            DisconnectedEvent::UserRequested(disconnect),
                         );
                     }
                 }
@@ -383,11 +383,6 @@ impl Connected {
                     .expect("TODO: error handling");
 
                     match packet {
-                        Packet::ConnAck(connack) => self
-                            .inner
-                            .session
-                            .complete_inflight(CompletedOperation::Connect(connack)),
-
                         Packet::SubAck(suback) => self
                             .inner
                             .session
@@ -411,8 +406,8 @@ impl Connected {
                         Packet::Disconnect(disconnect) => {
                             self.inner.session.server_disconnect(&disconnect);
                             return (
-                                Disconnected { inner: self.inner },
-                                DisconnectedEvent::ServerRequested,
+                                ConnectHandle { inner: self.inner },
+                                DisconnectedEvent::ServerRequested(disconnect.into()),
                             );
                         }
 
@@ -427,7 +422,7 @@ impl Connected {
                 future::Either::Right(Err(err)) => {
                     self.inner.session.transport_disconnect(&err);
                     return (
-                        Disconnected { inner: self.inner },
+                        ConnectHandle { inner: self.inner },
                         DisconnectedEvent::Transport,
                     );
                 }
@@ -439,8 +434,8 @@ impl Connected {
 pub struct DisconnectHandle(tokio::sync::oneshot::Sender<DisconnectRequest>);
 
 impl DisconnectHandle {
-    pub fn disconnect(self, req: DisconnectRequest) {
-        _ = self.0.send(req);
+    pub fn disconnect(self, properties: DisconnectProperties) {
+        _ = self.0.send(DisconnectRequest(properties));
     }
 }
 
@@ -462,8 +457,8 @@ struct EventLoop {
 
 pub enum DisconnectedEvent {
     Transport,
-    UserRequested,
-    ServerRequested,
+    UserRequested(Disconnect),
+    ServerRequested(Disconnect),
 }
 
 // TODO: this has to be clonable
