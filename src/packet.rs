@@ -440,6 +440,20 @@ where
 
 //////////////////// Properties ////////////////////
 
+/// Parameters for establishing a new connection.
+pub enum ConnectionTransportConfig {
+    Tcp {
+        hostname: String,
+        port: u16,
+    },
+    Tls {
+        hostname: String,
+    },
+    Ws {
+        request: async_tungstenite::tungstenite::handshake::client::Request,
+    },
+}
+
 /// Properties for a CONNECT
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectProperties {

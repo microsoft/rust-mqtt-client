@@ -1,12 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use azure_mqtt::client::{
-    AckHandle, Client, ClientOptions, Event, EventLoop, Receiver, new_client,
-};
+use azure_mqtt::client::{AckHandle, Client, ClientOptions, Connection, Receiver, new_client};
 use azure_mqtt::packet::{
-    ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
-    QoS, SubscribeProperties,
+    ConnectProperties, ConnectionTransportConfig, PubAckProperties, PubCompProperties,
+    PubRecProperties, PublishProperties, QoS, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -17,32 +15,19 @@ async fn main() {
         client_id: "my_client".to_string(),
         queue_size: 10,
     };
-    let (client, event_loop, receiver) = new_client(options);
+    let (client, disconnected, receiver) = new_client(options);
 
-    tokio::select! {
-        () = connection_runner(event_loop) => {
-            // Connection runner finished
-        }
-        () = receive(receiver) => {
-            // Receiver finished
-        }
-        () = program(client) => {
-            // Program finished
-        }
-    }
-}
-
-async fn program(client: Client) {
     // Connect to the MQTT broker and wait for the connection to complete
-    let connect_properties = ConnectProperties::default();
-    client
-        .connect(connect_properties)
-        .await
-        .unwrap()
-        .await
-        .unwrap()
-        .as_result()
-        .unwrap();
+    let (connected, _, _) = disconnected
+        .connect(
+            ConnectionTransportConfig::Tcp {
+                hostname: "localhost".to_owned(),
+                port: 1883,
+            },
+            ConnectProperties::default(),
+        )
+        .await;
+    println!("Connected to MQTT broker");
 
     // Subscribe to a topic and wait for the subscription to complete
     let subscribe_properties = SubscribeProperties::default();
@@ -59,6 +44,20 @@ async fn program(client: Client) {
         Err(e) => eprintln!("Failed to subscribe: {e:?}"),
     }
 
+    tokio::select! {
+        () = connection_runner(connected) => {
+            // Connection runner finished
+        }
+        () = receive(receiver) => {
+            // Receiver finished
+        }
+        () = program(client) => {
+            // Program finished
+        }
+    }
+}
+
+async fn program(client: Client) {
     loop {
         // Publish a message to the topic (with no regard for the acknowledgement)
         let publish_properties = PublishProperties::default();
@@ -76,17 +75,9 @@ async fn program(client: Client) {
     }
 }
 
-async fn connection_runner(mut event_loop: EventLoop) {
-    loop {
-        match event_loop.poll().await {
-            Event::Connected => {
-                println!("Connected to MQTT broker");
-            }
-            Event::Disconnected => {
-                println!("Disconnected from MQTT broker");
-            } // Handle other events as needed
-        }
-    }
+async fn connection_runner(connection: Connection) {
+    _ = connection.run_until_disconnect().await;
+    println!("Disconnected from MQTT broker");
 }
 
 async fn receive(mut receiver: Receiver) {

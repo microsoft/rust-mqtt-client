@@ -7,14 +7,13 @@ use bytes::Bytes;
 
 use crate::client::AckHandle;
 use crate::packet::{
-    ConnectProperties, DisconnectProperties, PubAck, PubComp, PubRec, PubRel, Publish,
-    PublishProperties, QoS, SubscribeProperties, UnsubscribeProperties,
+    DisconnectProperties, PubAck, PubComp, PubRec, PubRel, Publish, PublishProperties, QoS,
+    SubscribeProperties, UnsubscribeProperties,
 };
 use crate::token::{
-    ConnectCompletionNotifier, DisconnectCompletionNotifier, PubAckCompletionNotifier,
-    PubCompCompletionNotifier, PubRecCompletionNotifier, PubRelCompletionNotifier,
-    PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
-    SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+    PubAckCompletionNotifier, PubCompCompletionNotifier, PubRecCompletionNotifier,
+    PubRelCompletionNotifier, PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
+    PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -22,11 +21,7 @@ use crate::topic::{TopicFilter, TopicName};
 // It also isn't symmetrical with the IncomingPublish type.
 // Revisit naming.
 
-/// Request to send a connection-related packet
-pub enum ConnectionRequest {
-    Connect(ConnectCompletionNotifier, ConnectProperties),
-    Disconnect(DisconnectCompletionNotifier, DisconnectProperties),
-}
+pub struct DisconnectRequest(pub(crate) DisconnectProperties);
 
 /// Request to send a PUBLISH packet.
 #[allow(clippy::redundant_field_names)]
