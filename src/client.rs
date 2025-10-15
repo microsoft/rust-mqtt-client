@@ -62,11 +62,9 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         PacketIdentifier::new(100).expect("100 is always okay"), // TODO: customizable
     );
     let connect_handle = ConnectHandle {
-        inner: EventLoop {
-            session,
-            reader_pool: BufferPoolImpl,
-            writer_pool: BufferPoolImpl,
-        },
+        session,
+        reader_pool: BufferPoolImpl,
+        writer_pool: BufferPoolImpl,
     };
     let receiver = Receiver { rx: i_pub_rx };
     (client, connect_handle, receiver)
@@ -229,35 +227,35 @@ impl Receiver {
 }
 
 pub struct ConnectHandle {
-    inner: EventLoop,
+    session: Session<SharedImpl>,
+    reader_pool: BufferPoolImpl,
+    writer_pool: BufferPoolImpl,
 }
 
 impl ConnectHandle {
     // TODO: Return something like Result<(Connection, ConnAck, DisconnectHandle), (ConnectHandle, ConnAck)>
     pub async fn connect(
-        self,
+        mut self,
         connection_transport: ConnectionTransportConfig,
         _properties: ConnectProperties,
     ) -> (Connection, ConnAck, DisconnectHandle) {
-        let mut inner = self.inner;
-
         let (mut reader, mut writer) = match connection_transport {
             ConnectionTransportConfig::Tcp { hostname, port } => crate::io::tokio_tcp::connect(
                 (hostname, port),
-                &inner.reader_pool,
-                &inner.writer_pool,
+                &self.reader_pool,
+                &self.writer_pool,
             )
             .await
             .expect("TODO: error handling"),
 
             ConnectionTransportConfig::Tls { hostname } => {
-                crate::io::tokio_tls::connect(&hostname, &inner.reader_pool, &inner.writer_pool)
+                crate::io::tokio_tls::connect(&hostname, &self.reader_pool, &self.writer_pool)
                     .await
                     .expect("TODO: error handling")
             }
 
             ConnectionTransportConfig::Ws { request } => {
-                crate::io::tokio_ws::connect(request, &inner.reader_pool)
+                crate::io::tokio_ws::connect(request, &self.reader_pool)
                     .await
                     .expect("TODO: error handling")
             }
@@ -293,17 +291,18 @@ impl ConnectHandle {
         let Packet::ConnAck(connack) = packet else {
             panic!("TODO: error handling");
         };
-        inner
-            .session
+        self.session
             .complete_inflight(CompletedOperation::Connect(connack.clone()));
         let connack = connack.into();
 
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
 
-        inner.session.ch.disconnect_rx = Some(disconnect_rx);
+        self.session.ch.disconnect_rx = Some(disconnect_rx);
         (
             Connection {
-                inner,
+                session: self.session,
+                reader_pool: self.reader_pool,
+                writer_pool: self.writer_pool,
                 reader,
                 writer,
             },
@@ -315,7 +314,9 @@ impl ConnectHandle {
 
 /// Runs the MQTT client event loop, keeping the client operational.
 pub struct Connection {
-    inner: EventLoop,
+    session: Session<SharedImpl>,
+    reader_pool: BufferPoolImpl,
+    writer_pool: BufferPoolImpl,
     reader: Reader<BufferPoolImpl>,
     writer: Writer<BufferPoolImpl>,
 }
@@ -329,7 +330,7 @@ impl Connection {
         loop {
             // Check for outgoing packets from the session or incoming packets from the reader.
             let next = {
-                let next_outgoing_packet_f = pin!(self.inner.session.next_outgoing_packet());
+                let next_outgoing_packet_f = pin!(self.session.next_outgoing_packet());
                 let read_f = pin!(reader.read());
                 let f = future::select(next_outgoing_packet_f, read_f);
                 match f.await {
@@ -343,32 +344,31 @@ impl Connection {
             match next {
                 // Outgoing packet from session
                 future::Either::Left(mut packet) => {
-                    let mut disconnect = None;
+                    let mut disconnect = false;
                     while let Some(packet_) = packet {
                         if let Packet::Disconnect(disconnect_) = &packet_ {
-                            disconnect = Some(disconnect_.clone().into());
-                            self.inner.session.client_disconnect(disconnect_);
+                            disconnect = true;
+                            self.session.client_disconnect(disconnect_);
                         }
                         writer
                             .write(&packet_, ProtocolVersion::V5)
                             .await
                             .expect("TODO: error handling");
-                        if disconnect.is_some() {
+                        if disconnect {
                             break;
                         }
-                        packet = self
-                            .inner
-                            .session
-                            .next_outgoing_packet()
-                            .now_or_never()
-                            .flatten();
+                        packet = self.session.next_outgoing_packet().now_or_never().flatten();
                     }
                     writer.flush().await.expect("TODO: error handling");
                     // If we wrote a DISCONNECT packet, also close the connection.
-                    if let Some(disconnect) = disconnect {
+                    if disconnect {
                         return (
-                            ConnectHandle { inner: self.inner },
-                            DisconnectedEvent::UserRequested(disconnect),
+                            ConnectHandle {
+                                session: self.session,
+                                reader_pool: self.reader_pool,
+                                writer_pool: self.writer_pool,
+                            },
+                            DisconnectedEvent::UserRequested,
                         );
                     }
                 }
@@ -384,34 +384,34 @@ impl Connection {
 
                     match packet {
                         Packet::SubAck(suback) => self
-                            .inner
                             .session
                             .complete_inflight(CompletedOperation::Subscribe(suback)),
 
                         Packet::UnsubAck(unsuback) => self
-                            .inner
                             .session
                             .complete_inflight(CompletedOperation::Unsubscribe(unsuback)),
 
                         Packet::PubAck(puback) => self
-                            .inner
                             .session
                             .complete_inflight(CompletedOperation::PublishQoS1(puback)),
 
                         Packet::PubRec(pubrec) => self
-                            .inner
                             .session
                             .complete_inflight(CompletedOperation::PublishQoS2(pubrec)),
 
                         Packet::Disconnect(disconnect) => {
-                            self.inner.session.server_disconnect(&disconnect);
+                            self.session.server_disconnect(&disconnect);
                             return (
-                                ConnectHandle { inner: self.inner },
+                                ConnectHandle {
+                                    session: self.session,
+                                    reader_pool: self.reader_pool,
+                                    writer_pool: self.writer_pool,
+                                },
                                 DisconnectedEvent::ServerRequested(disconnect.into()),
                             );
                         }
 
-                        Packet::Publish(publish) => self.inner.session.incoming_publish(publish),
+                        Packet::Publish(publish) => self.session.incoming_publish(publish),
 
                         Packet::PingResp(_) => (),
 
@@ -420,9 +420,13 @@ impl Connection {
                 }
 
                 future::Either::Right(Err(err)) => {
-                    self.inner.session.transport_disconnect(&err);
+                    self.session.transport_disconnect(&err);
                     return (
-                        ConnectHandle { inner: self.inner },
+                        ConnectHandle {
+                            session: self.session,
+                            reader_pool: self.reader_pool,
+                            writer_pool: self.writer_pool,
+                        },
                         DisconnectedEvent::Transport,
                     );
                 }
@@ -434,21 +438,11 @@ impl Connection {
 pub struct DisconnectHandle(tokio::sync::oneshot::Sender<DisconnectRequest>);
 
 impl DisconnectHandle {
-    pub fn disconnect(self, properties: DisconnectProperties) {
-        _ = self.0.send(DisconnectRequest(properties));
+    pub fn disconnect(self, properties: DisconnectProperties) -> Result<(), ClientError> {
+        self.0
+            .send(DisconnectRequest(properties))
+            .map_err(|_| ClientError::DetachedClient)
     }
-}
-
-struct EventLoop {
-    // TODO: Should this be called Connection instead? I think that's semantically clearer, but, it precludes us
-    // from providing Events for certain things that aren't connection related, e.g. outgoing publish, etc, although
-    // it's unclear if those things are even valuable.
-    // Furthermore, it's somewhat confusing if the actual connect method is not on the Connection.
-    // ConnectionEventLoop?
-    // It'll really come down to what events get provided here I guess.
-    session: Session<SharedImpl>,
-    reader_pool: BufferPoolImpl,
-    writer_pool: BufferPoolImpl,
 }
 
 // TODO: How should disconnect be handled? DesiredDisconnect vs UnexpectedDisconnect? Or leave it up to the user to stitch that
@@ -457,7 +451,7 @@ struct EventLoop {
 
 pub enum DisconnectedEvent {
     Transport,
-    UserRequested(Disconnect),
+    UserRequested,
     ServerRequested(Disconnect),
 }
 
