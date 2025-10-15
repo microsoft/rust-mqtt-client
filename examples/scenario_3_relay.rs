@@ -1,12 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::sync::Arc;
-
-use tokio::sync::Notify;
-
-use azure_mqtt::client::{Client, ClientOptions, Event, EventLoop, Receiver, new_client};
-use azure_mqtt::packet::{ConnectProperties, DeliveryQoS, QoS, SubscribeProperties};
+use azure_mqtt::client::{Client, ClientOptions, Disconnected, Receiver, new_client};
+use azure_mqtt::packet::{
+    ConnectProperties, ConnectionTransportConfig, DeliveryQoS, QoS, SubscribeProperties,
+};
 use azure_mqtt::topic::TopicFilter;
 
 const DOWNSTREAM_SUB_FILTER: &str = "downstream/#";
@@ -19,7 +17,6 @@ async fn main() {
         queue_size: 10,
     };
     let (ds_client, ds_event_loop, ds_receiver) = new_client(options);
-    let ds_disconnect_notify = Arc::new(Notify::new());
 
     // Upstream client
     let options = ClientOptions {
@@ -27,20 +24,13 @@ async fn main() {
         queue_size: 10,
     };
     let (us_client, us_event_loop, _) = new_client(options);
-    let us_disconnect_notify = Arc::new(Notify::new());
 
     tokio::select! {
-        () = mqtt_run(ds_event_loop, ds_disconnect_notify.clone()) => {
+        () = mqtt_run(ds_event_loop) => {
             println!("Downstream Connection runner unexpectedly failed!");
         }
-        () = mqtt_run(us_event_loop, us_disconnect_notify.clone()) => {
+        () = mqtt_run(us_event_loop) => {
             println!("Upstream Connection runner unexpectedly failed!");
-        }
-        () = maintain_connection(ds_client.clone(), ds_disconnect_notify) => {
-            println!("Downstream Connection maintainer unexpectedly failed!");
-        }
-        () = maintain_connection(us_client.clone(), us_disconnect_notify) => {
-            println!("Upstream Connection maintainer unexpectedly failed!");
         }
         () = message_relay(ds_receiver, ds_client, us_client) => {
             println!("Message relay unexpectedly failed!");
@@ -48,41 +38,22 @@ async fn main() {
     }
 }
 
-async fn mqtt_run(mut event_loop: EventLoop, disconnect_notify: Arc<Notify>) {
+async fn mqtt_run(mut disconnected: Disconnected) {
     loop {
-        match event_loop.poll().await {
-            Event::Connected => {
-                println!("Connected to MQTT broker");
-            }
-            Event::Disconnected => {
-                println!("Disconnected from MQTT broker");
-                disconnect_notify.notify_waiters();
-            } // Handle other events as needed
-        }
-    }
-}
-
-async fn maintain_connection(client: Client, disconnect_notify: Arc<Notify>) {
-    // NOTE: For logging purposes, you want the client ID here.
-    loop {
-        // Connect to the MQTT broker and wait for the connection to complete
-        println!("Attempting to connect to MQTT broker...");
-        let connect_properties = ConnectProperties::default(); // Assume clean session = false
-        if client
-            .connect(connect_properties)
-            .await
-            .unwrap()
-            .await
-            .unwrap()
-            .is_success()
-        {
-            disconnect_notify.notified().await;
-            println!("Connection lost, will reconnect in 5 seconds...");
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        } else {
-            eprintln!("Failed to connect to MQTT broker, retrying in 5 seconds...");
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        }
+        let (connected, _, _) = disconnected
+            .connect(
+                ConnectionTransportConfig::Tcp {
+                    hostname: "localhost".to_owned(),
+                    port: 1883,
+                },
+                ConnectProperties::default(),
+            )
+            .await;
+        println!("Connected to MQTT broker");
+        (disconnected, _) = connected.poll().await;
+        println!("Disconnected from MQTT broker");
+        println!("Connection lost, will reconnect in 5 seconds...");
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
 }
 

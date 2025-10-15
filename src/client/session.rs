@@ -11,28 +11,27 @@ use tokio::time::{Duration, Sleep};
 use crate::buffer_pool::Shared;
 use crate::client::{
     channel_data::{
-        AcknowledgementRequest, ConnectionRequest, IncomingPublish, PublishRequest,
+        AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest,
         SubscriptionRequest,
     },
     session::pkid::PkidPool,
 };
 use crate::mqtt_proto::{
-    ConnAck, Connect, ConnectOtherProperties, ConnectReasonCode, Disconnect, KeepAlive, Packet,
-    PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish,
-    SessionExpiryInterval, SubAck, Subscribe, UnsubAck, Unsubscribe,
+    ConnAck, ConnectReasonCode, Disconnect, Packet, PacketIdentifier, PacketIdentifierDupQoS,
+    PingReq, PubAck, PubComp, PubRec, PubRel, Publish, SessionExpiryInterval, SubAck, Subscribe,
+    UnsubAck, Unsubscribe,
 };
 use crate::token::{
-    ConnectCompletionNotifier, PubRecCompletionNotifier, PubRelCompletionNotifier,
-    PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
-    UnsubscribeCompletionNotifier,
+    PubRecCompletionNotifier, PubRelCompletionNotifier, PublishQoS1CompletionNotifier,
+    PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
 };
 
 mod pkid;
 
 /// Tracks data related to the MQTT session state
-pub struct Session<S: Shared> {
+pub(crate) struct Session<S: Shared> {
     /// Struct containing channels in and out of the Session
-    ch: Channels,
+    pub(crate) ch: Channels,
     /// Pool of packet identifiers for outgoing packets that can be leased
     pkid_pool: PkidPool,
     /// Queue of outgoing operations that are not yet in-flight
@@ -46,22 +45,8 @@ pub struct Session<S: Shared> {
     pingreq: Option<PingReqTimer>,
 }
 
-pub(crate) enum ConnectionTransportConfig {
-    Tcp {
-        hostname: String,
-        port: u16,
-    },
-    Tls {
-        hostname: String,
-    },
-    Ws {
-        request: async_tungstenite::tungstenite::handshake::client::Request,
-    },
-}
-
 impl<S: Shared> Session<S> {
     pub fn new(
-        conn_rx: Receiver<ConnectionRequest>,
         sub_rx: Receiver<SubscriptionRequest>,
         o_pub_rx: Receiver<PublishRequest>,
         ack_rx: Receiver<AcknowledgementRequest>,
@@ -69,7 +54,7 @@ impl<S: Shared> Session<S> {
         max_pkid: PacketIdentifier,
     ) -> Self {
         let ch = Channels {
-            conn_rx,
+            disconnect_rx: None,
             o_pub_rx,
             sub_rx,
             ack_rx,
@@ -86,157 +71,118 @@ impl<S: Shared> Session<S> {
         }
     }
 
-    /// Returns parameters for establishing a new connection.
-    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
-    #[allow(clippy::unused_self)]
-    pub async fn connection_transport_config(&mut self) -> ConnectionTransportConfig {
-        unimplemented!()
-    }
-
     /// Returns the next outgoing MQTT packet to be sent over the network
     #[allow(clippy::unused_self)]
     pub async fn next_outgoing_packet(&mut self) -> Option<Packet<S>> {
-        match (self.connected, &mut self.inflight.connect) {
-            // If we're currently disconnected, then only poll `conn_rx` and generate a `Connect`
-            (false, None) => {
-                let (notifier, _properties) = loop {
-                    match self.ch.conn_rx.recv().await? {
-                        ConnectionRequest::Connect(notifier, properties) => {
-                            break (notifier, properties);
-                        }
-                        // TODO: Just ignore it? Or return an error?
-                        // Or split conn_rx into separate channels for Connect and Disconnect requests?
-                        ConnectionRequest::Disconnect(..) => (),
+        // TODO: Now that sending CONNECT is handled outside of `Session::next_outgoing_packet`,
+        // it will only ever be called after `complete_inflight(ConnAck)` has been called, right?
+        assert!(self.connected);
+
+        #[allow(unreachable_code)] // TODO: Remove when todo!()s are resolved
+        let packet = match poll_connected_channels(&mut self.ch, self.pingreq.as_mut()).await {
+            ConnectedChannelsOutgoingPacket::DisconnectRequest(disconnect_req) => {
+                Packet::Disconnect(Disconnect {
+                    reason_code: todo!(),
+                    other_properties: todo!(),
+                })
+            }
+
+            ConnectedChannelsOutgoingPacket::AcknowledgementRequest(ack_req) => match ack_req {
+                AcknowledgementRequest::PubAck(..) => Packet::PubAck(PubAck {
+                    packet_identifier: todo!(),
+                    reason_code: todo!(),
+                    other_properties: todo!(),
+                }),
+                AcknowledgementRequest::PubComp(..) => Packet::PubComp(PubComp {
+                    packet_identifier: todo!(),
+                    reason_code: todo!(),
+                    other_properties: todo!(),
+                }),
+
+                AcknowledgementRequest::PubRec(..) => Packet::PubRec(PubRec {
+                    packet_identifier: todo!(),
+                    reason_code: todo!(),
+                    other_properties: todo!(),
+                }),
+
+                AcknowledgementRequest::PubRel(..) => Packet::PubRel(PubRel {
+                    packet_identifier: todo!(),
+                    reason_code: todo!(),
+                    other_properties: todo!(),
+                }),
+            },
+
+            ConnectedChannelsOutgoingPacket::SubscriptionRequest(sub_req) => {
+                let packet_identifier = todo!();
+                match sub_req {
+                    SubscriptionRequest::Subscribe(notifier, ..) => {
+                        self.inflight.subscribe.insert(packet_identifier, notifier);
+                        Packet::Subscribe(Subscribe {
+                            packet_identifier,
+                            subscribe_to: todo!(),
+                            other_properties: todo!(),
+                        })
                     }
-                };
-                self.inflight.connect = Some(notifier);
-                // TODO: Get values from properties
-                self.transient = false;
-                Some(Packet::Connect(Connect {
-                    username: None,
-                    password: None,
-                    will: None,
-                    client_id: None,
-                    clean_start: true,
-                    keep_alive: KeepAlive::Infinite,
-                    other_properties: ConnectOtherProperties {
-                        session_expiry_interval: SessionExpiryInterval::Infinite,
-                        ..Default::default()
+
+                    SubscriptionRequest::Unsubscribe(notifier, ..) => {
+                        self.inflight
+                            .unsubscribe
+                            .insert(packet_identifier, notifier);
+                        Packet::Unsubscribe(Unsubscribe {
+                            packet_identifier,
+                            unsubscribe_from: todo!(),
+                            other_properties: todo!(),
+                        })
+                    }
+                }
+            }
+
+            ConnectedChannelsOutgoingPacket::PublishRequest(publish) => {
+                let packet = match publish {
+                    PublishRequest::PublishQoS0(..) => Publish {
+                        topic_name: todo!(),
+                        packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
+                        retain: todo!(),
+                        payload: todo!(),
+                        other_properties: todo!(),
                     },
-                }))
-            }
 
-            // If we're currently disconnected and waiting for CONNACK, then yield `Pending`
-            // TODO: This is wrong since this will block forever, but it's temporary until
-            // EventLoop is changed to use separate types for connected and disconnected states.
-            (false, Some(_)) => std::future::pending().await,
-
-            // If we're currently connected, then poll self.ch
-            (true, _) => {
-                #[allow(unreachable_code)] // TODO: Remove when todo!()s are resolved
-                let packet = match poll_connected_channels(&mut self.ch, self.pingreq.as_mut())
-                    .await
-                {
-                    ConnectedChannelsOutgoingPacket::AcknowledgementRequest(ack_req) => {
-                        match ack_req {
-                            AcknowledgementRequest::PubAck(..) => Packet::PubAck(PubAck {
-                                packet_identifier: todo!(),
-                                reason_code: todo!(),
-                                other_properties: todo!(),
-                            }),
-                            AcknowledgementRequest::PubComp(..) => Packet::PubComp(PubComp {
-                                packet_identifier: todo!(),
-                                reason_code: todo!(),
-                                other_properties: todo!(),
-                            }),
-
-                            AcknowledgementRequest::PubRec(..) => Packet::PubRec(PubRec {
-                                packet_identifier: todo!(),
-                                reason_code: todo!(),
-                                other_properties: todo!(),
-                            }),
-
-                            AcknowledgementRequest::PubRel(..) => Packet::PubRel(PubRel {
-                                packet_identifier: todo!(),
-                                reason_code: todo!(),
-                                other_properties: todo!(),
-                            }),
-                        }
-                    }
-
-                    ConnectedChannelsOutgoingPacket::SubscriptionRequest(sub_req) => {
+                    PublishRequest::PublishQoS1(..) => {
+                        // TODO: Push to outgoing messages queue if packet ID can't be assigned.
                         let packet_identifier = todo!();
-                        match sub_req {
-                            SubscriptionRequest::Subscribe(notifier, ..) => {
-                                self.inflight.subscribe.insert(packet_identifier, notifier);
-                                Packet::Subscribe(Subscribe {
-                                    packet_identifier,
-                                    subscribe_to: todo!(),
-                                    other_properties: todo!(),
-                                })
-                            }
-
-                            SubscriptionRequest::Unsubscribe(notifier, ..) => {
-                                self.inflight
-                                    .unsubscribe
-                                    .insert(packet_identifier, notifier);
-                                Packet::Unsubscribe(Unsubscribe {
-                                    packet_identifier,
-                                    unsubscribe_from: todo!(),
-                                    other_properties: todo!(),
-                                })
-                            }
+                        Publish {
+                            topic_name: todo!(),
+                            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
+                                packet_identifier,
+                                todo!(),
+                            ),
+                            retain: todo!(),
+                            payload: todo!(),
+                            other_properties: todo!(),
                         }
                     }
 
-                    ConnectedChannelsOutgoingPacket::PublishRequest(publish) => {
-                        let packet = match publish {
-                            PublishRequest::PublishQoS0(..) => Publish {
-                                topic_name: todo!(),
-                                packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
-                                retain: todo!(),
-                                payload: todo!(),
-                                other_properties: todo!(),
-                            },
-
-                            PublishRequest::PublishQoS1(..) => {
-                                // TODO: Push to outgoing messages queue if packet ID can't be assigned.
-                                let packet_identifier = todo!();
-                                Publish {
-                                    topic_name: todo!(),
-                                    packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
-                                        packet_identifier,
-                                        todo!(),
-                                    ),
-                                    retain: todo!(),
-                                    payload: todo!(),
-                                    other_properties: todo!(),
-                                }
-                            }
-
-                            PublishRequest::PublishQoS2(..) => {
-                                // TODO: Push to outgoing messages queue if packet ID can't be assigned.
-                                let packet_identifier = todo!();
-                                Publish {
-                                    topic_name: todo!(),
-                                    packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
-                                        packet_identifier,
-                                        todo!(),
-                                    ),
-                                    retain: todo!(),
-                                    payload: todo!(),
-                                    other_properties: todo!(),
-                                }
-                            }
-                        };
-                        Packet::Publish(packet)
+                    PublishRequest::PublishQoS2(..) => {
+                        // TODO: Push to outgoing messages queue if packet ID can't be assigned.
+                        let packet_identifier = todo!();
+                        Publish {
+                            topic_name: todo!(),
+                            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
+                                packet_identifier,
+                                todo!(),
+                            ),
+                            retain: todo!(),
+                            payload: todo!(),
+                            other_properties: todo!(),
+                        }
                     }
-
-                    ConnectedChannelsOutgoingPacket::PingReq => Packet::PingReq(PingReq),
                 };
-                Some(packet)
+                Packet::Publish(packet)
             }
-        }
+
+            ConnectedChannelsOutgoingPacket::PingReq => Packet::PingReq(PingReq),
+        };
+        Some(packet)
     }
 
     /// Complete an in-flight operation with a received acknowledgement.
@@ -245,33 +191,25 @@ impl<S: Shared> Session<S> {
     pub fn complete_inflight(&mut self, operation: CompletedOperation<S>) {
         match operation {
             CompletedOperation::Connect(connack) => {
-                if let Some(notifier) = self.inflight.connect.take() {
-                    #[allow(clippy::collapsible_if)] // TODO: remove
-                    if let ConnectReasonCode::Success { session_present } = connack.reason_code {
-                        self.connected = true;
+                if let ConnectReasonCode::Success { session_present } = connack.reason_code {
+                    self.connected = true;
 
-                        if !session_present {
-                            // Previous session, if any, is not present on the server.
-                            self.session_expired();
-                        }
-
-                        if matches!(
-                            connack.other_properties.session_expiry_interval,
-                            Some(SessionExpiryInterval::Duration(0))
-                        ) && !self.transient
-                        {
-                            // We asked for a persistent session but the server overrode it to transient.
-                            self.transient = true;
-                        }
-
-                        // TODO: Get PINGREQ duration from connect properties
-                        self.pingreq = Some(PingReqTimer::new(Duration::from_secs(5)));
+                    if !session_present {
+                        // Previous session, if any, is not present on the server.
+                        self.session_expired();
                     }
-                    // TODO: Convert connack to user-facing type and complete notifier
-                    //let connack = connack.into()
-                    //notifier.complete(connack);
-                } else {
-                    todo!("treat as protocol error: unexpected CONNACK");
+
+                    if matches!(
+                        connack.other_properties.session_expiry_interval,
+                        Some(SessionExpiryInterval::Duration(0))
+                    ) && !self.transient
+                    {
+                        // We asked for a persistent session but the server overrode it to transient.
+                        self.transient = true;
+                    }
+
+                    // TODO: Get PINGREQ duration from connect properties
+                    self.pingreq = Some(PingReqTimer::new(Duration::from_secs(5)));
                 }
             }
             CompletedOperation::Subscribe(suback) => {
@@ -347,11 +285,6 @@ impl<S: Shared> Session<S> {
 
         self.connected = false;
         self.pingreq = None;
-        // Remove and cancel any in-flight CONNECT
-        // This shouldn't happen, since DISCONNECT requires an existing connection to be issued.
-        if let Some(notifier) = self.inflight.connect.take() {
-            let _ = notifier.cancel();
-        }
         // Remove and cancel all in-flight SUBSCRIBEs
         for (pkid, notifier) in self.inflight.subscribe.drain() {
             let _ = notifier.cancel();
@@ -409,9 +342,9 @@ where
 }
 
 /// Organizational struct containing channels on which the `Session` receives input
-struct Channels {
+pub(crate) struct Channels {
     /// Channel for receiving outgoing CONNECT and DISCONNECT requests
-    conn_rx: Receiver<ConnectionRequest>,
+    pub(crate) disconnect_rx: Option<tokio::sync::oneshot::Receiver<DisconnectRequest>>,
     /// Channel for receiving outgoing PUBLISH requests
     o_pub_rx: Receiver<PublishRequest>,
     /// Channel for receiving outgoing SUBSCRIBE and UNSUBSCRIBE requests
@@ -423,6 +356,7 @@ struct Channels {
 }
 
 enum ConnectedChannelsOutgoingPacket {
+    DisconnectRequest(DisconnectRequest),
     AcknowledgementRequest(AcknowledgementRequest),
     SubscriptionRequest(SubscriptionRequest),
     PublishRequest(PublishRequest),
@@ -436,6 +370,18 @@ fn poll_connected_channels(
     mut pingreq: Option<&mut PingReqTimer>,
 ) -> impl Future<Output = ConnectedChannelsOutgoingPacket> {
     futures_util::future::poll_fn(move |cx| {
+        if let Some(disconnect_rx) = &mut ch.disconnect_rx
+            && let Poll::Ready(disconnect_req) = Pin::new(disconnect_rx).poll(cx)
+        {
+            drop(ch.disconnect_rx.take());
+            if let Ok(disconnect_req) = disconnect_req {
+                return Poll::Ready(ConnectedChannelsOutgoingPacket::DisconnectRequest(
+                    disconnect_req,
+                ));
+            }
+            // ... else: User dropped the disconnect_tx, so there's nothing more to do.
+        }
+
         if let Poll::Ready(Some(ack_req)) = ch.ack_rx.poll_recv(cx) {
             if let Some(ref mut pingreq) = pingreq {
                 pingreq.reset();
@@ -477,9 +423,6 @@ struct InflightTracker<S>
 where
     S: Shared,
 {
-    /// Inflight CONNECT operation
-    connect: Option<ConnectCompletionNotifier>,
-
     // --- Operation tracking ---
     // None of these hashmaps should ever use the same key at the same time, although this is not
     // enforced for simplicity.
@@ -507,7 +450,6 @@ where
 {
     fn default() -> Self {
         Self {
-            connect: None,
             publish_qos1: HashMap::new(),
             publish_qos2: HashMap::new(),
             subscribe: HashMap::new(),

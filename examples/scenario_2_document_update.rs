@@ -1,16 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use azure_mqtt::client::{
-    AckHandle, Client, ClientOptions, Event, EventLoop, Receiver, new_client,
+use azure_mqtt::client::{AckHandle, Client, ClientOptions, Disconnected, Receiver, new_client};
+use azure_mqtt::packet::{
+    ConnectProperties, ConnectionTransportConfig, Publish, QoS, SubscribeProperties,
 };
-use azure_mqtt::packet::{ConnectProperties, Publish, QoS, SubscribeProperties};
 use azure_mqtt::topic::TopicFilter;
 
 const GET_FILTER: &str = "watchlist/get";
@@ -28,31 +26,12 @@ async fn main() {
     let (get_tx, get_rx) = unbounded_channel();
     let (update_tx, update_rx) = unbounded_channel();
 
-    let disconnect_notify = Arc::new(Notify::new());
-
     tokio::select! {
-        () = mqtt_run(event_loop, disconnect_notify.clone()) => {
-            // Connection runner finished
-        }
         () = mqtt_receive(receiver, get_tx, update_tx) => {
             // Receiver finished
         }
-        () = program_run(client, disconnect_notify.clone(), get_rx, update_rx) => {
+        () = mqtt_run(event_loop, client, get_rx, update_rx) => {
             // Program finished
-        }
-    }
-}
-
-async fn mqtt_run(mut event_loop: EventLoop, disconnect_notify: Arc<Notify>) {
-    loop {
-        match event_loop.poll().await {
-            Event::Connected => {
-                println!("Connected to MQTT broker");
-            }
-            Event::Disconnected => {
-                println!("Disconnected from MQTT broker");
-                disconnect_notify.notify_waiters();
-            } // Handle other events as needed
         }
     }
 }
@@ -85,43 +64,43 @@ async fn mqtt_receive(
     }
 }
 
-async fn program_run(
+async fn mqtt_run(
+    mut disconnected: Disconnected,
     client: Client,
-    disconnect_notify: Arc<Notify>,
     mut get_rx: UnboundedReceiver<(Publish, AckHandle)>,
     mut update_rx: UnboundedReceiver<(Publish, AckHandle)>,
 ) {
     // Loop so that if we disconnect, we can reconnect.
     loop {
         println!("Attempting to connect to MQTT broker...");
-        let connect_properties = ConnectProperties::default(); // Assume clean start true
-        if client
-            .connect(connect_properties)
-            .await
-            .unwrap()
-            .await
-            .unwrap()
-            .is_success()
-        {
-            tokio::select! {
-                () = disconnect_notify.notified() => {
-                    // Drain the updates channel since we no longer want any of them
-                    // and we will be reconnecting with clean start true.
-                    // This will implicitly ack the messages, but again, we are discarding the session.
-                    while !update_rx.is_empty() {
-                        update_rx.try_recv().unwrap();
-                    }
+        let (connected, _, _) = disconnected
+            .connect(
+                ConnectionTransportConfig::Tcp {
+                    hostname: "localhost".to_owned(),
+                    port: 1883,
+                },
+                ConnectProperties::default(),
+            )
+            .await;
+        println!("Connected to MQTT broker");
 
-                    println!("Disconnect detected, will reconnect in 5 seconds...");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::select! {
+            (disconnected_, _) = connected.poll() => {
+                // Drain the updates channel since we no longer want any of them
+                // and we will be reconnecting with clean start true.
+                // This will implicitly ack the messages, but again, we are discarding the session.
+                while !update_rx.is_empty() {
+                    update_rx.try_recv().unwrap();
                 }
-                () = maintain_document(client.clone(), &mut get_rx, &mut update_rx) => {
-                    // Maintaining document finished
-                }
+
+                disconnected = disconnected_;
+                println!("Disconnect detected, will reconnect in 5 seconds...");
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
-        } else {
-            println!("Failed to connect, retrying in 5 seconds...");
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            () = maintain_document(client.clone(), &mut get_rx, &mut update_rx) => {
+                // Maintaining document finished
+                return;
+            }
         }
     }
 }
