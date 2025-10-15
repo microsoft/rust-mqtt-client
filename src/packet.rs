@@ -419,6 +419,25 @@ where
     }
 }
 
+/// MQTT DISCONNECT
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Disconnect {
+    pub reason: DisconnectReason,
+    pub properties: DisconnectProperties,
+}
+
+impl<S> From<mqtt_proto::Disconnect<S>> for Disconnect
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::Disconnect<S>) -> Disconnect {
+        Disconnect {
+            reason: value.reason_code.into(),
+            properties: value.other_properties.into(),
+        }
+    }
+}
+
 //////////////////// Properties ////////////////////
 
 /// Parameters for establishing a new connection.
@@ -1846,7 +1865,7 @@ mod test {
         };
     }
 
-    macro_rules! test_property_converions {
+    macro_rules! test_property_conversions {
         ($( $properties_name:ident, $public_properties:expr, $internal_properties:expr );* $(;)?) => {
             $(
                 paste! {
@@ -1914,7 +1933,7 @@ mod test {
         );
     }
 
-    test_property_converions!(
+    test_property_conversions!(
         connect,
         packet::ConnectProperties {
             session_expiry_interval: SessionExpiryInterval::Duration(3600),
@@ -2149,7 +2168,7 @@ mod test {
         }
     );
 
-    test_property_converions!(
+    test_property_conversions!(
         subscribe,
         packet::SubscribeProperties {
             subscription_identifier: Some(42.try_into().unwrap()),
@@ -2199,7 +2218,7 @@ mod test {
         }
     );
 
-    test_property_converions!(
+    test_property_conversions!(
         unsubscribe,
         packet::UnsubscribeProperties {
             user_properties: vec![
@@ -2247,25 +2266,31 @@ mod test {
         }
     );
 
-    test_property_converions!(
+    test_packet_and_property_conversions!(
         disconnect,
-        packet::DisconnectProperties {
-            session_expiry_interval: Some(packet::SessionExpiryInterval::Duration(3600)),
-            reason_string: Some("Normal disconnection".to_string()),
-            user_properties: vec![
-                ("key1".to_string(), "value1".to_string()),
-                ("key2".to_string(), "value2".to_string()),
-            ],
-            server_reference: Some("server/ref".to_string()),
+        packet::Disconnect {
+            reason: packet::DisconnectReason::NormalDisconnection,
+            properties: packet::DisconnectProperties {
+                session_expiry_interval: Some(packet::SessionExpiryInterval::Duration(3600)),
+                reason_string: Some("Normal disconnection".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+                server_reference: Some("server/ref".to_string()),
+            },
         },
-        mqtt_proto::DisconnectOtherProperties {
-            session_expiry_interval: Some(packet::SessionExpiryInterval::Duration(3600)),
-            reason_string: Some(byte_str("Normal disconnection")),
-            user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
-            ],
-            server_reference: Some(byte_str("server/ref")),
+        mqtt_proto::Disconnect {
+            reason_code: mqtt_proto::DisconnectReasonCode::Normal,
+            other_properties: mqtt_proto::DisconnectOtherProperties {
+                session_expiry_interval: Some(packet::SessionExpiryInterval::Duration(3600)),
+                reason_string: Some(byte_str("Normal disconnection")),
+                user_properties: vec![
+                    (byte_str("key1"), byte_str("value1")),
+                    (byte_str("key2"), byte_str("value2")),
+                ],
+                server_reference: Some(byte_str("server/ref")),
+            }
         }
     );
 }
