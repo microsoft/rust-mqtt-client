@@ -1774,12 +1774,33 @@ where
 /// Trait for converting a packet to a buffer-backed internal variant.
 // TODO: Should this be here, or will it make more sense to implement as functions in some kind of
 // conversion module? Depends on where and how the boundary between public and internal types works
-#[allow(dead_code)] // TODO: remove suppression
-trait IntoBuffered<T, O>
+pub(crate) trait IntoBuffered<T, O>
 where
     O: buffer_pool::Owned,
 {
     fn into_buffered(self, owned: &mut O) -> Result<T, buffer_pool::Error>;
+}
+
+impl<O> IntoBuffered<O::Shared, O> for Bytes
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(self, owned: &mut O) -> Result<O::Shared, buffer_pool::Error> {
+        let len = self.len();
+
+        owned.reserve(len)?;
+
+        // SAFETY: Requirements of `unfilled_mut` and `fill` are upheld.
+        unsafe {
+            let buf = owned.unfilled_mut();
+            crate::buffer_pool::maybe_uninit_copy_from_slice(&mut buf[..len], &self);
+            owned.fill(len);
+        }
+
+        let filled_len = owned.filled_len();
+        let shared = owned.split_to(filled_len).freeze();
+        Ok(shared)
+    }
 }
 
 #[cfg(test)]

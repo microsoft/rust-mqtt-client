@@ -29,6 +29,20 @@ async fn main() {
         .await;
     println!("Connected to MQTT broker");
 
+    tokio::select! {
+        () = connection_runner(connected) => {
+            // Connection runner finished
+        }
+        () = receive(receiver) => {
+            // Receiver finished
+        }
+        () = program(client) => {
+            // Program finished
+        }
+    }
+}
+
+async fn program(client: Client) {
     // Subscribe to a topic and wait for the subscription to complete
     let subscribe_properties = SubscribeProperties::default();
     let ct = client
@@ -44,20 +58,6 @@ async fn main() {
         Err(e) => eprintln!("Failed to subscribe: {e:?}"),
     }
 
-    tokio::select! {
-        () = connection_runner(connected) => {
-            // Connection runner finished
-        }
-        () = receive(receiver) => {
-            // Receiver finished
-        }
-        () = program(client) => {
-            // Program finished
-        }
-    }
-}
-
-async fn program(client: Client) {
     loop {
         // Publish a message to the topic (with no regard for the acknowledgement)
         let publish_properties = PublishProperties::default();

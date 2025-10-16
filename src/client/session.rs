@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{Duration, Sleep};
 
-use crate::buffer_pool::Shared;
+use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest,
@@ -17,10 +17,12 @@ use crate::client::{
     session::pkid::PkidPool,
 };
 use crate::mqtt_proto::{
-    ConnAck, ConnectReasonCode, Disconnect, Packet, PacketIdentifier, PacketIdentifierDupQoS,
-    PingReq, PubAck, PubComp, PubRec, PubRel, Publish, SessionExpiryInterval, SubAck, Subscribe,
-    UnsubAck, Unsubscribe,
+    ConnAck, ConnectReasonCode, Disconnect, Filter, Packet, PacketIdentifier,
+    PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish, RetainHandling,
+    SessionExpiryInterval, SubAck, Subscribe, SubscribeOptions, SubscribeOptionsOtherProperties,
+    SubscribeTo, Topic, UnsubAck, Unsubscribe,
 };
+use crate::packet::IntoBuffered;
 use crate::token::{
     PubRecCompletionNotifier, PubRelCompletionNotifier, PublishQoS1CompletionNotifier,
     PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
@@ -29,29 +31,37 @@ use crate::token::{
 mod pkid;
 
 /// Tracks data related to the MQTT session state
-pub(crate) struct Session<S: Shared> {
+pub(crate) struct Session<O>
+where
+    O: Owned,
+{
     /// Struct containing channels in and out of the Session
     pub(crate) ch: Channels,
     /// Pool of packet identifiers for outgoing packets that can be leased
     pkid_pool: PkidPool,
     /// Queue of outgoing operations that are not yet in-flight
     /// *Technically* not part of an MQTT Session, but it makes sense to keep it here.
-    outgoing_queue: VecDeque<OutgoingOperation<S>>,
+    outgoing_queue: VecDeque<OutgoingOperation<O::Shared>>,
     /// Tracker of all inflight MQTT packets awaiting a response
-    inflight: InflightTracker<S>,
+    inflight: InflightTracker<O::Shared>,
     //ack_order: AckOrderer, // TODO
     connected: bool,
     transient: bool,
     pingreq: Option<PingReqTimer>,
+    owned: O,
 }
 
-impl<S: Shared> Session<S> {
+impl<O> Session<O>
+where
+    O: Owned,
+{
     pub fn new(
         sub_rx: Receiver<SubscriptionRequest>,
         o_pub_rx: Receiver<PublishRequest>,
         ack_rx: Receiver<AcknowledgementRequest>,
         i_pub_tx: Sender<IncomingPublish>, // TODO: correct type
         max_pkid: PacketIdentifier,
+        owned: O,
     ) -> Self {
         let ch = Channels {
             disconnect_rx: None,
@@ -68,12 +78,13 @@ impl<S: Shared> Session<S> {
             connected: false,
             transient: false,
             pingreq: None,
+            owned,
         }
     }
 
     /// Returns the next outgoing MQTT packet to be sent over the network
     #[allow(clippy::unused_self)]
-    pub async fn next_outgoing_packet(&mut self) -> Option<Packet<S>> {
+    pub async fn next_outgoing_packet(&mut self) -> Option<Packet<O::Shared>> {
         // TODO: Now that sending CONNECT is handled outside of `Session::next_outgoing_packet`,
         // it will only ever be called after `complete_inflight(ConnAck)` has been called, right?
         assert!(self.connected);
@@ -113,14 +124,39 @@ impl<S: Shared> Session<S> {
             },
 
             ConnectedChannelsOutgoingPacket::SubscriptionRequest(sub_req) => {
-                let packet_identifier = todo!();
+                // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
+                let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
                 match sub_req {
-                    SubscriptionRequest::Subscribe(notifier, ..) => {
+                    SubscriptionRequest::Subscribe(
+                        notifier,
+                        topic_filter,
+                        qos,
+                        subscribe_properties,
+                    ) => {
                         self.inflight.subscribe.insert(packet_identifier, notifier);
                         Packet::Subscribe(Subscribe {
                             packet_identifier,
-                            subscribe_to: todo!(),
-                            other_properties: todo!(),
+                            subscribe_to: vec![SubscribeTo {
+                                topic_filter: Filter::new_shared(
+                                    &mut self.owned,
+                                    topic_filter.as_str(),
+                                )
+                                .expect(
+                                    "TopicFilter is already expected to be a valid filter string",
+                                ),
+                                options: SubscribeOptions {
+                                    maximum_qos: qos.into(),
+                                    // TODO: Get from subscribe_properties
+                                    other_properties: SubscribeOptionsOtherProperties {
+                                        no_local: false,
+                                        retain_as_published: false,
+                                        retain_handling: RetainHandling::Send,
+                                    },
+                                },
+                            }],
+                            other_properties: subscribe_properties
+                                .into_buffered(&mut self.owned)
+                                .expect("TODO: error handling"),
                         })
                     }
 
@@ -139,42 +175,71 @@ impl<S: Shared> Session<S> {
 
             ConnectedChannelsOutgoingPacket::PublishRequest(publish) => {
                 let packet = match publish {
-                    PublishRequest::PublishQoS0(..) => Publish {
-                        topic_name: todo!(),
-                        packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
-                        retain: todo!(),
-                        payload: todo!(),
-                        other_properties: todo!(),
-                    },
-
-                    PublishRequest::PublishQoS1(..) => {
-                        // TODO: Push to outgoing messages queue if packet ID can't be assigned.
-                        let packet_identifier = todo!();
+                    PublishRequest::PublishQoS0(notifier, topic_name, payload, properties) => {
                         Publish {
-                            topic_name: todo!(),
-                            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
-                                packet_identifier,
-                                todo!(),
-                            ),
-                            retain: todo!(),
-                            payload: todo!(),
-                            other_properties: todo!(),
+                            topic_name: Topic::new_shared(&mut self.owned, topic_name.as_str())
+                                .expect("TopicName is already expected to be a valid topic string"),
+                            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
+                            retain: false, // TODO: Get from properties
+                            payload: payload
+                                .into_buffered(&mut self.owned)
+                                .expect("TODO: error handling"),
+                            other_properties: properties
+                                .into_buffered(&mut self.owned)
+                                .expect("TODO: error handling"),
                         }
                     }
 
-                    PublishRequest::PublishQoS2(..) => {
+                    PublishRequest::PublishQoS1(notifier, topic_name, payload, properties) => {
                         // TODO: Push to outgoing messages queue if packet ID can't be assigned.
-                        let packet_identifier = todo!();
-                        Publish {
-                            topic_name: todo!(),
+
+                        // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
+                        let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
+                        let publish = Publish {
+                            topic_name: Topic::new_shared(&mut self.owned, topic_name.as_str())
+                                .expect("TopicName is already expected to be a valid topic string"),
+                            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
+                                packet_identifier,
+                                false, // TODO: Get from properties
+                            ),
+                            retain: false, // TODO: Get from properties
+                            payload: payload
+                                .into_buffered(&mut self.owned)
+                                .expect("TODO: error handling"),
+                            other_properties: properties
+                                .into_buffered(&mut self.owned)
+                                .expect("TODO: error handling"),
+                        };
+                        self.inflight
+                            .publish_qos1
+                            .insert(packet_identifier, (publish.clone(), notifier));
+                        publish
+                    }
+
+                    PublishRequest::PublishQoS2(notifier, topic_name, payload, properties) => {
+                        // TODO: Push to outgoing messages queue if packet ID can't be assigned.
+
+                        // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
+                        let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
+                        let publish = Publish {
+                            topic_name: Topic::new_shared(&mut self.owned, topic_name.as_str())
+                                .expect("TopicName is already expected to be a valid topic string"),
                             packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
                                 packet_identifier,
-                                todo!(),
+                                false, // TODO: Get from properties
                             ),
-                            retain: todo!(),
-                            payload: todo!(),
-                            other_properties: todo!(),
-                        }
+                            retain: false, // TODO: Get from properties
+                            payload: payload
+                                .into_buffered(&mut self.owned)
+                                .expect("TODO: error handling"),
+                            other_properties: properties
+                                .into_buffered(&mut self.owned)
+                                .expect("TODO: error handling"),
+                        };
+                        self.inflight
+                            .publish_qos2
+                            .insert(packet_identifier, (publish.clone(), notifier));
+                        publish
                     }
                 };
                 Packet::Publish(packet)
@@ -188,7 +253,7 @@ impl<S: Shared> Session<S> {
     /// Complete an in-flight operation with a received acknowledgement.
     /// Adjusts state as appropriate.
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
-    pub fn complete_inflight(&mut self, operation: CompletedOperation<S>) {
+    pub fn complete_inflight(&mut self, operation: CompletedOperation<O::Shared>) {
         match operation {
             CompletedOperation::Connect(connack) => {
                 if let ConnectReasonCode::Success { session_present } = connack.reason_code {
@@ -213,13 +278,28 @@ impl<S: Shared> Session<S> {
                 }
             }
             CompletedOperation::Subscribe(suback) => {
-                // TODO: Convert suback to user-facing type and complete notifier
+                let notifier = self
+                    .inflight
+                    .subscribe
+                    .remove(&suback.packet_identifier)
+                    .expect("TODO: error handling");
+                _ = notifier.complete(suback.into());
             }
             CompletedOperation::Unsubscribe(unsuback) => {
-                // TODO: Convert unsuback to user-facing type and complete notifier
+                let notifier = self
+                    .inflight
+                    .unsubscribe
+                    .remove(&unsuback.packet_identifier)
+                    .expect("TODO: error handling");
+                _ = notifier.complete(unsuback.into());
             }
             CompletedOperation::PublishQoS1(puback) => {
-                // TODO: Convert puback to user-facing type and complete notifier
+                let (_, notifier) = self
+                    .inflight
+                    .publish_qos1
+                    .remove(&puback.packet_identifier)
+                    .expect("TODO: error handling");
+                _ = notifier.complete(puback.into());
             }
             CompletedOperation::PublishQoS2(pubrec) => {
                 // TODO: Convert pubrec to user-facing type, create pubrel infrastructure
@@ -229,7 +309,7 @@ impl<S: Shared> Session<S> {
     }
 
     /// Trigger a disconnect and adjust state based on the information in the outgoing `Disconnect` packet
-    pub fn client_disconnect(&mut self, disconnect: &Disconnect<S>) {
+    pub fn client_disconnect(&mut self, disconnect: &Disconnect<O::Shared>) {
         log::info!("client disconnected by request {disconnect:?}");
 
         self.disconnected();
@@ -249,7 +329,7 @@ impl<S: Shared> Session<S> {
     /// Trigger a disconnect and adjust state based on the information in the incoming `Disconnect` packet
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
     #[allow(clippy::unused_self)]
-    pub fn server_disconnect(&mut self, disconnect: &Disconnect<S>) {
+    pub fn server_disconnect(&mut self, disconnect: &Disconnect<O::Shared>) {
         log::error!("client disconnected due to server {disconnect:?}");
 
         self.disconnected();
@@ -274,8 +354,12 @@ impl<S: Shared> Session<S> {
 
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
     #[allow(clippy::unused_self)]
-    pub fn incoming_publish(&mut self, publish: Publish<S>) {
-        unimplemented!()
+    pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
+        // TODO
+
+        // let publish = publish.into();
+        // let ack_handle = todo!();
+        // _ = self.ch.i_pub_tx.send((publish, ack_handle));
     }
 
     /// The connection has been closed for any reason.
