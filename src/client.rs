@@ -13,7 +13,7 @@ use std::pin::pin;
 use bytes::Bytes;
 use futures_util::future::{self, FutureExt as _};
 
-use crate::buffer_pool::{BufferPoolImpl, SharedImpl};
+use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl};
 use crate::client::{
     channel_data::{DisconnectRequest, PublishRequest, SubscriptionRequest},
     session::{CompletedOperation, Session},
@@ -54,17 +54,21 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         pub_tx: o_pub_tx,
         sub_tx,
     };
+    let reader_pool = BufferPoolImpl;
+    let writer_pool = BufferPoolImpl;
+    let owned = writer_pool.take_empty_owned();
     let session = Session::new(
         sub_rx,
         o_pub_rx,
         ack_rx,
         i_pub_tx,
         PacketIdentifier::new(100).expect("100 is always okay"), // TODO: customizable
+        owned,
     );
     let connect_handle = ConnectHandle {
         session,
-        reader_pool: BufferPoolImpl,
-        writer_pool: BufferPoolImpl,
+        reader_pool,
+        writer_pool,
     };
     let receiver = Receiver { rx: i_pub_rx };
     (client, connect_handle, receiver)
@@ -227,7 +231,7 @@ impl Receiver {
 }
 
 pub struct ConnectHandle {
-    session: Session<SharedImpl>,
+    session: Session<OwnedImpl>,
     reader_pool: BufferPoolImpl,
     writer_pool: BufferPoolImpl,
 }
@@ -314,7 +318,7 @@ impl ConnectHandle {
 
 /// Runs the MQTT client event loop, keeping the client operational.
 pub struct Connection {
-    session: Session<SharedImpl>,
+    session: Session<OwnedImpl>,
     reader_pool: BufferPoolImpl,
     writer_pool: BufferPoolImpl,
     reader: Reader<BufferPoolImpl>,
