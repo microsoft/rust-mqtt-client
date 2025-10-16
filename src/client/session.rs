@@ -17,10 +17,10 @@ use crate::client::{
     session::pkid::PkidPool,
 };
 use crate::mqtt_proto::{
-    ConnAck, ConnectReasonCode, Disconnect, Filter, Packet, PacketIdentifier,
-    PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish, RetainHandling,
-    SessionExpiryInterval, SubAck, Subscribe, SubscribeOptions, SubscribeOptionsOtherProperties,
-    SubscribeTo, Topic, UnsubAck, Unsubscribe,
+    ConnAck, ConnectReasonCode, Disconnect, Packet, PacketIdentifier, PacketIdentifierDupQoS,
+    PingReq, PubAck, PubComp, PubRec, PubRel, Publish, RetainHandling, SessionExpiryInterval,
+    SubAck, Subscribe, SubscribeOptions, SubscribeOptionsOtherProperties, SubscribeTo, UnsubAck,
+    Unsubscribe,
 };
 use crate::packet::IntoBuffered;
 use crate::token::{
@@ -137,13 +137,10 @@ where
                         Packet::Subscribe(Subscribe {
                             packet_identifier,
                             subscribe_to: vec![SubscribeTo {
-                                topic_filter: Filter::new_shared(
-                                    &mut self.owned,
-                                    topic_filter.as_str(),
-                                )
-                                .expect(
-                                    "TopicFilter is already expected to be a valid filter string",
-                                ),
+                                topic_filter: topic_filter
+                                    .into_inner()
+                                    .to_shared(&mut self.owned)
+                                    .expect("TODO: error handling"),
                                 options: SubscribeOptions {
                                     maximum_qos: qos.into(),
                                     // TODO: Get from subscribe_properties
@@ -177,8 +174,10 @@ where
                 let packet = match publish {
                     PublishRequest::PublishQoS0(notifier, topic_name, payload, properties) => {
                         Publish {
-                            topic_name: Topic::new_shared(&mut self.owned, topic_name.as_str())
-                                .expect("TopicName is already expected to be a valid topic string"),
+                            topic_name: topic_name
+                                .into_inner()
+                                .to_shared(&mut self.owned)
+                                .expect("TODO: error handling"),
                             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
                             retain: false, // TODO: Get from properties
                             payload: payload
@@ -196,8 +195,10 @@ where
                         // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
                         let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
                         let publish = Publish {
-                            topic_name: Topic::new_shared(&mut self.owned, topic_name.as_str())
-                                .expect("TopicName is already expected to be a valid topic string"),
+                            topic_name: topic_name
+                                .into_inner()
+                                .to_shared(&mut self.owned)
+                                .expect("TODO: error handling"),
                             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
                                 packet_identifier,
                                 false, // TODO: Get from properties
@@ -222,8 +223,10 @@ where
                         // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
                         let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
                         let publish = Publish {
-                            topic_name: Topic::new_shared(&mut self.owned, topic_name.as_str())
-                                .expect("TopicName is already expected to be a valid topic string"),
+                            topic_name: topic_name
+                                .into_inner()
+                                .to_shared(&mut self.owned)
+                                .expect("TODO: error handling"),
                             packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
                                 packet_identifier,
                                 false, // TODO: Get from properties
