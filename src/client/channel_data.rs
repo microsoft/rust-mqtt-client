@@ -6,14 +6,14 @@
 use bytes::Bytes;
 
 use crate::client::AckHandle;
-use crate::packet::{
-    DisconnectProperties, PubAck, PubComp, PubRec, PubRel, Publish, PublishProperties, QoS,
-    SubscribeProperties, UnsubscribeProperties,
-};
-use crate::token::{
+use crate::client::token::{
     PubAckCompletionNotifier, PubCompCompletionNotifier, PubRecCompletionNotifier,
     PubRelCompletionNotifier, PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
     PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+};
+use crate::packet::{
+    DisconnectProperties, PubAck, PubComp, PubRec, PubRel, Publish, PublishProperties, QoS,
+    SubscribeProperties, UnsubscribeProperties,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -68,7 +68,7 @@ pub enum SubscriptionRequest {
 /// Request to send an acknowledgement packet
 #[allow(clippy::enum_variant_names)]
 pub enum AcknowledgementRequest {
-    PubAck(PubAckCompletionNotifier, PubAck),
+    PubAck(PubAckCompletionNotifier, PubAck, u64),
     PubRec(PubRecCompletionNotifier, PubRec),
     PubRel(PubRelCompletionNotifier, PubRel),
     PubComp(PubCompCompletionNotifier, PubComp),

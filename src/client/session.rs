@@ -10,11 +10,17 @@ use tokio::time::{Duration, Sleep};
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
+    AckHandle,
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest,
         SubscriptionRequest,
     },
     session::pkid::PkidPool,
+    token::{
+        PubAckToken, PubRecCompletionNotifier, PubRelCompletionNotifier,
+        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
+        UnsubscribeCompletionNotifier,
+    },
 };
 use crate::mqtt_proto::{
     ConnAck, ConnectReasonCode, Disconnect, Packet, PacketIdentifier, PacketIdentifierDupQoS,
@@ -23,10 +29,6 @@ use crate::mqtt_proto::{
     Unsubscribe,
 };
 use crate::packet::IntoBuffered;
-use crate::token::{
-    PubRecCompletionNotifier, PubRelCompletionNotifier, PublishQoS1CompletionNotifier,
-    PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
-};
 
 mod pkid;
 
@@ -44,8 +46,10 @@ where
     outgoing_queue: VecDeque<OutgoingOperation<O::Shared>>,
     /// Tracker of all inflight MQTT packets awaiting a response
     inflight: InflightTracker<O::Shared>,
-    //ack_order: AckOrderer, // TODO
+    /// Whether the session is currently connected
     connected: bool,
+    /// Identifier for the current connection epoch
+    connection_epoch: u64,
     transient: bool,
     pingreq: Option<PingReqTimer>,
     owned: O,
@@ -60,6 +64,7 @@ where
         o_pub_rx: Receiver<PublishRequest>,
         ack_rx: Receiver<AcknowledgementRequest>,
         i_pub_tx: Sender<IncomingPublish>, // TODO: correct type
+        ack_tx: Sender<AcknowledgementRequest>,
         max_pkid: PacketIdentifier,
         owned: O,
     ) -> Self {
@@ -69,6 +74,7 @@ where
             sub_rx,
             ack_rx,
             i_pub_tx,
+            ack_tx,
         };
         Self {
             ch,
@@ -76,6 +82,7 @@ where
             outgoing_queue: Default::default(),
             inflight: InflightTracker::default(),
             connected: false,
+            connection_epoch: 0,
             transient: false,
             pingreq: None,
             owned,
@@ -99,11 +106,22 @@ where
             }
 
             ConnectedChannelsOutgoingPacket::AcknowledgementRequest(ack_req) => match ack_req {
-                AcknowledgementRequest::PubAck(..) => Packet::PubAck(PubAck {
-                    packet_identifier: todo!(),
-                    reason_code: todo!(),
-                    other_properties: todo!(),
-                }),
+                // TODO: Reject PUBACK if epoch does not match current connection epoch
+                // TODO: It would be preferable if the notifier was not triggered on
+                // PUBACK / PUBCOMP until they were actually sent over the network.
+                AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
+                    let puback = Packet::PubAck(PubAck {
+                        packet_identifier: puback.packet_identifier,
+                        reason_code: puback.reason.into(),
+                        other_properties: puback
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    });
+                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                    let _ = notifier.complete(());
+                    puback
+                }
                 AcknowledgementRequest::PubComp(..) => Packet::PubComp(PubComp {
                     packet_identifier: todo!(),
                     reason_code: todo!(),
@@ -267,6 +285,8 @@ where
                         self.session_expired();
                     }
 
+                    self.connection_epoch += 1;
+
                     if matches!(
                         connack.other_properties.session_expiry_interval,
                         Some(SessionExpiryInterval::Duration(0))
@@ -355,14 +375,27 @@ where
         }
     }
 
-    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
-    #[allow(clippy::unused_self)]
-    pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
-        // TODO
-
-        // let publish = publish.into();
-        // let ack_handle = todo!();
-        // _ = self.ch.i_pub_tx.send((publish, ack_handle));
+    /// An incoming PUBLISH packet has been received from the server
+    pub async fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
+        let ack_handle = match publish.packet_identifier_dup_qos {
+            PacketIdentifierDupQoS::AtMostOnce => AckHandle::QoS0,
+            PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
+                AckHandle::QoS1(PubAckToken::new(
+                    packet_identifier,
+                    self.connection_epoch,
+                    self.ch.ack_tx.clone(),
+                ))
+            }
+            PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
+                todo!()
+            }
+        };
+        // TODO: Register ack tracking if QoS 1 or 2
+        self.ch
+            .i_pub_tx
+            .send((publish.into(), ack_handle))
+            .await
+            .expect("TODO: error handling");
     }
 
     /// The connection has been closed for any reason.
@@ -400,6 +433,9 @@ where
             let _ = notifier.cancel();
             self.pkid_pool.release_pkid(pkid);
         }
+
+        // NOTE: connection_epoch is NOT reset here, since that would allow for old tokens to become valid again.
+        // If session had a different lifespan, this would work differently (and may need to at some point).
 
         // TODO: PUBREL, PUBREC, PUBCOMP
     }
@@ -440,6 +476,9 @@ pub(crate) struct Channels {
     ack_rx: Receiver<AcknowledgementRequest>,
     /// Channel for sending incoming PUBLISH requests
     i_pub_tx: Sender<IncomingPublish>,
+    /// Channel for sending outgoing ACK requests.
+    /// Stored here just to be cloned, should NOT be used directly.
+    ack_tx: Sender<AcknowledgementRequest>, // TODO: Is this really the correct place for this?
 }
 
 enum ConnectedChannelsOutgoingPacket {

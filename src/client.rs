@@ -14,6 +14,9 @@ use bytes::Bytes;
 use futures_util::future::{self, FutureExt as _};
 
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl};
+use crate::client::token::{
+    CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair,
+};
 use crate::client::{
     channel_data::{DisconnectRequest, PublishRequest, SubscriptionRequest},
     session::{CompletedOperation, Session},
@@ -28,11 +31,11 @@ use crate::packet::{
     DisconnectProperties, PacketIdentifier, PubAck, PubRec, Publish, PublishProperties, QoS,
     SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
 };
-use crate::token::{CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair};
 use crate::topic::{TopicFilter, TopicName};
 
 mod channel_data;
 mod session;
+pub mod token;
 
 // TODO: What should this module and factory function be called?
 // The three components are the client collectively - so what should the outbound struct (currently called the Client) be?
@@ -62,6 +65,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         o_pub_rx,
         ack_rx,
         i_pub_tx,
+        ack_tx,
         PacketIdentifier::new(100).expect("100 is always okay"), // TODO: customizable
         owned,
     );
@@ -415,7 +419,7 @@ impl Connection {
                             );
                         }
 
-                        Packet::Publish(publish) => self.session.incoming_publish(publish),
+                        Packet::Publish(publish) => self.session.incoming_publish(publish).await,
 
                         Packet::PingResp(_) => (),
 
@@ -459,7 +463,6 @@ pub enum DisconnectedEvent {
     ServerRequested(Disconnect),
 }
 
-// TODO: this has to be clonable
 // TODO: where should this live?
 pub enum AckHandle {
     QoS0,

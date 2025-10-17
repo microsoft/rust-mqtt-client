@@ -7,20 +7,25 @@ use azure_mqtt::packet::{
 };
 use azure_mqtt::topic::TopicFilter;
 
+const DOWNSTREAM_CLIENT_ID: &str = "downstream_client";
+const UPSTREAM_CLIENT_ID: &str = "upstream_client";
+const HOSTNAME: &str = "localhost";
+const PORT: u16 = 1883;
+
 const DOWNSTREAM_SUB_FILTER: &str = "downstream/#";
 
 #[tokio::main]
 async fn main() {
     // Downstream client
     let options = ClientOptions {
-        client_id: "downstream_client".to_string(),
+        client_id: DOWNSTREAM_CLIENT_ID.to_string(),
         queue_size: 10,
     };
     let (ds_client, ds_event_loop, ds_receiver) = new_client(options);
 
     // Upstream client
     let options = ClientOptions {
-        client_id: "upstream_client".to_string(),
+        client_id: UPSTREAM_CLIENT_ID.to_string(),
         queue_size: 10,
     };
     let (us_client, us_event_loop, _) = new_client(options);
@@ -43,8 +48,8 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
         let (connected, _, _) = connect_handle
             .connect(
                 ConnectionTransportConfig::Tcp {
-                    hostname: "localhost".to_owned(),
-                    port: 1883,
+                    hostname: HOSTNAME.to_string(),
+                    port: PORT,
                 },
                 ConnectProperties::default(),
             )
