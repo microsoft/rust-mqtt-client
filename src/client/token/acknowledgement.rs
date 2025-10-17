@@ -228,18 +228,18 @@ mod test {
                 ("key2".to_string(), "value2".to_string()),
             ],
         };
-        let token = PubAckToken {
-            pkid,
-            epoch,
-            tx,
-            triggered: false,
-        };
+        let token = PubAckToken::new(pkid, epoch, tx);
         let completion_token = token.accept(properties.clone()).await.unwrap();
-        if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
+        if let Some(AcknowledgementRequest::PubAck(notifier, puback, req_epoch)) = rx.recv().await {
+            // The correct data was sent in the acknowledgement request
             assert_eq!(req_epoch, epoch);
             assert_eq!(puback.packet_identifier, pkid);
             assert_eq!(puback.reason, PubAckReason::Success);
             assert_eq!(puback.properties, properties);
+            // Using the acknowledgement request notifier completes the completion token that was returned
+            let completion_value = ();
+            notifier.complete(completion_value).unwrap();
+            assert_eq!(completion_token.await, Ok(completion_value));
         } else {
             panic!("Did not receive PubAck acknowledgement request");
         }
@@ -257,21 +257,20 @@ mod test {
                 ("key2".to_string(), "value2".to_string()),
             ],
         };
-        let token = PubAckToken {
-            pkid,
-            epoch,
-            tx,
-            triggered: false,
-        };
+        let token = PubAckToken::new(pkid, epoch, tx);
         let completion_token = token
             .reject(PubRejectReason::NotAuthorized, properties.clone())
             .await
             .unwrap();
-        if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
+        if let Some(AcknowledgementRequest::PubAck(notifier, puback, req_epoch)) = rx.recv().await {
             assert_eq!(req_epoch, epoch);
             assert_eq!(puback.packet_identifier, pkid);
             assert_eq!(puback.reason, PubAckReason::NotAuthorized);
             assert_eq!(puback.properties, properties);
+            // Using the acknowledgement request notifier completes the completion token that was returned
+            let completion_value = ();
+            notifier.complete(completion_value).unwrap();
+            assert_eq!(completion_token.await, Ok(completion_value));
         } else {
             panic!("Did not receive PubAck acknowledgement request");
         }
@@ -282,12 +281,7 @@ mod test {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
-        let token = PubAckToken {
-            pkid,
-            epoch,
-            tx,
-            triggered: false,
-        };
+        let token = PubAckToken::new(pkid, epoch, tx);
         // Drop the token without accepting or rejecting it
         drop(token);
         // It was accepted automatically with default properties
@@ -316,12 +310,7 @@ mod test {
                 ("key2".to_string(), "value2".to_string()),
             ],
         };
-        let token = PubAckToken {
-            pkid,
-            epoch,
-            tx,
-            triggered: false,
-        };
+        let token = PubAckToken::new(pkid, epoch, tx);
         // Use the token to send an acceptance
         let completion_token = token.accept(properties.clone()).await.unwrap();
         if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
