@@ -3,6 +3,8 @@
 
 //! Synchronization for portable triggering of acknowledgement flows
 
+use tokio::sync::mpsc::Sender;
+
 use crate::client::channel_data::AcknowledgementRequest;
 use crate::client::token::{CompletionToken, completion_pair};
 use crate::error::ClientError;
@@ -16,7 +18,7 @@ use crate::packet::{
 pub struct PubAckToken {
     pkid: PacketIdentifier,
     epoch: u64,
-    tx: tokio::sync::mpsc::Sender<AcknowledgementRequest>,
+    tx: Sender<AcknowledgementRequest>,
     triggered: bool,
 }
 
@@ -24,7 +26,7 @@ impl PubAckToken {
     pub(crate) fn new(
         pkid: PacketIdentifier,
         epoch: u64,
-        tx: tokio::sync::mpsc::Sender<AcknowledgementRequest>,
+        tx: Sender<AcknowledgementRequest>,
     ) -> Self {
         Self {
             pkid,
@@ -50,7 +52,7 @@ impl PubAckToken {
         self,
         properties: PubAckProperties,
     ) -> Result<CompletionToken<()>, ClientError> {
-        self.inner_send(properties, PubAckReason::Success).await
+        self.send(properties, PubAckReason::Success).await
     }
 
     /// Reject the received PUBLISH by issuing a PUBACK with an error reason code.
@@ -64,25 +66,37 @@ impl PubAckToken {
         reason: PubRejectReason,
         properties: PubAckProperties,
     ) -> Result<CompletionToken<()>, ClientError> {
-        self.inner_send(properties, reason.into()).await
+        self.send(properties, reason.into()).await
     }
 
-    async fn inner_send(
+    /// Internal helper to send the acknowledgement request.
+    async fn send(
         mut self,
         properties: PubAckProperties,
         reason: PubAckReason,
     ) -> Result<CompletionToken<()>, ClientError> {
+        self.triggered = true;
+        PubAckToken::inner_send(&self.tx, self.pkid, properties, reason, self.epoch).await
+    }
+
+    /// Internal helper to send the acknowledgement request.
+    /// Does not operate on self in order to allow for use in drop efficiently.
+    async fn inner_send(
+        tx: &Sender<AcknowledgementRequest>,
+        pkid: PacketIdentifier,
+        properties: PubAckProperties,
+        reason: PubAckReason,
+        epoch: u64,
+    ) -> Result<CompletionToken<()>, ClientError> {
         let (notifier, token) = completion_pair();
         let puback = PubAck {
-            packet_identifier: self.pkid,
+            packet_identifier: pkid,
             reason,
             properties,
         };
-        self.tx
-            .send(AcknowledgementRequest::PubAck(notifier, puback, self.epoch))
+        tx.send(AcknowledgementRequest::PubAck(notifier, puback, epoch))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        self.triggered = true;
         Ok(token)
     }
 }
@@ -92,18 +106,22 @@ impl Drop for PubAckToken {
         // Must acknowledge if the token was not used in order to prevent locking the
         // ack ordering flow.
         if !self.triggered {
-            // Clone tx because we can't move out of self.
-            // TODO: Consider using Option in the future for better performance
-            let owned_self = std::mem::replace(
-                self,
-                PubAckToken {
-                    pkid: self.pkid,
-                    epoch: self.epoch,
-                    tx: self.tx.clone(),
-                    triggered: true,
-                },
-            );
-            tokio::task::spawn(async move { owned_self.accept(PubAckProperties::default()).await });
+            tokio::task::spawn({
+                // TODO: Consider using Option to avoid cloning for better performance
+                let tx = self.tx.clone();
+                let pkid = self.pkid;
+                let epoch = self.epoch;
+                async move {
+                    let _ = PubAckToken::inner_send(
+                        &tx,
+                        pkid,
+                        PubAckProperties::default(),
+                        PubAckReason::Success,
+                        epoch,
+                    )
+                    .await;
+                }
+            });
         }
     }
 }
@@ -113,7 +131,7 @@ impl Drop for PubAckToken {
 pub struct PubRecToken {
     pkid: PacketIdentifier,
     epoch: u64,
-    tx: tokio::sync::mpsc::Sender<AcknowledgementRequest>,
+    tx: Sender<AcknowledgementRequest>,
     triggered: bool,
 }
 

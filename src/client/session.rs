@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 use tokio::time::{Duration, Sleep};
 
 use crate::buffer_pool::{Owned, Shared};
@@ -63,7 +63,7 @@ where
         sub_rx: Receiver<SubscriptionRequest>,
         o_pub_rx: Receiver<PublishRequest>,
         ack_rx: Receiver<AcknowledgementRequest>,
-        i_pub_tx: Sender<IncomingPublish>, // TODO: correct type
+        i_pub_tx: UnboundedSender<IncomingPublish>,
         ack_tx: Sender<AcknowledgementRequest>,
         max_pkid: PacketIdentifier,
         owned: O,
@@ -376,7 +376,7 @@ where
     }
 
     /// An incoming PUBLISH packet has been received from the server
-    pub async fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
+    pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
         let ack_handle = match publish.packet_identifier_dup_qos {
             PacketIdentifierDupQoS::AtMostOnce => AckHandle::QoS0,
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
@@ -394,7 +394,6 @@ where
         self.ch
             .i_pub_tx
             .send((publish.into(), ack_handle))
-            .await
             .expect("TODO: error handling");
     }
 
@@ -475,7 +474,7 @@ pub(crate) struct Channels {
     /// Channel for receving outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
     ack_rx: Receiver<AcknowledgementRequest>,
     /// Channel for sending incoming PUBLISH requests
-    i_pub_tx: Sender<IncomingPublish>,
+    i_pub_tx: UnboundedSender<IncomingPublish>,
     /// Channel for sending outgoing ACK requests.
     /// Stored here just to be cloned, should NOT be used directly.
     ack_tx: Sender<AcknowledgementRequest>, // TODO: Is this really the correct place for this?

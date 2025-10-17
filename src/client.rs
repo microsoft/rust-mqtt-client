@@ -50,9 +50,9 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(1);
     let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
     let (ack_tx, ack_rx) = tokio::sync::mpsc::channel(1);
-    // TODO: How should the size of the incoming application message channel be determined?
-    // For now, it's arbitrarily set to 100.
-    let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::channel(100);
+    // NOTE: We use an unbounded channel for incoming publishes, as messages read off the network must go
+    // somewhere.
+    let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::unbounded_channel();
     let client = Client {
         pub_tx: o_pub_tx,
         sub_tx,
@@ -221,7 +221,7 @@ impl Client {
 /// Receives incoming Application Messages as `Publish`es.
 pub struct Receiver {
     /// Channel for receiving incoming PUBLISH packets
-    rx: tokio::sync::mpsc::Receiver<(Publish, AckHandle)>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<(Publish, AckHandle)>,
 }
 impl Receiver {
     /// Receive an incoming `Publish`, and any `AckToken` that may be associated with it.
@@ -419,7 +419,7 @@ impl Connection {
                             );
                         }
 
-                        Packet::Publish(publish) => self.session.incoming_publish(publish).await,
+                        Packet::Publish(publish) => self.session.incoming_publish(publish),
 
                         Packet::PingResp(_) => (),
 
