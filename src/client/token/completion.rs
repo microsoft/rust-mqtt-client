@@ -29,8 +29,6 @@ pub enum CompletionError {
 pub struct CompletionToken<T>(oneshot::Receiver<Result<T, CompletionError>>);
 
 impl<T> Future for CompletionToken<T>
-where
-    T: Clone,
 {
     type Output = Result<T, CompletionError>;
 

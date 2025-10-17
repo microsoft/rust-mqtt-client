@@ -109,7 +109,7 @@ impl Drop for PubAckToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBLISH on QoS 2 with a PUBREC.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PubRecToken {
     pkid: PacketIdentifier,
     epoch: u64,
@@ -158,7 +158,7 @@ impl Drop for PubRecToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PubRelToken {}
 impl PubRelToken {
     /// Confirm the PUBREC was received by issuing a PUBREL.
@@ -185,7 +185,7 @@ impl Drop for PubRelToken {
 }
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PubCompToken {}
 
 impl PubCompToken {
