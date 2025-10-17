@@ -8,11 +8,15 @@ use azure_mqtt::packet::{
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
+const CLIENT_ID: &str = "my_client";
+const HOSTNAME: &str = "localhost";
+const PORT: u16 = 1883;
+
 #[tokio::main]
 async fn main() {
     // This would be a builder pattern in a real implementation.
     let options = ClientOptions {
-        client_id: "my_client".to_string(),
+        client_id: CLIENT_ID.to_string(),
         queue_size: 10,
     };
     let (client, disconnected, receiver) = new_client(options);
@@ -21,8 +25,8 @@ async fn main() {
     let (connected, _, _) = disconnected
         .connect(
             ConnectionTransportConfig::Tcp {
-                hostname: "localhost".to_owned(),
-                port: 1883,
+                hostname: HOSTNAME.to_string(),
+                port: PORT,
             },
             ConnectProperties::default(),
         )
@@ -69,7 +73,7 @@ async fn program(client: Client) {
             )
             .await
             .unwrap();
-
+        println!("Published message to topic");
         // Sleep for a while before publishing again
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }

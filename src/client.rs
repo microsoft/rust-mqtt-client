@@ -14,6 +14,9 @@ use bytes::Bytes;
 use futures_util::future::{self, FutureExt as _};
 
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl};
+use crate::client::token::{
+    CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair,
+};
 use crate::client::{
     channel_data::{DisconnectRequest, PublishRequest, SubscriptionRequest},
     session::{CompletedOperation, Session},
@@ -28,11 +31,11 @@ use crate::packet::{
     DisconnectProperties, PacketIdentifier, PubAck, PubRec, Publish, PublishProperties, QoS,
     SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
 };
-use crate::token::{CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair};
 use crate::topic::{TopicFilter, TopicName};
 
 mod channel_data;
 mod session;
+pub mod token;
 
 // TODO: What should this module and factory function be called?
 // The three components are the client collectively - so what should the outbound struct (currently called the Client) be?
@@ -47,9 +50,9 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(1);
     let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
     let (ack_tx, ack_rx) = tokio::sync::mpsc::channel(1);
-    // TODO: How should the size of the incoming application message channel be determined?
-    // For now, it's arbitrarily set to 100.
-    let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::channel(100);
+    // NOTE: We use an unbounded channel for incoming publishes, as messages read off the network must go
+    // somewhere.
+    let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::unbounded_channel();
     let client = Client {
         pub_tx: o_pub_tx,
         sub_tx,
@@ -62,6 +65,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         o_pub_rx,
         ack_rx,
         i_pub_tx,
+        ack_tx,
         PacketIdentifier::new(100).expect("100 is always okay"), // TODO: customizable
         owned,
     );
@@ -217,7 +221,7 @@ impl Client {
 /// Receives incoming Application Messages as `Publish`es.
 pub struct Receiver {
     /// Channel for receiving incoming PUBLISH packets
-    rx: tokio::sync::mpsc::Receiver<(Publish, AckHandle)>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<(Publish, AckHandle)>,
 }
 impl Receiver {
     /// Receive an incoming `Publish`, and any `AckToken` that may be associated with it.
@@ -459,7 +463,6 @@ pub enum DisconnectedEvent {
     ServerRequested(Disconnect),
 }
 
-// TODO: this has to be clonable
 // TODO: where should this live?
 pub enum AckHandle {
     QoS0,

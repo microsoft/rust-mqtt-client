@@ -6,16 +6,15 @@
 // TODO: Remove when possible.
 #![allow(dead_code)]
 
-use futures_util::future::{FutureExt, Shared};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
 use tokio::sync::oneshot;
 
 /// Create a new completion pair, consisting of a [`CompletionNotifier`] and a [`CompletionToken`].
-pub fn completion_pair<T: Clone>() -> (CompletionNotifier<T>, CompletionToken<T>) {
+pub fn completion_pair<T>() -> (CompletionNotifier<T>, CompletionToken<T>) {
     let (tx, rx) = oneshot::channel();
-    let token = CompletionToken(rx.shared());
+    let token = CompletionToken(rx);
     let notifier = CompletionNotifier(tx);
     (notifier, token)
 }
@@ -26,15 +25,10 @@ pub enum CompletionError {
     Cancelled,
 }
 
-#[derive(Clone, Debug)]
-pub struct CompletionToken<T>(Shared<oneshot::Receiver<Result<T, CompletionError>>>)
-where
-    T: Clone;
+#[derive(Debug)]
+pub struct CompletionToken<T>(oneshot::Receiver<Result<T, CompletionError>>);
 
-impl<T> Future for CompletionToken<T>
-where
-    T: Clone,
-{
+impl<T> Future for CompletionToken<T> {
     type Output = Result<T, CompletionError>;
 
     fn poll(
@@ -51,14 +45,9 @@ where
 
 /// Notifier half of a completion pair
 #[derive(Debug)]
-pub struct CompletionNotifier<T>(oneshot::Sender<Result<T, CompletionError>>)
-where
-    T: Clone;
+pub struct CompletionNotifier<T>(oneshot::Sender<Result<T, CompletionError>>);
 
-impl<T> CompletionNotifier<T>
-where
-    T: Clone,
-{
+impl<T> CompletionNotifier<T> {
     /// Complete the associated token(s) with the given value.
     /// If all the token(s) have been dropped, the value is returned.
     pub fn complete(self, value: T) -> Result<(), T> {
@@ -114,33 +103,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn clonability_completion() {
-        let (notifier, token) = completion_pair();
-        let token_clone = token.clone();
-
-        notifier.complete("hello_world".to_string()).unwrap();
-
-        let r1 = token.await;
-        let r2 = token_clone.await;
-        assert_eq!(r1, r2);
-        assert_eq!(r1, Ok("hello_world".to_string()));
-    }
-
-    #[tokio::test]
-    async fn clonability_cancellation() {
-        let (notifier, token): (CompletionNotifier<String>, CompletionToken<String>) =
-            completion_pair();
-        let token_clone = token.clone();
-
-        notifier.cancel().unwrap();
-
-        let r1 = token.await;
-        let r2 = token_clone.await;
-        assert_eq!(r1, r2);
-        assert_eq!(r1, Err(CompletionError::Cancelled));
-    }
-
-    #[tokio::test]
     async fn portability_completion() {
         let (notifier, token) = completion_pair();
 
@@ -177,36 +139,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn dropped_token_multiple() {
-        let (notifier, token): (CompletionNotifier<String>, CompletionToken<String>) =
-            completion_pair();
-        let token_clone = token.clone();
-
-        // Drop both tokens
-        drop(token);
-        drop(token_clone);
-
-        let res = notifier.complete("hello_world".to_string());
-        assert_eq!(res, Err("hello_world".to_string()));
-    }
-
-    #[tokio::test]
-    async fn droped_token_one_of_multiple() {
-        let (notifier, token): (CompletionNotifier<String>, CompletionToken<String>) =
-            completion_pair();
-        let token_clone = token.clone();
-
-        // Drop one of the tokens
-        drop(token_clone);
-
-        // Completion can still be sent to the other token
-        notifier.complete("hello_world".to_string()).unwrap();
-        let res = token.await;
-        assert_eq!(res, Ok("hello_world".to_string()));
-    }
-
-    #[tokio::test]
-    async fn dropped_notifier_single_token() {
+    async fn dropped_notifier() {
         let (notifier, token): (CompletionNotifier<String>, CompletionToken<String>) =
             completion_pair();
 
@@ -214,19 +147,5 @@ mod test {
 
         let res = token.await;
         assert_eq!(res, Err(CompletionError::Detatched));
-    }
-
-    #[tokio::test]
-    async fn dropped_notifier_multiple_tokens() {
-        let (notifier, token): (CompletionNotifier<String>, CompletionToken<String>) =
-            completion_pair();
-        let token_clone = token.clone();
-
-        drop(notifier);
-
-        let res1 = token.await;
-        let res2 = token_clone.await;
-        assert_eq!(res1, Err(CompletionError::Detatched));
-        assert_eq!(res2, Err(CompletionError::Detatched));
     }
 }

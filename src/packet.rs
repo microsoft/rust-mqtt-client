@@ -1322,6 +1322,22 @@ pub enum PubRejectReason {
     PayloadFormatInvalid = 0x99,
 }
 
+impl From<PubRejectReason> for PubAckReason {
+    fn from(value: PubRejectReason) -> PubAckReason {
+        match value {
+            PubRejectReason::UnspecifiedError => PubAckReason::UnspecifiedError,
+            PubRejectReason::ImplementationSpecificError => {
+                PubAckReason::ImplementationSpecificError
+            }
+            PubRejectReason::NotAuthorized => PubAckReason::NotAuthorized,
+            PubRejectReason::TopicNameInvalid => PubAckReason::TopicNameInvalid,
+            PubRejectReason::PacketIdentifierInUse => PubAckReason::PacketIdentifierInUse,
+            PubRejectReason::QuotaExceeded => PubAckReason::QuotaExceeded,
+            PubRejectReason::PayloadFormatInvalid => PubAckReason::PayloadFormatInvalid,
+        }
+    }
+}
+
 impl From<PubRejectReason> for mqtt_proto::PubAckReasonCode {
     fn from(value: PubRejectReason) -> mqtt_proto::PubAckReasonCode {
         match value {
@@ -1338,6 +1354,22 @@ impl From<PubRejectReason> for mqtt_proto::PubAckReasonCode {
             PubRejectReason::PayloadFormatInvalid => {
                 mqtt_proto::PubAckReasonCode::PayloadFormatInvalid
             }
+        }
+    }
+}
+
+impl From<PubRejectReason> for PubRecReason {
+    fn from(value: PubRejectReason) -> PubRecReason {
+        match value {
+            PubRejectReason::UnspecifiedError => PubRecReason::UnspecifiedError,
+            PubRejectReason::ImplementationSpecificError => {
+                PubRecReason::ImplementationSpecificError
+            }
+            PubRejectReason::NotAuthorized => PubRecReason::NotAuthorized,
+            PubRejectReason::TopicNameInvalid => PubRecReason::TopicNameInvalid,
+            PubRejectReason::PacketIdentifierInUse => PubRecReason::PacketIdentifierInUse,
+            PubRejectReason::QuotaExceeded => PubRecReason::QuotaExceeded,
+            PubRejectReason::PayloadFormatInvalid => PubRecReason::PayloadFormatInvalid,
         }
     }
 }

@@ -11,6 +11,9 @@ use azure_mqtt::packet::{
 };
 use azure_mqtt::topic::TopicFilter;
 
+const CLIENT_ID: &str = "my_client";
+const HOSTNAME: &str = "localhost";
+const PORT: u16 = 1883;
 const GET_FILTER: &str = "watchlist/get";
 const UPDATE_FILTER: &str = "watchlist/update";
 
@@ -18,7 +21,7 @@ const UPDATE_FILTER: &str = "watchlist/update";
 async fn main() {
     // This would be a builder pattern in a real implementation.
     let options = ClientOptions {
-        client_id: "my_client".to_string(),
+        client_id: CLIENT_ID.to_string(),
         queue_size: 10,
     };
     let (client, event_loop, receiver) = new_client(options);
@@ -76,8 +79,8 @@ async fn mqtt_run(
         let (connected, _, _) = connect_handle
             .connect(
                 ConnectionTransportConfig::Tcp {
-                    hostname: "localhost".to_owned(),
-                    port: 1883,
+                    hostname: HOSTNAME.to_string(),
+                    port: PORT,
                 },
                 ConnectProperties::default(),
             )

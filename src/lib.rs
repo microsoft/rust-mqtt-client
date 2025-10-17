@@ -14,7 +14,6 @@ mod opensslext;
 pub mod client;
 pub mod error;
 pub mod packet;
-pub mod token;
 pub mod topic;
 
 // NOTE: Any dispatching or connection management would be supplementary components.
