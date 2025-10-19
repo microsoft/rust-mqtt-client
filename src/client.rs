@@ -453,10 +453,7 @@ impl DisconnectHandle {
     }
 }
 
-// TODO: How should disconnect be handled? DesiredDisconnect vs UnexpectedDisconnect? Or leave it up to the user to stitch that
-// together based on incoming data. Lean towards the latter so we don't project semantics.
-// Should it be packet based, e.g. DISCONNECT vs ConnectionLost vs SocketClosed?
-
+/// Details about a client disconnect
 pub enum DisconnectedEvent {
     Transport,
     UserRequested,
