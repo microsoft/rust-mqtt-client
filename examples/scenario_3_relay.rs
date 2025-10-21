@@ -21,20 +21,20 @@ async fn main() {
         client_id: DOWNSTREAM_CLIENT_ID.to_string(),
         queue_size: 10,
     };
-    let (ds_client, ds_event_loop, ds_receiver) = new_client(options);
+    let (ds_client, ds_connect_handle, ds_receiver) = new_client(options);
 
     // Upstream client
     let options = ClientOptions {
         client_id: UPSTREAM_CLIENT_ID.to_string(),
         queue_size: 10,
     };
-    let (us_client, us_event_loop, _) = new_client(options);
+    let (us_client, us_connect_handle, _) = new_client(options);
 
     tokio::select! {
-        () = mqtt_run(ds_event_loop) => {
+        () = mqtt_run(ds_connect_handle) => {
             println!("Downstream Connection runner unexpectedly failed!");
         }
-        () = mqtt_run(us_event_loop) => {
+        () = mqtt_run(us_connect_handle) => {
             println!("Upstream Connection runner unexpectedly failed!");
         }
         () = message_relay(ds_receiver, ds_client, us_client) => {
