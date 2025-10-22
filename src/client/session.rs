@@ -3,10 +3,10 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::Poll;
 
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
-use tokio::time::{Duration, Sleep};
+use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
@@ -16,6 +16,7 @@ use crate::client::{
         SubscriptionRequest,
     },
     session::pkid::PkidPool,
+    session::timer::Timer,
     token::{
         PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
         PubRelToken, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
@@ -31,6 +32,7 @@ use crate::mqtt_proto::{
 use crate::packet::IntoBuffered;
 
 mod pkid;
+mod timer;
 
 /// Tracks data related to the MQTT session state
 pub(crate) struct Session<O>
@@ -51,7 +53,7 @@ where
     /// Identifier for the current connection epoch
     connection_epoch: u64,
     transient: bool,
-    pingreq: Option<PingReqTimer>,
+    pingreq_timer: Option<Timer>,
     owned: O,
 }
 
@@ -84,7 +86,7 @@ where
             connected: false,
             connection_epoch: 0,
             transient: false,
-            pingreq: None,
+            pingreq_timer: None,
             owned,
         }
     }
@@ -324,8 +326,8 @@ where
         };
 
         // Reset the ping timer as we are returning a packet that will be sent.
-        if let Some(pingreq) = self.pingreq.as_mut() {
-            pingreq.reset();
+        if let Some(pingreq_timer) = self.pingreq_timer.as_mut() {
+            pingreq_timer.reset();
         }
 
         Some(packet)
@@ -336,7 +338,7 @@ where
         // should be turned into a packet and sent over the network (i.e. not an unordered ack)
         // This (as well as the below validation TODO) may become irrelevant depending on error
         // handling in `next_outgoing_packet()` - if that needs a loop, this wrapper may be less relevant.
-        poll_for_outgoing_request(&mut self.ch, self.pingreq.as_mut()).await
+        poll_for_outgoing_request(&mut self.ch, self.pingreq_timer.as_mut()).await
         // TODO: validation of request based on connection configuration
         // TODO: do ack ordering insertion here
     }
@@ -368,7 +370,7 @@ where
                     }
 
                     // TODO: Get PINGREQ duration from connect properties
-                    self.pingreq = Some(PingReqTimer::new(Duration::from_secs(5)));
+                    self.pingreq_timer = Some(Timer::new(Duration::from_secs(5)));
                 }
             }
             CompletedOperation::Subscribe(suback) => {
@@ -499,7 +501,7 @@ where
         // if it fails, that just means the user no longer has the corresponding CompletionToken
 
         self.connected = false;
-        self.pingreq = None;
+        self.pingreq_timer = None;
         // Remove and cancel all in-flight SUBSCRIBEs
         for (pkid, notifier) in self.inflight.subscribe.drain() {
             let _ = notifier.cancel();
@@ -589,7 +591,7 @@ enum OutgoingPacketRequest {
 /// Priority order: Disconnects, Acknowledgements, Subscriptions, Publishes, Pings
 fn poll_for_outgoing_request(
     ch: &mut Channels,
-    mut pingreq: Option<&mut PingReqTimer>,
+    mut pingreq_timer: Option<&mut Timer>,
 ) -> impl Future<Output = OutgoingPacketRequest> {
     futures_util::future::poll_fn(move |cx| {
         // Disconnects get top priority, since they indicate the user wants to close the connection now.
@@ -617,8 +619,8 @@ fn poll_for_outgoing_request(
             return Poll::Ready(OutgoingPacketRequest::PublishRequest(publish));
         }
 
-        if let Some(ref mut pingreq) = pingreq
-            && let Poll::Ready(()) = Pin::new(&mut *pingreq).poll(cx)
+        if let Some(ref mut pingreq_timer) = pingreq_timer
+            && let Poll::Ready(()) = Pin::new(&mut *pingreq_timer).poll(cx)
         {
             return Poll::Ready(OutgoingPacketRequest::PingReq);
         }
@@ -666,33 +668,5 @@ where
             pubrec: HashMap::new(),
             pubrel: HashMap::new(),
         }
-    }
-}
-
-struct PingReqTimer {
-    inner: Pin<Box<Sleep>>,
-    duration: Duration,
-}
-
-impl PingReqTimer {
-    fn new(duration: Duration) -> Self {
-        Self {
-            inner: Box::pin(tokio::time::sleep(duration)),
-            duration,
-        }
-    }
-
-    fn reset(&mut self) {
-        self.inner
-            .as_mut()
-            .reset(tokio::time::Instant::now() + self.duration);
-    }
-}
-
-impl Future for PingReqTimer {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.inner.as_mut().poll(cx)
     }
 }
