@@ -10,12 +10,8 @@ use azure_mqtt::packet::{
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
-// const CLIENT_ID: &str = "my_client";
-// const HOSTNAME: &str = "localhost";
-// const PORT: u16 = 1883;
-
-const CLIENT_ID: &str = "carter_aio_client";
-const HOSTNAME: &str = "test.mosquitto.org";
+const CLIENT_ID: &str = "my_client";
+const HOSTNAME: &str = "localhost";
 const PORT: u16 = 1883;
 
 #[tokio::main]
