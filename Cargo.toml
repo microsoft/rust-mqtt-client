@@ -16,6 +16,7 @@ bytes = { version = "1", default-features = false }
 derive-where = { version = "1", default-features = false }
 either = { version = "1.6", default-features = false }
 enum-iterator = { version = "2", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["executor"]}
 futures-sink = { version = "0.3", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = [
     "std", # for futures_util::future::Shared

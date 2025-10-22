@@ -4,6 +4,7 @@
 //! Synchronization for portable triggering of acknowledgement flows
 
 use tokio::sync::mpsc::Sender;
+use futures::executor::block_on;
 
 use crate::client::channel_data::AcknowledgementRequest;
 use crate::client::token::{CompletionToken, completion_pair};
@@ -106,12 +107,11 @@ impl Drop for PubAckToken {
         // Must acknowledge if the token was not used in order to prevent locking the
         // ack ordering flow.
         if !self.triggered {
-            tokio::task::spawn({
-                // TODO: Consider using Option to avoid cloning for better performance
-                let tx = self.tx.clone();
-                let pkid = self.pkid;
-                let epoch = self.epoch;
-                async move {
+            let tx = self.tx.clone();
+            let pkid = self.pkid;
+            let epoch = self.epoch;
+            std::thread::spawn(move || {
+                block_on(async move {
                     let _ = PubAckToken::inner_send(
                         &tx,
                         pkid,
@@ -120,7 +120,7 @@ impl Drop for PubAckToken {
                         epoch,
                     )
                     .await;
-                }
+                })
             });
         }
     }
