@@ -17,7 +17,7 @@ use crate::client::{
     },
     session::pkid::PkidPool,
     token::{
-        PubAckToken, PubRecCompletionNotifier, PubRelCompletionNotifier,
+        PubAckToken, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
         PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
         UnsubscribeCompletionNotifier,
     },
@@ -112,49 +112,76 @@ where
                 // TODO: It would be preferable if the notifier was not triggered on
                 // PUBACK / PUBCOMP until they were actually sent over the network.
                 AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
-                    let puback = Packet::PubAck(PubAck {
+                    let puback = PubAck {
                         packet_identifier: puback.packet_identifier,
                         reason_code: puback.reason.into(),
                         other_properties: puback
                             .properties
                             .into_buffered(&mut self.owned)
                             .expect("TODO: error handling"),
-                    });
-                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
-                    let _ = notifier.complete(());
-                    puback
-                }
-                AcknowledgementRequest::PubComp(notifier, ..) => {
-                    let pubcomp = Packet::PubComp(PubComp {
-                        packet_identifier: todo!(),
-                        reason_code: todo!(),
-                        other_properties: todo!(),
-                    });
-                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
-                    let _ = notifier.complete(());
-                    pubcomp
-                }
-
-                AcknowledgementRequest::PubRec(notifier, outer_pubrec) => {
-                    // TODO: wait, double check the spec on how pubrec works - do we care about succcess/failure here?
-                    // Are the completion notifier definitions wrong?
-                    let pubrec = PubRec {
-                        packet_identifier: todo!(),
-                        reason_code: todo!(),
-                        other_properties: todo!(),
                     };
-                    if !pubrec.reason_code.is_success() {
+                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                    let _ = notifier.complete(());
+                    Packet::PubAck(puback)
+                }
 
-                    }
-
+                AcknowledgementRequest::PubRecAccept(notifier, pubrec) => {
+                    let pubrec = PubRec {
+                        packet_identifier: pubrec.packet_identifier,
+                        reason_code: pubrec.reason.into(),
+                        other_properties: pubrec
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    };
+                    self.inflight
+                        .pubrec
+                        .insert(pubrec.packet_identifier, (pubrec.clone(), notifier));
                     Packet::PubRec(pubrec)
                 }
 
-                AcknowledgementRequest::PubRel(..) => Packet::PubRel(PubRel {
-                    packet_identifier: todo!(),
-                    reason_code: todo!(),
-                    other_properties: todo!(),
-                }),
+                AcknowledgementRequest::PubRecReject(notifier, pubrec) => {
+                    let pubrec = PubRec {
+                        packet_identifier: pubrec.packet_identifier,
+                        reason_code: pubrec.reason.into(),
+                        other_properties: pubrec
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    };
+                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                    let _ = notifier.complete(());
+                    Packet::PubRec(pubrec)
+                }
+
+                AcknowledgementRequest::PubRel(notifier, pubrel) => {
+                    let pubrel = PubRel {
+                        packet_identifier: pubrel.packet_identifier,
+                        reason_code: pubrel.reason.into(),
+                        other_properties: pubrel
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    };
+                    self.inflight
+                        .pubrel
+                        .insert(pubrel.packet_identifier, (pubrel.clone(), notifier));
+                    Packet::PubRel(pubrel)
+                }
+
+                AcknowledgementRequest::PubComp(notifier, pubcomp) => {
+                    let pubcomp = PubComp {
+                        packet_identifier: pubcomp.packet_identifier,
+                        reason_code: pubcomp.reason.into(),
+                        other_properties: pubcomp
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    };
+                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                    let _ = notifier.complete(());
+                    Packet::PubComp(pubcomp)
+                }
             },
 
             OutgoingPacketRequest::SubscriptionRequest(sub_req) => {
@@ -224,7 +251,6 @@ where
                         // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                         let _ = notifier.complete(());
                         publish
-
                     }
 
                     PublishRequest::PublishQoS1(notifier, topic_name, payload, properties) => {
@@ -534,7 +560,7 @@ enum OutgoingPacketRequest {
 }
 
 /// Poll for the next outgoing packet request.
-/// Priority order: Disconnects, Acknowledgements, Subscriptions, Publishes, PingReqs.
+/// Priority order: Disconnects, Acknowledgements, Subscriptions, Publishes, Pings
 fn poll_for_outgoing_request(
     ch: &mut Channels,
     mut pingreq: Option<&mut PingReqTimer>,
@@ -596,7 +622,7 @@ where
     // None of these hashmaps should ever use the same key at the same time, although this is not
     // enforced for simplicity.
     /// All inflight PUBREC operations
-    pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecCompletionNotifier)>,
+    pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier)>,
     /// All inflight PUBREL operations
     pubrel: HashMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier)>,
 }

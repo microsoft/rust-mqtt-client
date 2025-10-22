@@ -7,9 +7,10 @@ use bytes::Bytes;
 
 use crate::client::AckHandle;
 use crate::client::token::{
-    PubAckCompletionNotifier, PubCompCompletionNotifier, PubRecCompletionNotifier,
-    PubRelCompletionNotifier, PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
-    PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+    PubAckCompletionNotifier, PubCompCompletionNotifier, PubRecAcceptCompletionNotifier,
+    PubRecRejectCompletionNotifier, PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
+    PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
+    UnsubscribeCompletionNotifier,
 };
 use crate::packet::{
     Auth, DisconnectProperties, PubAck, PubComp, PubRec, PubRel, Publish, PublishProperties, QoS,
@@ -69,7 +70,8 @@ pub enum AcknowledgementRequest {
     // NOTE: Use the user facing packet here because why bother with the composite parts when we
     // have an appropriate structure?
     PubAck(PubAckCompletionNotifier, PubAck, u64),
-    PubRec(PubRecCompletionNotifier, PubRec),
+    PubRecAccept(PubRecAcceptCompletionNotifier, PubRec),
+    PubRecReject(PubRecRejectCompletionNotifier, PubRec),
     PubRel(PubRelCompletionNotifier, PubRel),
     PubComp(PubCompCompletionNotifier, PubComp),
 }

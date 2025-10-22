@@ -3,8 +3,8 @@
 
 //! Synchronization for portable triggering of acknowledgement flows
 
-use tokio::sync::mpsc::Sender;
 use futures::executor::block_on;
+use tokio::sync::mpsc::Sender;
 
 use crate::client::channel_data::AcknowledgementRequest;
 use crate::client::token::{CompletionToken, completion_pair};
@@ -120,7 +120,7 @@ impl Drop for PubAckToken {
                         epoch,
                     )
                     .await;
-                })
+                });
             });
         }
     }

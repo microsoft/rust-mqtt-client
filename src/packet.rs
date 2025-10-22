@@ -107,6 +107,7 @@ pub enum PayloadFormatIndicator {
 }
 
 /// Information about extended authentication / reauthentication
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticationInfo {
     pub method: String,
     pub data: Option<Bytes>,
@@ -475,6 +476,7 @@ where
 }
 
 /// MQTT AUTH
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Auth {
     pub reason: AuthReason,
     pub authentication_info: Option<AuthenticationInfo>,
@@ -2451,6 +2453,36 @@ mod test {
                 ],
                 server_reference: Some(byte_str("server/ref")),
             }
+        }
+    );
+
+    test_bidirectional_conversion!(
+        auth_conversion,
+        packet::Auth {
+            reason: packet::AuthReason::ContinueAuthentication,
+            authentication_info: Some(packet::AuthenticationInfo {
+                method: "authmethod".to_string(),
+                data: Some("authdata".into()),
+            }),
+            properties: packet::AuthProperties {
+                reason_string: Some("Continue authentication".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+            },
+        },
+        mqtt_proto::Auth {
+            reason_code: mqtt_proto::AuthenticateReasonCode::ContinueAuthentication,
+            authentication: Some(mqtt_proto::Authentication {
+                method: byte_str("authmethod"),
+                data: Some(binary_data("authdata")),
+            }),
+            reason_string: Some(byte_str("Continue authentication")),
+            user_properties: vec![
+                (byte_str("key1"), byte_str("value1")),
+                (byte_str("key2"), byte_str("value2")),
+            ],
         }
     );
 }
