@@ -10,8 +10,12 @@ use azure_mqtt::packet::{
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
-const CLIENT_ID: &str = "my_client";
-const HOSTNAME: &str = "localhost";
+// const CLIENT_ID: &str = "my_client";
+// const HOSTNAME: &str = "localhost";
+// const PORT: u16 = 1883;
+
+const CLIENT_ID: &str = "carter_aio_client";
+const HOSTNAME: &str = "test.mosquitto.org";
 const PORT: u16 = 1883;
 
 #[tokio::main]
@@ -21,10 +25,10 @@ async fn main() {
         client_id: CLIENT_ID.to_string(),
         queue_size: 10,
     };
-    let (client, disconnected, receiver) = new_client(options);
+    let (client, connect_handle, receiver) = new_client(options);
 
     // Connect to the MQTT broker and wait for the connection to complete
-    let (connected, _, _) = disconnected
+    let (connected, _, _) = connect_handle
         .connect(
             ConnectionTransportConfig::Tcp {
                 hostname: HOSTNAME.to_string(),
