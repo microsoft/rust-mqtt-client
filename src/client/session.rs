@@ -12,14 +12,14 @@ use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
     AckHandle,
     channel_data::{
-        AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest,
+        AcknowledgementRequest, AuthRequest, DisconnectRequest, IncomingPublish, PublishRequest,
         SubscriptionRequest,
     },
     session::pkid::PkidPool,
     token::{
-        PubAckToken, PubRecCompletionNotifier, PubRelCompletionNotifier,
-        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
-        UnsubscribeCompletionNotifier,
+        PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
+        PubRelToken, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
+        SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
     },
 };
 use crate::mqtt_proto::{
@@ -92,56 +92,99 @@ where
     /// Returns the next outgoing MQTT packet to be sent over the network
     #[allow(clippy::unused_self)]
     pub async fn next_outgoing_packet(&mut self) -> Option<Packet<O::Shared>> {
+        // TODO: remove option
         // TODO: Now that sending CONNECT is handled outside of `Session::next_outgoing_packet`,
         // it will only ever be called after `complete_inflight(ConnAck)` has been called, right?
         assert!(self.connected);
 
+        // Get the next outgoing packet request, and turn it into a packet
         #[allow(unreachable_code)] // TODO: Remove when todo!()s are resolved
-        let packet = match poll_connected_channels(&mut self.ch, self.pingreq.as_mut()).await {
-            ConnectedChannelsOutgoingPacket::DisconnectRequest(disconnect_req) => {
+        let packet = match self.next_outgoing_request().await {
+            OutgoingPacketRequest::DisconnectRequest(disconnect_req) => {
                 Packet::Disconnect(Disconnect {
                     reason_code: todo!(),
                     other_properties: todo!(),
                 })
             }
 
-            ConnectedChannelsOutgoingPacket::AcknowledgementRequest(ack_req) => match ack_req {
+            OutgoingPacketRequest::AcknowledgementRequest(ack_req) => match ack_req {
                 // TODO: Reject PUBACK if epoch does not match current connection epoch
                 // TODO: It would be preferable if the notifier was not triggered on
                 // PUBACK / PUBCOMP until they were actually sent over the network.
                 AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
-                    let puback = Packet::PubAck(PubAck {
+                    let puback = PubAck {
                         packet_identifier: puback.packet_identifier,
                         reason_code: puback.reason.into(),
                         other_properties: puback
                             .properties
                             .into_buffered(&mut self.owned)
                             .expect("TODO: error handling"),
-                    });
+                    };
                     // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                     let _ = notifier.complete(());
-                    puback
+                    Packet::PubAck(puback)
                 }
-                AcknowledgementRequest::PubComp(..) => Packet::PubComp(PubComp {
-                    packet_identifier: todo!(),
-                    reason_code: todo!(),
-                    other_properties: todo!(),
-                }),
 
-                AcknowledgementRequest::PubRec(..) => Packet::PubRec(PubRec {
-                    packet_identifier: todo!(),
-                    reason_code: todo!(),
-                    other_properties: todo!(),
-                }),
+                AcknowledgementRequest::PubRecAccept(notifier, pubrec) => {
+                    let pubrec = PubRec {
+                        packet_identifier: pubrec.packet_identifier,
+                        reason_code: pubrec.reason.into(),
+                        other_properties: pubrec
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    };
+                    self.inflight
+                        .pubrec
+                        .insert(pubrec.packet_identifier, (pubrec.clone(), notifier));
+                    Packet::PubRec(pubrec)
+                }
 
-                AcknowledgementRequest::PubRel(..) => Packet::PubRel(PubRel {
-                    packet_identifier: todo!(),
-                    reason_code: todo!(),
-                    other_properties: todo!(),
-                }),
+                AcknowledgementRequest::PubRecReject(notifier, pubrec) => {
+                    let pubrec = PubRec {
+                        packet_identifier: pubrec.packet_identifier,
+                        reason_code: pubrec.reason.into(),
+                        other_properties: pubrec
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    };
+                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                    let _ = notifier.complete(());
+                    Packet::PubRec(pubrec)
+                }
+
+                AcknowledgementRequest::PubRel(notifier, pubrel) => {
+                    let pubrel = PubRel {
+                        packet_identifier: pubrel.packet_identifier,
+                        reason_code: pubrel.reason.into(),
+                        other_properties: pubrel
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    };
+                    self.inflight
+                        .pubrel
+                        .insert(pubrel.packet_identifier, (pubrel.clone(), notifier));
+                    Packet::PubRel(pubrel)
+                }
+
+                AcknowledgementRequest::PubComp(notifier, pubcomp) => {
+                    let pubcomp = PubComp {
+                        packet_identifier: pubcomp.packet_identifier,
+                        reason_code: pubcomp.reason.into(),
+                        other_properties: pubcomp
+                            .properties
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling"),
+                    };
+                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                    let _ = notifier.complete(());
+                    Packet::PubComp(pubcomp)
+                }
             },
 
-            ConnectedChannelsOutgoingPacket::SubscriptionRequest(sub_req) => {
+            OutgoingPacketRequest::SubscriptionRequest(sub_req) => {
                 // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
                 let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
                 match sub_req {
@@ -188,10 +231,10 @@ where
                 }
             }
 
-            ConnectedChannelsOutgoingPacket::PublishRequest(publish) => {
-                let packet = match publish {
+            OutgoingPacketRequest::PublishRequest(pub_req) => {
+                let packet = match pub_req {
                     PublishRequest::PublishQoS0(notifier, topic_name, payload, properties) => {
-                        Publish {
+                        let publish = Publish {
                             topic_name: topic_name
                                 .into_inner()
                                 .to_shared(&mut self.owned)
@@ -204,7 +247,10 @@ where
                             other_properties: properties
                                 .into_buffered(&mut self.owned)
                                 .expect("TODO: error handling"),
-                        }
+                        };
+                        // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                        let _ = notifier.complete(());
+                        publish
                     }
 
                     PublishRequest::PublishQoS1(notifier, topic_name, payload, properties) => {
@@ -266,11 +312,36 @@ where
                 Packet::Publish(packet)
             }
 
-            ConnectedChannelsOutgoingPacket::PingReq => Packet::PingReq(PingReq),
+            OutgoingPacketRequest::AuthRequest(auth_req) => {
+                let auth = auth_req
+                    .0
+                    .into_buffered(&mut self.owned)
+                    .expect("TODO: error handling");
+                Packet::Auth(auth)
+            }
+
+            OutgoingPacketRequest::PingReq => Packet::PingReq(PingReq),
         };
+
+        // Reset the ping timer as we are returning a packet that will be sent.
+        if let Some(pingreq) = self.pingreq.as_mut() {
+            pingreq.reset();
+        }
+
         Some(packet)
     }
 
+    async fn next_outgoing_request(&mut self) -> OutgoingPacketRequest {
+        // TODO: put this poll in a loop that returns when it receives a packet request that
+        // should be turned into a packet and sent over the network (i.e. not an unordered ack)
+        // This (as well as the below validation TODO) may become irrelevant depending on error
+        // handling in `next_outgoing_packet()` - if that needs a loop, this wrapper may be less relevant.
+        poll_for_outgoing_request(&mut self.ch, self.pingreq.as_mut()).await
+        // TODO: validation of request based on connection configuration
+        // TODO: do ack ordering insertion here
+    }
+
+    // TODO: semantic fix - incoming_acknowledgement?
     /// Complete an in-flight operation with a received acknowledgement.
     /// Adjusts state as appropriate.
     #[allow(clippy::needless_pass_by_value)] //TODO: Remove
@@ -325,8 +396,33 @@ where
                 _ = notifier.complete(puback.into());
             }
             CompletedOperation::PublishQoS2(pubrec) => {
-                // TODO: Convert pubrec to user-facing type, create pubrel infrastructure
-                // and complete notifier
+                let (_, notifier) = self
+                    .inflight
+                    .publish_qos2
+                    .remove(&pubrec.packet_identifier)
+                    .expect("TODO: error handling");
+                let token = pubrec.reason_code.is_success().then(|| {
+                    // Pubrec accept token
+                    PubRelToken::new(pubrec.packet_identifier, self.ch.ack_tx.clone())
+                });
+                _ = notifier.complete((pubrec.into(), token));
+            }
+            CompletedOperation::PubRec(pubrel) => {
+                let (_, notifier) = self
+                    .inflight
+                    .pubrec
+                    .remove(&pubrel.packet_identifier)
+                    .expect("TODO: error handling");
+                let token = PubCompToken::new(pubrel.packet_identifier, self.ch.ack_tx.clone());
+                _ = notifier.complete((pubrel.into(), token));
+            }
+            CompletedOperation::PubRel(pubcomp) => {
+                let (_, notifier) = self
+                    .inflight
+                    .pubrel
+                    .remove(&pubcomp.packet_identifier)
+                    .expect("TODO: error handling");
+                _ = notifier.complete(pubcomp.into());
             }
         }
     }
@@ -458,9 +554,10 @@ where
     Connect(ConnAck<S>),
     PublishQoS1(PubAck<S>),
     PublishQoS2(PubRec<S>),
+    PubRec(PubRel<S>),
+    PubRel(PubComp<S>),
     Subscribe(SubAck<S>),
     Unsubscribe(UnsubAck<S>),
-    // TODO: pubrec, pubrel
 }
 
 /// Organizational struct containing channels on which the `Session` receives input
@@ -475,68 +572,55 @@ pub(crate) struct Channels {
     ack_rx: Receiver<AcknowledgementRequest>,
     /// Channel for sending incoming PUBLISH requests
     i_pub_tx: UnboundedSender<IncomingPublish>,
-    /// Channel for sending outgoing ACK requests.
     /// Stored here just to be cloned, should NOT be used directly.
     ack_tx: Sender<AcknowledgementRequest>, // TODO: Is this really the correct place for this?
 }
 
-enum ConnectedChannelsOutgoingPacket {
+enum OutgoingPacketRequest {
     DisconnectRequest(DisconnectRequest),
     AcknowledgementRequest(AcknowledgementRequest),
     SubscriptionRequest(SubscriptionRequest),
     PublishRequest(PublishRequest),
+    AuthRequest(AuthRequest),
     PingReq,
 }
 
-// Poll for outgoing ACKs, then for outgoing SUBSCRIBEs, then for outgoing PUBLISHes.
-// If any of them yields an item, reset the PINGREQ timer, else poll for outgoing PINGREQs.
-fn poll_connected_channels(
+/// Poll for the next outgoing packet request.
+/// Priority order: Disconnects, Acknowledgements, Subscriptions, Publishes, Pings
+fn poll_for_outgoing_request(
     ch: &mut Channels,
     mut pingreq: Option<&mut PingReqTimer>,
-) -> impl Future<Output = ConnectedChannelsOutgoingPacket> {
+) -> impl Future<Output = OutgoingPacketRequest> {
     futures_util::future::poll_fn(move |cx| {
+        // Disconnects get top priority, since they indicate the user wants to close the connection now.
         if let Some(disconnect_rx) = &mut ch.disconnect_rx
             && let Poll::Ready(disconnect_req) = Pin::new(disconnect_rx).poll(cx)
         {
             drop(ch.disconnect_rx.take());
             if let Ok(disconnect_req) = disconnect_req {
-                return Poll::Ready(ConnectedChannelsOutgoingPacket::DisconnectRequest(
-                    disconnect_req,
-                ));
+                return Poll::Ready(OutgoingPacketRequest::DisconnectRequest(disconnect_req));
             }
             // ... else: User dropped the disconnect_tx, so there's nothing more to do.
         }
 
+        // TODO: Add support for ordered acking ready notification here
+
         if let Poll::Ready(Some(ack_req)) = ch.ack_rx.poll_recv(cx) {
-            if let Some(ref mut pingreq) = pingreq {
-                pingreq.reset();
-            }
-            return Poll::Ready(ConnectedChannelsOutgoingPacket::AcknowledgementRequest(
-                ack_req,
-            ));
+            return Poll::Ready(OutgoingPacketRequest::AcknowledgementRequest(ack_req));
         }
 
         if let Poll::Ready(Some(sub_req)) = ch.sub_rx.poll_recv(cx) {
-            if let Some(ref mut pingreq) = pingreq {
-                pingreq.reset();
-            }
-            return Poll::Ready(ConnectedChannelsOutgoingPacket::SubscriptionRequest(
-                sub_req,
-            ));
+            return Poll::Ready(OutgoingPacketRequest::SubscriptionRequest(sub_req));
         }
 
         if let Poll::Ready(Some(publish)) = ch.o_pub_rx.poll_recv(cx) {
-            if let Some(ref mut pingreq) = pingreq {
-                pingreq.reset();
-            }
-            return Poll::Ready(ConnectedChannelsOutgoingPacket::PublishRequest(publish));
+            return Poll::Ready(OutgoingPacketRequest::PublishRequest(publish));
         }
 
         if let Some(ref mut pingreq) = pingreq
             && let Poll::Ready(()) = Pin::new(&mut *pingreq).poll(cx)
         {
-            pingreq.reset();
-            return Poll::Ready(ConnectedChannelsOutgoingPacket::PingReq);
+            return Poll::Ready(OutgoingPacketRequest::PingReq);
         }
 
         Poll::Pending
@@ -564,7 +648,7 @@ where
     // None of these hashmaps should ever use the same key at the same time, although this is not
     // enforced for simplicity.
     /// All inflight PUBREC operations
-    pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecCompletionNotifier)>,
+    pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier)>,
     /// All inflight PUBREL operations
     pubrel: HashMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier)>,
 }

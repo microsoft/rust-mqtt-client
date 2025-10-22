@@ -106,6 +106,43 @@ pub enum PayloadFormatIndicator {
     UTF8 = 1,
 }
 
+/// Information about extended authentication / reauthentication
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticationInfo {
+    pub method: String,
+    pub data: Option<Bytes>,
+}
+
+impl<S> From<mqtt_proto::Authentication<S>> for AuthenticationInfo
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::Authentication<S>) -> AuthenticationInfo {
+        AuthenticationInfo {
+            method: value.method.to_string(),
+            data: value.data.map(|d| Bytes::copy_from_slice(d.as_ref())),
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::Authentication<O::Shared>, O> for AuthenticationInfo
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::Authentication<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::Authentication {
+            method: mqtt_proto::ByteStr::new(owned, self.method)?,
+            data: self
+                .data
+                .map(|d| mqtt_proto::BinaryData::new(owned, d))
+                .transpose()?,
+        })
+    }
+}
+
 //////////////////// Packets ////////////////////
 
 /// CONNACK packet
@@ -438,21 +475,65 @@ where
     }
 }
 
-//////////////////// Properties ////////////////////
-
-/// Parameters for establishing a new connection.
-pub enum ConnectionTransportConfig {
-    Tcp {
-        hostname: String,
-        port: u16,
-    },
-    Tls {
-        hostname: String,
-    },
-    Ws {
-        request: async_tungstenite::tungstenite::handshake::client::Request,
-    },
+/// MQTT AUTH
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Auth {
+    pub reason: AuthReason,
+    pub authentication_info: Option<AuthenticationInfo>,
+    pub properties: AuthProperties,
 }
+
+impl<S> From<mqtt_proto::Auth<S>> for Auth
+where
+    S: buffer_pool::Shared,
+{
+    fn from(value: mqtt_proto::Auth<S>) -> Auth {
+        Auth {
+            reason: value.reason_code.into(),
+            authentication_info: value.authentication.map(Into::into),
+            // NOTE: There is no concept in mqtt_proto of "AuthProperties" as it's a flat
+            // structure, so unlike other packet definitions, we can't delegate to a separate
+            // conversion trait.
+            properties: AuthProperties {
+                reason_string: value.reason_string.map(|s| s.to_string()),
+                user_properties: value
+                    .user_properties
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            },
+        }
+    }
+}
+
+impl<O> IntoBuffered<mqtt_proto::Auth<O::Shared>, O> for Auth
+where
+    O: buffer_pool::Owned,
+{
+    fn into_buffered(
+        self,
+        owned: &mut O,
+    ) -> Result<mqtt_proto::Auth<O::Shared>, buffer_pool::Error> {
+        Ok(mqtt_proto::Auth {
+            reason_code: self.reason.into(),
+            authentication: self
+                .authentication_info
+                .map(|a| a.into_buffered(owned))
+                .transpose()?,
+            reason_string: self
+                .properties
+                .reason_string
+                .map(|s| mqtt_proto::ByteStr::new(owned, s))
+                .transpose()?,
+            user_properties: map_user_properties_to_bytestr(
+                owned,
+                self.properties.user_properties,
+            )?,
+        })
+    }
+}
+
+//////////////////// Properties ////////////////////
 
 /// Properties for a CONNECT
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -464,7 +545,8 @@ pub struct ConnectProperties {
     pub request_response_information: bool,
     pub request_problem_information: bool,
     pub user_properties: Vec<(String, String)>,
-    //pub authentication                    // TODO: Add auth support
+    // NOTE: Authentication Method and Authentication Data are not included here, as they are part of the
+    // separate `AuthenticationInfo` structure.
 }
 
 impl Default for ConnectProperties {
@@ -1093,9 +1175,15 @@ where
     }
 }
 
-// TODO
+/// Properties for an AUTH
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct AuthProperties {}
+pub struct AuthProperties {
+    pub reason_string: Option<String>,
+    pub user_properties: Vec<(String, String)>,
+}
+
+// NOTE: there is no IntoBuffered implementation for AuthProperties because mqtt_proto::Auth does
+// not have a dedicated properties struct equivalent
 
 //////////////////// Reasons ////////////////////
 
@@ -1779,8 +1867,29 @@ pub enum AuthReason {
     Reauthenticate = 0x19,
 }
 
-// TODO: What about if you do get a subscription, but at a different QoS than you requested? success? failure?
-// Anything less than 0x80 is considered a success I think
+impl From<mqtt_proto::AuthenticateReasonCode> for AuthReason {
+    fn from(value: mqtt_proto::AuthenticateReasonCode) -> AuthReason {
+        match value {
+            mqtt_proto::AuthenticateReasonCode::Success => AuthReason::Success,
+            mqtt_proto::AuthenticateReasonCode::ContinueAuthentication => {
+                AuthReason::ContinueAuthentication
+            }
+            mqtt_proto::AuthenticateReasonCode::ReAuthenticate => AuthReason::Reauthenticate,
+        }
+    }
+}
+
+impl From<AuthReason> for mqtt_proto::AuthenticateReasonCode {
+    fn from(value: AuthReason) -> mqtt_proto::AuthenticateReasonCode {
+        match value {
+            AuthReason::Success => mqtt_proto::AuthenticateReasonCode::Success,
+            AuthReason::ContinueAuthentication => {
+                mqtt_proto::AuthenticateReasonCode::ContinueAuthentication
+            }
+            AuthReason::Reauthenticate => mqtt_proto::AuthenticateReasonCode::ReAuthenticate,
+        }
+    }
+}
 
 //////////////////// Utility ////////////////////
 
@@ -2344,6 +2453,36 @@ mod test {
                 ],
                 server_reference: Some(byte_str("server/ref")),
             }
+        }
+    );
+
+    test_bidirectional_conversion!(
+        auth_conversion,
+        packet::Auth {
+            reason: packet::AuthReason::ContinueAuthentication,
+            authentication_info: Some(packet::AuthenticationInfo {
+                method: "authmethod".to_string(),
+                data: Some("authdata".into()),
+            }),
+            properties: packet::AuthProperties {
+                reason_string: Some("Continue authentication".to_string()),
+                user_properties: vec![
+                    ("key1".to_string(), "value1".to_string()),
+                    ("key2".to_string(), "value2".to_string()),
+                ],
+            },
+        },
+        mqtt_proto::Auth {
+            reason_code: mqtt_proto::AuthenticateReasonCode::ContinueAuthentication,
+            authentication: Some(mqtt_proto::Authentication {
+                method: byte_str("authmethod"),
+                data: Some(binary_data("authdata")),
+            }),
+            reason_string: Some(byte_str("Continue authentication")),
+            user_properties: vec![
+                (byte_str("key1"), byte_str("value1")),
+                (byte_str("key2"), byte_str("value2")),
+            ],
         }
     );
 }

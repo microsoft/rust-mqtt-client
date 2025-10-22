@@ -3,6 +3,7 @@
 
 //! Synchronization for portable triggering of acknowledgement flows
 
+use futures::executor::block_on;
 use tokio::sync::mpsc::Sender;
 
 use crate::client::channel_data::AcknowledgementRequest;
@@ -106,12 +107,12 @@ impl Drop for PubAckToken {
         // Must acknowledge if the token was not used in order to prevent locking the
         // ack ordering flow.
         if !self.triggered {
-            tokio::task::spawn({
-                // TODO: Consider using Option to avoid cloning for better performance
-                let tx = self.tx.clone();
-                let pkid = self.pkid;
-                let epoch = self.epoch;
-                async move {
+            // TODO: Consider using Option to avoid cloning for better performance
+            let tx = self.tx.clone();
+            let pkid = self.pkid;
+            let epoch = self.epoch;
+            std::thread::spawn(move || {
+                block_on(async move {
                     let _ = PubAckToken::inner_send(
                         &tx,
                         pkid,
@@ -120,7 +121,7 @@ impl Drop for PubAckToken {
                         epoch,
                     )
                     .await;
-                }
+                });
             });
         }
     }
@@ -130,12 +131,19 @@ impl Drop for PubAckToken {
 #[derive(Debug)]
 pub struct PubRecToken {
     pkid: PacketIdentifier,
-    epoch: u64,
     tx: Sender<AcknowledgementRequest>,
     triggered: bool,
 }
 
 impl PubRecToken {
+    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest>) -> Self {
+        Self {
+            pkid,
+            tx,
+            triggered: false,
+        }
+    }
+
     /// Accept the received PUBLISH by issuing a PUBREC indicating success.
     ///
     /// Consumes itself on call, so it cannot be used again.
@@ -177,8 +185,20 @@ impl Drop for PubRecToken {
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
 #[derive(Debug)]
-pub struct PubRelToken {}
+pub struct PubRelToken {
+    pkid: PacketIdentifier,
+    tx: Sender<AcknowledgementRequest>,
+    triggered: bool,
+}
 impl PubRelToken {
+    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest>) -> Self {
+        Self {
+            pkid,
+            tx,
+            triggered: false,
+        }
+    }
+
     /// Confirm the PUBREC was received by issuing a PUBREL.
     ///
     /// Consumes itself on call so it cannot be used again.
@@ -204,9 +224,21 @@ impl Drop for PubRelToken {
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
 #[derive(Debug)]
-pub struct PubCompToken {}
+pub struct PubCompToken {
+    pkid: PacketIdentifier,
+    tx: Sender<AcknowledgementRequest>,
+    triggered: bool,
+}
 
 impl PubCompToken {
+    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest>) -> Self {
+        Self {
+            pkid,
+            tx,
+            triggered: false,
+        }
+    }
+
     /// Confirm the PUBREL was received by issuing a PUBCOMP.
     ///
     /// Consumes itself on call so it cannot be used again.

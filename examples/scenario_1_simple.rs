@@ -1,10 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use azure_mqtt::client::{AckHandle, Client, ClientOptions, Connection, Receiver, new_client};
+use azure_mqtt::client::{
+    AckHandle, Client, ClientOptions, Connection, ConnectionTransportConfig, Receiver, new_client,
+};
 use azure_mqtt::packet::{
-    ConnectProperties, ConnectionTransportConfig, PubAckProperties, PubCompProperties,
-    PubRecProperties, PublishProperties, QoS, SubscribeProperties,
+    ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
+    QoS, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -19,10 +21,10 @@ async fn main() {
         client_id: CLIENT_ID.to_string(),
         queue_size: 10,
     };
-    let (client, disconnected, receiver) = new_client(options);
+    let (client, connect_handle, receiver) = new_client(options);
 
     // Connect to the MQTT broker and wait for the connection to complete
-    let (connected, _, _) = disconnected
+    let (connected, _, _) = connect_handle
         .connect(
             ConnectionTransportConfig::Tcp {
                 hostname: HOSTNAME.to_string(),
