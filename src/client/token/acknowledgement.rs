@@ -130,12 +130,19 @@ impl Drop for PubAckToken {
 #[derive(Debug)]
 pub struct PubRecToken {
     pkid: PacketIdentifier,
-    epoch: u64,
     tx: Sender<AcknowledgementRequest>,
     triggered: bool,
 }
 
 impl PubRecToken {
+    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest>) -> Self {
+        Self {
+            pkid,
+            tx,
+            triggered: false,
+        }
+    }
+
     /// Accept the received PUBLISH by issuing a PUBREC indicating success.
     ///
     /// Consumes itself on call, so it cannot be used again.
@@ -177,8 +184,20 @@ impl Drop for PubRecToken {
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
 #[derive(Debug)]
-pub struct PubRelToken {}
+pub struct PubRelToken {
+    pkid: PacketIdentifier,
+    tx: Sender<AcknowledgementRequest>,
+    triggered: bool,
+}
 impl PubRelToken {
+    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest>) -> Self {
+        Self {
+            pkid,
+            tx,
+            triggered: false,
+        }
+    }
+
     /// Confirm the PUBREC was received by issuing a PUBREL.
     ///
     /// Consumes itself on call so it cannot be used again.
@@ -204,9 +223,21 @@ impl Drop for PubRelToken {
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
 #[derive(Debug)]
-pub struct PubCompToken {}
+pub struct PubCompToken {
+    pkid: PacketIdentifier,
+    tx: Sender<AcknowledgementRequest>,
+    triggered: bool,
+}
 
 impl PubCompToken {
+    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest>) -> Self {
+        Self {
+            pkid,
+            tx,
+            triggered: false,
+        }
+    }
+
     /// Confirm the PUBREL was received by issuing a PUBCOMP.
     ///
     /// Consumes itself on call so it cannot be used again.

@@ -17,9 +17,9 @@ use crate::client::{
     },
     session::pkid::PkidPool,
     token::{
-        PubAckToken, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
-        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
-        UnsubscribeCompletionNotifier,
+        PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
+        PubRelToken, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
+        SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
     },
 };
 use crate::mqtt_proto::{
@@ -396,8 +396,33 @@ where
                 _ = notifier.complete(puback.into());
             }
             CompletedOperation::PublishQoS2(pubrec) => {
-                // TODO: Convert pubrec to user-facing type, create pubrel infrastructure
-                // and complete notifier
+                let (_, notifier) = self
+                    .inflight
+                    .publish_qos2
+                    .remove(&pubrec.packet_identifier)
+                    .expect("TODO: error handling");
+                let token = pubrec.reason_code.is_success().then(|| {
+                    // Pubrec accept token
+                    PubRelToken::new(pubrec.packet_identifier, self.ch.ack_tx.clone())
+                });
+                _ = notifier.complete((pubrec.into(), token));
+            }
+            CompletedOperation::PubRec(pubrel) => {
+                let (_, notifier) = self
+                    .inflight
+                    .pubrec
+                    .remove(&pubrel.packet_identifier)
+                    .expect("TODO: error handling");
+                let token = PubCompToken::new(pubrel.packet_identifier, self.ch.ack_tx.clone());
+                _ = notifier.complete((pubrel.into(), token));
+            }
+            CompletedOperation::PubRel(pubcomp) => {
+                let (_, notifier) = self
+                    .inflight
+                    .pubrel
+                    .remove(&pubcomp.packet_identifier)
+                    .expect("TODO: error handling");
+                _ = notifier.complete(pubcomp.into());
             }
         }
     }
@@ -529,9 +554,10 @@ where
     Connect(ConnAck<S>),
     PublishQoS1(PubAck<S>),
     PublishQoS2(PubRec<S>),
+    PubRec(PubRel<S>),
+    PubRel(PubComp<S>),
     Subscribe(SubAck<S>),
     Unsubscribe(UnsubAck<S>),
-    // TODO: pubrec, pubrel
 }
 
 /// Organizational struct containing channels on which the `Session` receives input
