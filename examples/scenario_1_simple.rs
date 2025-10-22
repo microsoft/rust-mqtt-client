@@ -1,10 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use azure_mqtt::client::{AckHandle, Client, ClientOptions, Connection, Receiver, new_client};
+use azure_mqtt::client::{
+    AckHandle, Client, ClientOptions, Connection, ConnectionTransportConfig, Receiver, new_client,
+};
 use azure_mqtt::packet::{
-    ConnectProperties, ConnectionTransportConfig, PubAckProperties, PubCompProperties,
-    PubRecProperties, PublishProperties, QoS, SubscribeProperties,
+    ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
+    QoS, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 

@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use azure_mqtt::client::{Client, ClientOptions, ConnectHandle, Receiver, new_client};
-use azure_mqtt::packet::{
-    ConnectProperties, ConnectionTransportConfig, DeliveryQoS, QoS, SubscribeProperties,
+use azure_mqtt::client::{
+    Client, ClientOptions, ConnectHandle, ConnectionTransportConfig, Receiver, new_client,
 };
+use azure_mqtt::packet::{ConnectProperties, DeliveryQoS, QoS, SubscribeProperties};
 use azure_mqtt::topic::TopicFilter;
 
 const DOWNSTREAM_CLIENT_ID: &str = "downstream_client";

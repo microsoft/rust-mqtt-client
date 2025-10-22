@@ -12,7 +12,7 @@ use crate::client::token::{
     PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
 };
 use crate::packet::{
-    DisconnectProperties, PubAck, PubComp, PubRec, PubRel, Publish, PublishProperties, QoS,
+    Auth, DisconnectProperties, PubAck, PubComp, PubRec, PubRel, Publish, PublishProperties, QoS,
     SubscribeProperties, UnsubscribeProperties,
 };
 use crate::topic::{TopicFilter, TopicName};
@@ -63,16 +63,20 @@ pub enum SubscriptionRequest {
     ),
 }
 
-// NOTE: Use the user facing packet here because why bother with the composite parts when we
-// have an appropriate structure?
 /// Request to send an acknowledgement packet
 #[allow(clippy::enum_variant_names)]
 pub enum AcknowledgementRequest {
+    // NOTE: Use the user facing packet here because why bother with the composite parts when we
+    // have an appropriate structure?
     PubAck(PubAckCompletionNotifier, PubAck, u64),
     PubRec(PubRecCompletionNotifier, PubRec),
     PubRel(PubRelCompletionNotifier, PubRel),
     PubComp(PubCompCompletionNotifier, PubComp),
 }
+
+/// Request to send an AUTH packet
+// NOTE: Similar to AcknowledgementRequest, we use the user-facing packet type here.
+pub struct AuthRequest(pub Auth);
 
 /// Incoming Publish + Acknowledgement infrastructure
 pub type IncomingPublish = (Publish, AckHandle);

@@ -12,7 +12,7 @@ use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
     AckHandle,
     channel_data::{
-        AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest,
+        AcknowledgementRequest, AuthRequest, DisconnectRequest, IncomingPublish, PublishRequest,
         SubscriptionRequest,
     },
     session::pkid::PkidPool,
@@ -266,6 +266,14 @@ where
                 Packet::Publish(packet)
             }
 
+            ConnectedChannelsOutgoingPacket::AuthRequest(auth_req) => {
+                let auth = auth_req
+                    .0
+                    .into_buffered(&mut self.owned)
+                    .expect("TODO: error handling");
+                Packet::Auth(auth)
+            }
+
             ConnectedChannelsOutgoingPacket::PingReq => Packet::PingReq(PingReq),
         };
         Some(packet)
@@ -475,7 +483,6 @@ pub(crate) struct Channels {
     ack_rx: Receiver<AcknowledgementRequest>,
     /// Channel for sending incoming PUBLISH requests
     i_pub_tx: UnboundedSender<IncomingPublish>,
-    /// Channel for sending outgoing ACK requests.
     /// Stored here just to be cloned, should NOT be used directly.
     ack_tx: Sender<AcknowledgementRequest>, // TODO: Is this really the correct place for this?
 }
@@ -485,6 +492,7 @@ enum ConnectedChannelsOutgoingPacket {
     AcknowledgementRequest(AcknowledgementRequest),
     SubscriptionRequest(SubscriptionRequest),
     PublishRequest(PublishRequest),
+    AuthRequest(AuthRequest),
     PingReq,
 }
 

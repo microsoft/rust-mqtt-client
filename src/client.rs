@@ -27,7 +27,7 @@ use crate::mqtt_proto::{
     Connect, ConnectOtherProperties, KeepAlive, Packet, ProtocolVersion, SessionExpiryInterval,
 };
 use crate::packet::{
-    AuthProperties, ConnAck, ConnectProperties, ConnectionTransportConfig, Disconnect,
+    Auth, AuthProperties, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
     DisconnectProperties, PacketIdentifier, PubAck, PubRec, Publish, PublishProperties, QoS,
     SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
 };
@@ -87,6 +87,20 @@ pub struct ClientOptions {
     // Any other options can be added here, but there really ought not be many.
     // TODO: Use a builder pattern?
     // TODO: How to represent authentication options?
+}
+
+/// Parameters for establishing a new connection.
+pub enum ConnectionTransportConfig {
+    Tcp {
+        hostname: String,
+        port: u16,
+    },
+    Tls {
+        hostname: String,
+    },
+    Ws {
+        request: async_tungstenite::tungstenite::handshake::client::Request,
+    },
 }
 
 // TODO: I don't like the naming of this as Client.
@@ -241,6 +255,16 @@ pub struct ConnectHandle {
 }
 
 impl ConnectHandle {
+    #[allow(unused_mut)] // TODO: Remove when implemented
+    pub async fn connect_enhanced_auth(
+        mut self,
+        connection_transport: ConnectionTransportConfig,
+        properties: ConnectProperties,
+        authentication_info: AuthenticationInfo,
+    ) -> AuthResponse {
+        unimplemented!()
+    }
+
     // TODO: Return something like Result<(Connection, ConnAck, DisconnectHandle), (ConnectHandle, ConnAck)>
     pub async fn connect(
         mut self,
@@ -450,6 +474,62 @@ impl DisconnectHandle {
         self.0
             .send(DisconnectRequest(properties))
             .map_err(|_| ClientError::DetachedClient)
+    }
+}
+
+// TODO: Determine where some of these auth structures should live, and what a token vs. handle is semantically.
+
+pub enum AuthResponse {
+    Continue(Auth, AuthToken),
+    Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
+    Failure(ConnectHandle, Option<ConnAck>),
+}
+
+// TODO: is this really the correct naming?
+pub struct AuthToken {
+    // TODO: implement
+}
+
+impl AuthToken {
+    // No completion token because no channel is required
+    pub async fn continue_auth(
+        self,
+        authentication_data: Option<Bytes>,
+        properties: AuthProperties,
+    ) -> Result<AuthResponse, ClientError> {
+        unimplemented!()
+    }
+}
+
+pub struct ReauthHandle {
+    // TODO: implement
+}
+
+impl ReauthHandle {
+    pub async fn reauth(
+        &self, // TODO: should this consume itself?
+        authentication_data: Option<Bytes>,
+        properties: AuthProperties,
+    ) -> Result<CompletionToken<ReauthResponse>, ClientError> {
+        unimplemented!()
+    }
+}
+
+pub enum ReauthResponse {
+    Continue(Auth, ReauthToken),
+    Success(Auth),
+    Failure, // Cannot provide Disconnect packet here because it is not guarnateed to be sent by server
+}
+
+pub struct ReauthToken {}
+
+impl ReauthToken {
+    pub async fn continue_reauth(
+        self,
+        authentication_data: Option<Bytes>,
+        properties: AuthProperties,
+    ) -> Result<CompletionToken<ReauthResponse>, ClientError> {
+        unimplemented!()
     }
 }
 
