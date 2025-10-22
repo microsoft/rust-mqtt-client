@@ -107,6 +107,7 @@ impl Drop for PubAckToken {
         // Must acknowledge if the token was not used in order to prevent locking the
         // ack ordering flow.
         if !self.triggered {
+            // TODO: Consider using Option to avoid cloning for better performance
             let tx = self.tx.clone();
             let pkid = self.pkid;
             let epoch = self.epoch;
