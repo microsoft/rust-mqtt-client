@@ -418,7 +418,10 @@ where
             CompletedOperation::PublishQoS2(pubrec) => {
                 let token = if pubrec.reason_code.is_success() {
                     // Pubrec accept token
-                    Some(PubRelToken::new(pubrec.packet_identifier, self.ch.ack_tx.clone()))
+                    Some(PubRelToken::new(
+                        pubrec.packet_identifier,
+                        self.ch.ack_tx.clone(),
+                    ))
                 } else {
                     // Release pkid because there will be no pubrel/pubcomp exchange
                     self.pkid_pool.release_pkid(pubrec.packet_identifier);
