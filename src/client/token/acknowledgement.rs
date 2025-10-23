@@ -3,7 +3,7 @@
 
 //! Synchronization for portable triggering of acknowledgement flows
 
-use futures::executor::block_on;
+use futures_executor::block_on;
 use tokio::sync::mpsc::Sender;
 
 use crate::client::channel_data::AcknowledgementRequest;

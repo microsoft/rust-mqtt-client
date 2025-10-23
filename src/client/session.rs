@@ -5,12 +5,15 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
 
+use bytes::Bytes;
+use futures_util::future::FutureExt as _;
+use futures_util::stream::{Peekable, Stream, StreamExt as _};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
-    AckHandle,
+    AckHandle, TopicName,
     channel_data::{
         AcknowledgementRequest, AuthRequest, DisconnectRequest, IncomingPublish, PublishRequest,
         SubscriptionRequest,
@@ -19,8 +22,8 @@ use crate::client::{
     session::timer::Timer,
     token::{
         PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
-        PubRelToken, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
-        SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+        PubRelToken, PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
+        PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
     },
 };
 use crate::mqtt_proto::{
@@ -29,7 +32,7 @@ use crate::mqtt_proto::{
     SubAck, Subscribe, SubscribeOptions, SubscribeOptionsOtherProperties, SubscribeTo, UnsubAck,
     Unsubscribe,
 };
-use crate::packet::IntoBuffered;
+use crate::packet::{IntoBuffered, PublishProperties};
 
 mod pkid;
 mod timer;
@@ -72,8 +75,8 @@ where
     ) -> Self {
         let ch = Channels {
             disconnect_rx: None,
-            o_pub_rx,
-            sub_rx,
+            o_pub_rx: ReceiverStream(o_pub_rx).peekable(),
+            sub_rx: ReceiverStream(sub_rx).peekable(),
             ack_rx,
             i_pub_tx,
             ack_tx,
@@ -186,9 +189,7 @@ where
                 }
             },
 
-            OutgoingPacketRequest::SubscriptionRequest(sub_req) => {
-                // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
-                let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
+            OutgoingPacketRequest::SubscriptionRequest(sub_req, packet_identifier) => {
                 match sub_req {
                     SubscriptionRequest::Subscribe(
                         notifier,
@@ -235,7 +236,12 @@ where
 
             OutgoingPacketRequest::PublishRequest(pub_req) => {
                 let packet = match pub_req {
-                    PublishRequest::PublishQoS0(notifier, topic_name, payload, properties) => {
+                    PublishRequestWithPkid::PublishQoS0(
+                        notifier,
+                        topic_name,
+                        payload,
+                        properties,
+                    ) => {
                         let publish = Publish {
                             topic_name: topic_name
                                 .into_inner()
@@ -255,11 +261,13 @@ where
                         publish
                     }
 
-                    PublishRequest::PublishQoS1(notifier, topic_name, payload, properties) => {
-                        // TODO: Push to outgoing messages queue if packet ID can't be assigned.
-
-                        // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
-                        let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
+                    PublishRequestWithPkid::PublishQoS1(
+                        notifier,
+                        topic_name,
+                        payload,
+                        properties,
+                        packet_identifier,
+                    ) => {
                         let publish = Publish {
                             topic_name: topic_name
                                 .into_inner()
@@ -283,11 +291,13 @@ where
                         publish
                     }
 
-                    PublishRequest::PublishQoS2(notifier, topic_name, payload, properties) => {
-                        // TODO: Push to outgoing messages queue if packet ID can't be assigned.
-
-                        // TODO: Make this async instead of failing so that we can wake up when a packet ID becomes available.
-                        let packet_identifier = self.pkid_pool.lease_next_pkid().unwrap();
+                    PublishRequestWithPkid::PublishQoS2(
+                        notifier,
+                        topic_name,
+                        payload,
+                        properties,
+                        packet_identifier,
+                    ) => {
                         let publish = Publish {
                             topic_name: topic_name
                                 .into_inner()
@@ -338,7 +348,12 @@ where
         // should be turned into a packet and sent over the network (i.e. not an unordered ack)
         // This (as well as the below validation TODO) may become irrelevant depending on error
         // handling in `next_outgoing_packet()` - if that needs a loop, this wrapper may be less relevant.
-        poll_for_outgoing_request(&mut self.ch, self.pingreq_timer.as_mut()).await
+        poll_for_outgoing_request(
+            &mut self.ch,
+            self.pingreq_timer.as_mut(),
+            &mut self.pkid_pool,
+        )
+        .await
         // TODO: validation of request based on connection configuration
         // TODO: do ack ordering insertion here
     }
@@ -567,9 +582,9 @@ pub(crate) struct Channels {
     /// Channel for receiving outgoing CONNECT and DISCONNECT requests
     pub(crate) disconnect_rx: Option<tokio::sync::oneshot::Receiver<DisconnectRequest>>,
     /// Channel for receiving outgoing PUBLISH requests
-    o_pub_rx: Receiver<PublishRequest>,
+    o_pub_rx: Peekable<ReceiverStream<PublishRequest>>,
     /// Channel for receiving outgoing SUBSCRIBE and UNSUBSCRIBE requests
-    sub_rx: Receiver<SubscriptionRequest>,
+    sub_rx: Peekable<ReceiverStream<SubscriptionRequest>>,
     /// Channel for receving outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
     ack_rx: Receiver<AcknowledgementRequest>,
     /// Channel for sending incoming PUBLISH requests
@@ -581,10 +596,36 @@ pub(crate) struct Channels {
 enum OutgoingPacketRequest {
     DisconnectRequest(DisconnectRequest),
     AcknowledgementRequest(AcknowledgementRequest),
-    SubscriptionRequest(SubscriptionRequest),
-    PublishRequest(PublishRequest),
+    SubscriptionRequest(SubscriptionRequest, PacketIdentifier),
+    PublishRequest(PublishRequestWithPkid),
     AuthRequest(AuthRequest),
     PingReq,
+}
+
+/// This represents a `PublishRequest` that has been assigned a packet identifier if it needed one.
+/// So its definition is identical to `PublishRequest`, but with an additional `PacketIdentifier` field
+/// for the QoS 1 and QoS 2 variants.
+enum PublishRequestWithPkid {
+    PublishQoS0(
+        PublishQoS0CompletionNotifier,
+        TopicName,
+        Bytes,
+        PublishProperties,
+    ),
+    PublishQoS1(
+        PublishQoS1CompletionNotifier,
+        TopicName,
+        Bytes,
+        PublishProperties,
+        PacketIdentifier,
+    ),
+    PublishQoS2(
+        PublishQoS2CompletionNotifier,
+        TopicName,
+        Bytes,
+        PublishProperties,
+        PacketIdentifier,
+    ),
 }
 
 /// Poll for the next outgoing packet request.
@@ -592,6 +633,7 @@ enum OutgoingPacketRequest {
 fn poll_for_outgoing_request(
     ch: &mut Channels,
     mut pingreq_timer: Option<&mut Timer>,
+    pkid_pool: &mut PkidPool,
 ) -> impl Future<Output = OutgoingPacketRequest> {
     futures_util::future::poll_fn(move |cx| {
         // Disconnects get top priority, since they indicate the user wants to close the connection now.
@@ -611,12 +653,47 @@ fn poll_for_outgoing_request(
             return Poll::Ready(OutgoingPacketRequest::AcknowledgementRequest(ack_req));
         }
 
-        if let Poll::Ready(Some(sub_req)) = ch.sub_rx.poll_recv(cx) {
-            return Poll::Ready(OutgoingPacketRequest::SubscriptionRequest(sub_req));
+        if let Poll::Ready(Some(_)) = Pin::new(&mut ch.sub_rx).peek().poll_unpin(cx)
+            && let Some(pkid) = pkid_pool.lease_next_pkid()
+        {
+            let Poll::Ready(Some(sub_req)) = ch.sub_rx.poll_next_unpin(cx) else {
+                unreachable!("peek() confirmed the stream has an element");
+            };
+            return Poll::Ready(OutgoingPacketRequest::SubscriptionRequest(sub_req, pkid));
         }
 
-        if let Poll::Ready(Some(publish)) = ch.o_pub_rx.poll_recv(cx) {
-            return Poll::Ready(OutgoingPacketRequest::PublishRequest(publish));
+        if let Poll::Ready(Some(publish)) = Pin::new(&mut ch.o_pub_rx).peek().poll_unpin(cx) {
+            if matches!(publish, PublishRequest::PublishQoS0(..)) {
+                let Poll::Ready(Some(PublishRequest::PublishQoS0(
+                    notifier,
+                    topic,
+                    payload,
+                    properties,
+                ))) = ch.o_pub_rx.poll_next_unpin(cx)
+                else {
+                    unreachable!("peek() confirmed the stream has an element");
+                };
+                return Poll::Ready(OutgoingPacketRequest::PublishRequest(
+                    PublishRequestWithPkid::PublishQoS0(notifier, topic, payload, properties),
+                ));
+            } else if let Some(pkid) = pkid_pool.lease_next_pkid() {
+                let Poll::Ready(Some(publish)) = ch.o_pub_rx.poll_next_unpin(cx) else {
+                    unreachable!("peek() confirmed the stream has an element");
+                };
+                return Poll::Ready(OutgoingPacketRequest::PublishRequest(match publish {
+                    PublishRequest::PublishQoS0(..) => unreachable!("handled above"),
+                    PublishRequest::PublishQoS1(notifier, topic, payload, properties) => {
+                        PublishRequestWithPkid::PublishQoS1(
+                            notifier, topic, payload, properties, pkid,
+                        )
+                    }
+                    PublishRequest::PublishQoS2(notifier, topic, payload, properties) => {
+                        PublishRequestWithPkid::PublishQoS2(
+                            notifier, topic, payload, properties, pkid,
+                        )
+                    }
+                }));
+            }
         }
 
         if let Some(ref mut pingreq_timer) = pingreq_timer
@@ -668,5 +745,18 @@ where
             pubrec: HashMap::new(),
             pubrel: HashMap::new(),
         }
+    }
+}
+
+struct ReceiverStream<T>(Receiver<T>);
+
+impl<T> Stream for ReceiverStream<T> {
+    type Item = T;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.poll_recv(cx)
     }
 }
