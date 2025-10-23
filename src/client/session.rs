@@ -389,6 +389,7 @@ where
                 }
             }
             CompletedOperation::Subscribe(suback) => {
+                self.pkid_pool.release_pkid(suback.packet_identifier);
                 let notifier = self
                     .inflight
                     .subscribe
@@ -397,6 +398,7 @@ where
                 _ = notifier.complete(suback.into());
             }
             CompletedOperation::Unsubscribe(unsuback) => {
+                self.pkid_pool.release_pkid(unsuback.packet_identifier);
                 let notifier = self
                     .inflight
                     .unsubscribe
@@ -405,6 +407,7 @@ where
                 _ = notifier.complete(unsuback.into());
             }
             CompletedOperation::PublishQoS1(puback) => {
+                self.pkid_pool.release_pkid(puback.packet_identifier);
                 let (_, notifier) = self
                     .inflight
                     .publish_qos1
@@ -413,15 +416,23 @@ where
                 _ = notifier.complete(puback.into());
             }
             CompletedOperation::PublishQoS2(pubrec) => {
+                let token = if pubrec.reason_code.is_success() {
+                    // Pubrec accept token
+                    Some(PubRelToken::new(
+                        pubrec.packet_identifier,
+                        self.ch.ack_tx.clone(),
+                    ))
+                } else {
+                    // Release pkid because there will be no pubrel/pubcomp exchange
+                    self.pkid_pool.release_pkid(pubrec.packet_identifier);
+                    None
+                };
                 let (_, notifier) = self
                     .inflight
                     .publish_qos2
                     .remove(&pubrec.packet_identifier)
                     .expect("TODO: error handling");
-                let token = pubrec.reason_code.is_success().then(|| {
-                    // Pubrec accept token
-                    PubRelToken::new(pubrec.packet_identifier, self.ch.ack_tx.clone())
-                });
+
                 _ = notifier.complete((pubrec.into(), token));
             }
             CompletedOperation::PubRec(pubrel) => {
@@ -434,6 +445,7 @@ where
                 _ = notifier.complete((pubrel.into(), token));
             }
             CompletedOperation::PubRel(pubcomp) => {
+                self.pkid_pool.release_pkid(pubcomp.packet_identifier);
                 let (_, notifier) = self
                     .inflight
                     .pubrel
