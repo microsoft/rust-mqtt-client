@@ -602,6 +602,9 @@ enum OutgoingPacketRequest {
     PingReq,
 }
 
+/// This represents a `PublishRequest` that has been assigned a packet identifier if it needed one.
+/// So its definition is identical to `PublishRequest`, but with an additional `PacketIdentifier` field
+/// for the QoS 1 and QoS 2 variants.
 enum PublishRequestWithPkid {
     PublishQoS0(
         PublishQoS0CompletionNotifier,
