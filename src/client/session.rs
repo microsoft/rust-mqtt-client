@@ -666,7 +666,7 @@ pub(crate) struct Channels {
     /// Channel for sending outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
     ack_tx: Sender<AcknowledgementRequest>,
     /// Channel for sending outgoing AUTH requests
-    auth_tx: Sender<AuthRequest>,
+    pub(crate) auth_tx: Sender<AuthRequest>,        // TODO: ideally this would not be pub crate
 }
 
 enum OutgoingPacketRequest {
