@@ -7,7 +7,8 @@
 #![allow(unused_variables)]
 #![allow(clippy::unused_async)]
 
-pub use crate::packet::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck};
+use crate::client::{AuthResponse, ReauthResponse};
+use crate::packet::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck};
 pub use acknowledgement::{PubAckToken, PubCompToken, PubRecToken, PubRelToken};
 pub use completion::CompletionToken;
 pub(crate) use completion::{CompletionNotifier, completion_pair};
@@ -27,3 +28,5 @@ pub(crate) type PubRecAcceptCompletionNotifier = CompletionNotifier<(PubRel, Pub
 pub(crate) type PubRecRejectCompletionNotifier = CompletionNotifier<()>;
 pub(crate) type PubRelCompletionNotifier = CompletionNotifier<PubComp>;
 pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
+pub(crate) type AuthCompletionNotifier = CompletionNotifier<AuthResponse>;
+pub(crate) type ReauthCompletionNotifier = CompletionNotifier<ReauthResponse>;

@@ -12,8 +12,9 @@ use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
+use crate::client::token::ReauthCompletionNotifier;
 use crate::client::{
-    AckHandle, TopicName,
+    AckHandle, ReauthResponse, ReauthToken, TopicName,
     channel_data::{
         AcknowledgementRequest, AuthRequest, DisconnectRequest, IncomingPublish, PublishRequest,
         SubscriptionRequest,
@@ -27,10 +28,10 @@ use crate::client::{
     },
 };
 use crate::mqtt_proto::{
-    ConnAck, ConnectReasonCode, Disconnect, Packet, PacketIdentifier, PacketIdentifierDupQoS,
-    PingReq, PubAck, PubComp, PubRec, PubRel, Publish, RetainHandling, SessionExpiryInterval,
-    SubAck, Subscribe, SubscribeOptions, SubscribeOptionsOtherProperties, SubscribeTo, UnsubAck,
-    Unsubscribe,
+    Auth, AuthenticateReasonCode, ConnAck, ConnectReasonCode, Disconnect, Packet, PacketIdentifier,
+    PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish, RetainHandling,
+    SessionExpiryInterval, SubAck, Subscribe, SubscribeOptions, SubscribeOptionsOtherProperties,
+    SubscribeTo, UnsubAck, Unsubscribe,
 };
 use crate::packet::{IntoBuffered, PublishProperties};
 
@@ -64,12 +65,15 @@ impl<O> Session<O>
 where
     O: Owned,
 {
+    #[allow(clippy::too_many_arguments)]    // TODO: Honestly, probably should address this
     pub fn new(
         sub_rx: Receiver<SubscriptionRequest>,
         o_pub_rx: Receiver<PublishRequest>,
         ack_rx: Receiver<AcknowledgementRequest>,
+        auth_rx: Receiver<AuthRequest>,
         i_pub_tx: UnboundedSender<IncomingPublish>,
         ack_tx: Sender<AcknowledgementRequest>,
+        auth_tx: Sender<AuthRequest>,
         max_pkid: PacketIdentifier,
         owned: O,
     ) -> Self {
@@ -78,8 +82,10 @@ where
             o_pub_rx: ReceiverStream(o_pub_rx).peekable(),
             sub_rx: ReceiverStream(sub_rx).peekable(),
             ack_rx,
+            auth_rx,
             i_pub_tx,
             ack_tx,
+            auth_tx,
         };
         Self {
             ch,
@@ -325,11 +331,21 @@ where
             }
 
             OutgoingPacketRequest::AuthRequest(auth_req) => {
-                let auth = auth_req
-                    .0
-                    .into_buffered(&mut self.owned)
-                    .expect("TODO: error handling");
-                Packet::Auth(auth)
+                let packet = match auth_req {
+                    AuthRequest::InitialAuth(notifier, auth) => {
+                        unimplemented!(
+                            "This is probably unnecessary, as I don't think we even need an enum here"
+                        )
+                    }
+                    AuthRequest::Reauth(notifier, auth) => {
+                        let auth = auth
+                            .into_buffered(&mut self.owned)
+                            .expect("TODO: error handling");
+                        self.inflight.auth = Some(notifier);
+                        auth
+                    }
+                };
+                Packet::Auth(packet)
             }
 
             OutgoingPacketRequest::PingReq => Packet::PingReq(PingReq),
@@ -361,7 +377,6 @@ where
     // TODO: semantic fix - incoming_acknowledgement?
     /// Complete an in-flight operation with a received acknowledgement.
     /// Adjusts state as appropriate.
-    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
     pub fn complete_inflight(&mut self, operation: CompletedOperation<O::Shared>) {
         match operation {
             CompletedOperation::Connect(connack) => {
@@ -425,6 +440,7 @@ where
                 } else {
                     // Release pkid because there will be no pubrel/pubcomp exchange
                     self.pkid_pool.release_pkid(pubrec.packet_identifier);
+                    // No token
                     None
                 };
                 let (_, notifier) = self
@@ -522,6 +538,34 @@ where
             .expect("TODO: error handling");
     }
 
+    /// An incoming AUTH packet has been received from the server
+    pub fn incoming_auth(&mut self, auth: Auth<O::Shared>) {
+        match auth.reason_code {
+            // TODO: Validate authentication method from CONNACK
+            AuthenticateReasonCode::Success => {
+                let notifier = self.inflight.auth.take().expect("TODO: error handling");
+                _ = notifier.complete(ReauthResponse::Success(auth.into()));
+            }
+            AuthenticateReasonCode::ContinueAuthentication => {
+                //pass on, do not stop tracking
+                let notifier = self.inflight.auth.take().expect("TODO: error handling");
+                let token = ReauthToken {
+                    method: auth
+                        .authentication
+                        .as_ref()
+                        .expect("Authentication Method must be present for reason code 0x18")
+                        .method
+                        .to_string(),
+                    tx: self.ch.auth_tx.clone(),
+                };
+                _ = notifier.complete(ReauthResponse::Continue(auth.into(), token));
+            }
+            AuthenticateReasonCode::ReAuthenticate => unreachable!(
+                "AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server"
+            ),
+        }
+    }
+
     /// The connection has been closed for any reason.
     fn disconnected(&mut self) {
         // NOTE: When we cancel CompletionNotifiers here, we don't care about the Result because
@@ -591,6 +635,7 @@ where
 
 /// Organizational struct containing channels on which the `Session` receives input
 pub(crate) struct Channels {
+    // --- Channels used to receive in the Session ---
     /// Channel for receiving outgoing CONNECT and DISCONNECT requests
     pub(crate) disconnect_rx: Option<tokio::sync::oneshot::Receiver<DisconnectRequest>>,
     /// Channel for receiving outgoing PUBLISH requests
@@ -599,10 +644,17 @@ pub(crate) struct Channels {
     sub_rx: Peekable<ReceiverStream<SubscriptionRequest>>,
     /// Channel for receving outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
     ack_rx: Receiver<AcknowledgementRequest>,
+    /// Channel for receiving outgoing AUTH requests
+    auth_rx: Receiver<AuthRequest>,
     /// Channel for sending incoming PUBLISH requests
     i_pub_tx: UnboundedSender<IncomingPublish>,
-    /// Stored here just to be cloned, should NOT be used directly.
-    ack_tx: Sender<AcknowledgementRequest>, // TODO: Is this really the correct place for this?
+
+    // --- Channels stored here to be cloned, and should not be used directly ---
+    // TODO: Is this really the correct place for these?
+    /// Channel for sending outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
+    ack_tx: Sender<AcknowledgementRequest>,
+    /// Channel for sending outgoing AUTH requests
+    auth_tx: Sender<AuthRequest>,
 }
 
 enum OutgoingPacketRequest {
@@ -665,6 +717,11 @@ fn poll_for_outgoing_request(
             return Poll::Ready(OutgoingPacketRequest::AcknowledgementRequest(ack_req));
         }
 
+        // TODO: Ideally, no polling for reauth if one is already in progress
+        if let Poll::Ready(Some(auth_req)) = ch.auth_rx.poll_recv(cx) {
+            return Poll::Ready(OutgoingPacketRequest::AuthRequest(auth_req));
+        }
+
         if let Poll::Ready(Some(_)) = Pin::new(&mut ch.sub_rx).peek().poll_unpin(cx)
             && let Some(pkid) = pkid_pool.lease_next_pkid()
         {
@@ -718,6 +775,16 @@ fn poll_for_outgoing_request(
     })
 }
 
+// TODO: this may be completely unecessary - all we know for sure right now is we need to know the in-flight auth in order to pipe the response...
+// But what DOES that repsonse look like? How does it contain the next token?
+struct PendingReauth<S>
+where
+    S: Shared,
+{
+    last_sent: Auth<S>,
+    last_received: Option<Auth<S>>,
+}
+
 /// Contains data related to in-flight operations pending a response
 struct InflightTracker<S>
 where
@@ -742,6 +809,10 @@ where
     pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier)>,
     /// All inflight PUBREL operations
     pubrel: HashMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier)>,
+
+    // --- Other ----
+    /// Inflight AUTH operation, if any.
+    auth: Option<ReauthCompletionNotifier>,
 }
 
 impl<S> Default for InflightTracker<S>
@@ -756,6 +827,7 @@ where
             unsubscribe: HashMap::new(),
             pubrec: HashMap::new(),
             pubrel: HashMap::new(),
+            auth: None,
         }
     }
 }
