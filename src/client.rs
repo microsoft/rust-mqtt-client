@@ -18,7 +18,7 @@ use crate::client::token::{
     CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair,
 };
 use crate::client::{
-    channel_data::{AuthRequest, DisconnectRequest, PublishRequest, SubscriptionRequest},
+    channel_data::{DisconnectRequest, PublishRequest, ReauthRequest, SubscriptionRequest},
     session::{CompletedOperation, Session},
 };
 use crate::error::ClientError;
@@ -620,7 +620,7 @@ impl DisconnectHandle {
 
 pub struct ReauthHandle {
     method: String,
-    tx: tokio::sync::mpsc::Sender<AuthRequest>,
+    tx: tokio::sync::mpsc::Sender<ReauthRequest>,
 }
 
 impl ReauthHandle {
@@ -639,7 +639,7 @@ impl ReauthHandle {
             properties,
         };
         self.tx
-            .send(AuthRequest::Reauth(notifier, auth))
+            .send(ReauthRequest(notifier, auth))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -663,7 +663,7 @@ pub enum ReauthResponse {
 // TODO: Should this live in token module? Probably, but is the module even a good idea at this point?
 pub struct ReauthToken {
     method: String,
-    tx: tokio::sync::mpsc::Sender<AuthRequest>,
+    tx: tokio::sync::mpsc::Sender<ReauthRequest>,
 }
 
 impl ReauthToken {
@@ -682,7 +682,7 @@ impl ReauthToken {
             properties,
         };
         self.tx
-            .send(AuthRequest::Reauth(notifier, auth))
+            .send(ReauthRequest(notifier, auth))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)

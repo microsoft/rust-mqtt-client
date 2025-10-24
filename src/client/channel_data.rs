@@ -7,10 +7,10 @@ use bytes::Bytes;
 
 use crate::client::AckHandle;
 use crate::client::token::{
-    AuthCompletionNotifier, PubAckCompletionNotifier, PubCompCompletionNotifier,
-    PubRecAcceptCompletionNotifier, PubRecRejectCompletionNotifier, PubRelCompletionNotifier,
-    PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
-    ReauthCompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+    PubAckCompletionNotifier, PubCompCompletionNotifier, PubRecAcceptCompletionNotifier,
+    PubRecRejectCompletionNotifier, PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
+    PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, ReauthCompletionNotifier,
+    SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
 };
 use crate::packet::{
     Auth, DisconnectProperties, PubAck, PubComp, PubRec, PubRel, Publish, PublishProperties, QoS,
@@ -77,11 +77,7 @@ pub enum AcknowledgementRequest {
 }
 
 /// Request to send an AUTH packet
-pub enum AuthRequest {
-    // NOTE: Similar to AcknowledgementRequest, we use the user-facing packet type here.
-    InitialAuth(AuthCompletionNotifier, Auth), // TODO: Unlikely this is necessary, remove?
-    Reauth(ReauthCompletionNotifier, Auth),
-}
+pub struct ReauthRequest(pub ReauthCompletionNotifier, pub Auth);
 
 /// Incoming Publish + Acknowledgement infrastructure
 pub type IncomingPublish = (Publish, AckHandle);

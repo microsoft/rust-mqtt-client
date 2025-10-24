@@ -16,7 +16,7 @@ use crate::client::token::ReauthCompletionNotifier;
 use crate::client::{
     AckHandle, ReauthResponse, ReauthToken, TopicName,
     channel_data::{
-        AcknowledgementRequest, AuthRequest, DisconnectRequest, IncomingPublish, PublishRequest,
+        AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest,
         SubscriptionRequest,
     },
     session::pkid::PkidPool,
@@ -65,15 +65,15 @@ impl<O> Session<O>
 where
     O: Owned,
 {
-    #[allow(clippy::too_many_arguments)]    // TODO: Honestly, probably should address this
+    #[allow(clippy::too_many_arguments)] // TODO: Honestly, probably should address this
     pub fn new(
         sub_rx: Receiver<SubscriptionRequest>,
         o_pub_rx: Receiver<PublishRequest>,
         ack_rx: Receiver<AcknowledgementRequest>,
-        auth_rx: Receiver<AuthRequest>,
+        auth_rx: Receiver<ReauthRequest>,
         i_pub_tx: UnboundedSender<IncomingPublish>,
         ack_tx: Sender<AcknowledgementRequest>,
-        auth_tx: Sender<AuthRequest>,
+        auth_tx: Sender<ReauthRequest>,
         max_pkid: PacketIdentifier,
         owned: O,
     ) -> Self {
@@ -334,21 +334,12 @@ where
                 Packet::Publish(packet)
             }
 
-            OutgoingPacketRequest::AuthRequest(auth_req) => {
-                let packet = match auth_req {
-                    AuthRequest::InitialAuth(notifier, auth) => {
-                        unimplemented!(
-                            "This is probably unnecessary, as I don't think we even need an enum here"
-                        )
-                    }
-                    AuthRequest::Reauth(notifier, auth) => {
-                        let auth = auth
-                            .into_buffered(&mut self.owned)
-                            .expect("TODO: error handling");
-                        self.inflight.auth = Some(notifier);
-                        auth
-                    }
-                };
+            OutgoingPacketRequest::ReauthRequest(auth_req) => {
+                let (notifier, auth) = (auth_req.0, auth_req.1);
+                let packet = auth
+                    .into_buffered(&mut self.owned)
+                    .expect("TODO: error handling");
+                self.inflight.auth = Some(notifier);
                 Packet::Auth(packet)
             }
 
@@ -657,7 +648,7 @@ pub(crate) struct Channels {
     /// Channel for receving outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
     ack_rx: Receiver<AcknowledgementRequest>,
     /// Channel for receiving outgoing AUTH requests
-    auth_rx: Receiver<AuthRequest>,
+    auth_rx: Receiver<ReauthRequest>,
     /// Channel for sending incoming PUBLISH requests
     i_pub_tx: UnboundedSender<IncomingPublish>,
 
@@ -666,7 +657,7 @@ pub(crate) struct Channels {
     /// Channel for sending outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
     ack_tx: Sender<AcknowledgementRequest>,
     /// Channel for sending outgoing AUTH requests
-    pub(crate) auth_tx: Sender<AuthRequest>,        // TODO: ideally this would not be pub crate
+    pub(crate) auth_tx: Sender<ReauthRequest>, // TODO: ideally this would not be pub crate
 }
 
 enum OutgoingPacketRequest {
@@ -674,7 +665,7 @@ enum OutgoingPacketRequest {
     AcknowledgementRequest(AcknowledgementRequest),
     SubscriptionRequest(SubscriptionRequest, PacketIdentifier),
     PublishRequest(PublishRequestWithPkid),
-    AuthRequest(AuthRequest),
+    ReauthRequest(ReauthRequest),
     PingReq,
 }
 
@@ -731,7 +722,7 @@ fn poll_for_outgoing_request(
 
         // TODO: Ideally, no polling for reauth if one is already in progress
         if let Poll::Ready(Some(auth_req)) = ch.auth_rx.poll_recv(cx) {
-            return Poll::Ready(OutgoingPacketRequest::AuthRequest(auth_req));
+            return Poll::Ready(OutgoingPacketRequest::ReauthRequest(auth_req));
         }
 
         if let Poll::Ready(Some(_)) = Pin::new(&mut ch.sub_rx).peek().poll_unpin(cx)
