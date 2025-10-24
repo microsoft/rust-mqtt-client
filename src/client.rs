@@ -24,12 +24,18 @@ use crate::client::{
 use crate::error::ClientError;
 use crate::io::{Reader, Writer};
 use crate::mqtt_proto::{
-    Connect, ConnectOtherProperties, KeepAlive, Packet, ProtocolVersion, SessionExpiryInterval,
+    // TODO: this gets too confusing with packet types. Can we abstract these away somehow?
+    Connect,
+    ConnectOtherProperties,
+    KeepAlive,
+    Packet,
+    ProtocolVersion,
+    SessionExpiryInterval,
 };
 use crate::packet::{
-    Auth, AuthProperties, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
-    DisconnectProperties, PacketIdentifier, PubAck, PubRec, Publish, PublishProperties, QoS,
-    SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
+    Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
+    DisconnectProperties, IntoBuffered, PacketIdentifier, PubAck, PubRec, Publish,
+    PublishProperties, QoS, SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -248,10 +254,9 @@ impl Receiver {
     }
 }
 
-// See, we need to have O here, instead of inside Session, because we need to allocate the CONNECT.
-
+/// Handle providing MQTT CONNECT functionality.
 pub struct ConnectHandle {
-    session: Session<OwnedImpl>, // Option<Session>?
+    session: Session<OwnedImpl>,
     reader_pool: BufferPoolImpl,
     writer_pool: BufferPoolImpl,
 }
@@ -269,7 +274,7 @@ impl ConnectHandle {
 
         match self.mqtt_receive(&mut reader).await {
             Packet::ConnAck(connack) => {
-                self.session.incoming_connack(connack.clone()); // TODO: handle failure to connect
+                self.session.incoming_connack(connack.clone());
 
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
@@ -291,7 +296,17 @@ impl ConnectHandle {
                     AuthResponse::Failure(self, Some(connack.into()))
                 }
             }
-            Packet::Auth(auth) => AuthResponse::Continue(auth.into(), AuthToken {}),
+            Packet::Auth(auth) => {
+                let auth_handle = AuthHandle {
+                    session: self.session,
+                    reader_pool: self.reader_pool,
+                    writer_pool: self.writer_pool,
+                    reader,
+                    writer,
+                    auth_method: authentication_info.method,
+                };
+                AuthResponse::Continue(auth.into(), auth_handle)
+            }
             _ => panic!("TODO: error handling"),
         }
     }
@@ -381,13 +396,91 @@ impl ConnectHandle {
 
     async fn mqtt_receive(&self, reader: &mut Reader<BufferPoolImpl>) -> Packet<SharedImpl> {
         let mut raw_packet = reader.read().await.expect("TODO: error handling");
+        Packet::decode(
+            raw_packet.first_byte,
+            &mut raw_packet.rest,
+            ProtocolVersion::V5,
+        )
+        .expect("TODO: error handling")
+    }
+}
+
+/// Handle for the intermediate step of an MQTT CONNECT with enhanced authentication.
+pub struct AuthHandle {
+    session: Session<OwnedImpl>,
+    reader_pool: BufferPoolImpl,
+    writer_pool: BufferPoolImpl,
+    reader: Reader<BufferPoolImpl>,
+    writer: Writer<BufferPoolImpl>,
+    auth_method: String,
+}
+
+impl AuthHandle {
+    pub async fn continue_auth(
+        mut self,
+        authentication_data: Option<Bytes>,
+        properties: AuthProperties,
+    ) -> AuthResponse {
+        // Send auth
+        let auth = Packet::Auth(
+            Auth {
+                reason: AuthReason::ContinueAuthentication,
+                authentication_info: Some(AuthenticationInfo {
+                    method: self.auth_method.clone(),
+                    data: authentication_data,
+                }),
+                properties,
+            }
+            .into_buffered(&mut self.session.owned)
+            .expect("TODO: error handling"),
+        );
+        self.writer
+            .write(&auth, ProtocolVersion::V5)
+            .await
+            .expect("TODO: error handling");
+        self.writer.flush().await.expect("TODO: error handling");
+
+        // Wait for next response
+        let mut raw_packet = self.reader.read().await.expect("TODO: error handling");
         let packet = Packet::decode(
             raw_packet.first_byte,
             &mut raw_packet.rest,
             ProtocolVersion::V5,
         )
         .expect("TODO: error handling");
-        packet
+
+        match packet {
+            Packet::ConnAck(connack) => {
+                self.session.incoming_connack(connack.clone());
+
+                if connack.is_success() {
+                    let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+                    self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    let connection = Connection {
+                        session: self.session,
+                        reader_pool: self.reader_pool,
+                        writer_pool: self.writer_pool,
+                        reader: self.reader,
+                        writer: self.writer,
+                    };
+                    AuthResponse::Success(
+                        connection,
+                        connack.into(),
+                        ReauthHandle {},
+                        DisconnectHandle(disconnect_tx),
+                    )
+                } else {
+                    let connect_handle = ConnectHandle {
+                        session: self.session,
+                        reader_pool: self.reader_pool,
+                        writer_pool: self.writer_pool,
+                    };
+                    AuthResponse::Failure(connect_handle, Some(connack.into()))
+                }
+            }
+            Packet::Auth(auth) => AuthResponse::Continue(auth.into(), self),
+            _ => panic!("TODO: error handling"),
+        }
     }
 }
 
@@ -528,25 +621,9 @@ impl DisconnectHandle {
 
 // ConnectEnahncedAuthResult? implement unwrap?
 pub enum AuthResponse {
-    Continue(Auth, AuthToken),
+    Continue(Auth, AuthHandle),
     Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
     Failure(ConnectHandle, Option<ConnAck>),
-}
-
-// TODO: is this really the correct naming?
-pub struct AuthToken {
-    // TODO: implement
-}
-
-impl AuthToken {
-    // No completion token because no channel is required
-    pub async fn continue_auth(
-        self,
-        authentication_data: Option<Bytes>,
-        properties: AuthProperties,
-    ) -> Result<AuthResponse, ClientError> {
-        unimplemented!()
-    }
 }
 
 pub struct ReauthHandle {

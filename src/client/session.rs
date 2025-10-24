@@ -57,7 +57,7 @@ where
     connection_epoch: u64,
     transient: bool,
     pingreq_timer: Option<Timer>,
-    owned: O,
+    pub(crate) owned: O, // NOTE: This really shouldn't be pub(crate)
 }
 
 impl<O> Session<O>
@@ -454,7 +454,7 @@ where
                 self.transient = true;
             }
 
-            self.connected = ConnectionState::Connected { connack: connack };
+            self.connected = ConnectionState::Connected { connack };
 
             // TODO: Get PINGREQ duration from connect properties
             self.pingreq_timer = Some(Timer::new(Duration::from_secs(5)));
