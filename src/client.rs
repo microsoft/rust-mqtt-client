@@ -13,7 +13,7 @@ use std::pin::pin;
 use bytes::Bytes;
 use futures_util::future::{self, FutureExt as _};
 
-use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl};
+use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
 use crate::client::token::{
     CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair,
 };
@@ -248,30 +248,89 @@ impl Receiver {
     }
 }
 
+// See, we need to have O here, instead of inside Session, because we need to allocate the CONNECT.
+
 pub struct ConnectHandle {
-    session: Session<OwnedImpl>,
+    session: Session<OwnedImpl>, // Option<Session>?
     reader_pool: BufferPoolImpl,
     writer_pool: BufferPoolImpl,
 }
 
 impl ConnectHandle {
-    #[allow(unused_mut)] // TODO: Remove when implemented
     pub async fn connect_enhanced_auth(
         mut self,
         connection_transport: ConnectionTransportConfig,
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
     ) -> AuthResponse {
-        unimplemented!()
+        // TODO: Even with enhanced auth, we may need skip the intermediate auth step if we get a connack
+        let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
+        self.mqtt_connect(&mut writer, properties).await;
+
+        match self.mqtt_receive(&mut reader).await {
+            Packet::ConnAck(connack) => {
+                self.session.incoming_connack(connack.clone()); // TODO: handle failure to connect
+
+                if connack.is_success() {
+                    let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+                    self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    let connection = Connection {
+                        session: self.session,
+                        reader_pool: self.reader_pool,
+                        writer_pool: self.writer_pool,
+                        reader,
+                        writer,
+                    };
+                    AuthResponse::Success(
+                        connection,
+                        connack.into(),
+                        ReauthHandle {},
+                        DisconnectHandle(disconnect_tx),
+                    )
+                } else {
+                    AuthResponse::Failure(self, Some(connack.into()))
+                }
+            }
+            Packet::Auth(auth) => AuthResponse::Continue(auth.into(), AuthToken {}),
+            _ => panic!("TODO: error handling"),
+        }
     }
 
     // TODO: Return something like Result<(Connection, ConnAck, DisconnectHandle), (ConnectHandle, ConnAck)>
     pub async fn connect(
         mut self,
         connection_transport: ConnectionTransportConfig,
-        _properties: ConnectProperties,
+        properties: ConnectProperties,
     ) -> (Connection, ConnAck, DisconnectHandle) {
-        let (mut reader, mut writer) = match connection_transport {
+        let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
+        self.mqtt_connect(&mut writer, properties).await;
+        let Packet::ConnAck(connack) = self.mqtt_receive(&mut reader).await else {
+            panic!("TODO: error handling");
+        };
+        self.session.incoming_connack(connack.clone());
+        let connack = connack.into();
+
+        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+
+        self.session.ch.disconnect_rx = Some(disconnect_rx);
+        (
+            Connection {
+                session: self.session,
+                reader_pool: self.reader_pool,
+                writer_pool: self.writer_pool,
+                reader,
+                writer,
+            },
+            connack,
+            DisconnectHandle(disconnect_tx),
+        )
+    }
+
+    async fn transport_connect(
+        &self,
+        transport_config: ConnectionTransportConfig,
+    ) -> (Reader<BufferPoolImpl>, Writer<BufferPoolImpl>) {
+        match transport_config {
             ConnectionTransportConfig::Tcp { hostname, port } => crate::io::tokio_tcp::connect(
                 (hostname, port),
                 &self.reader_pool,
@@ -291,8 +350,14 @@ impl ConnectHandle {
                     .await
                     .expect("TODO: error handling")
             }
-        };
+        }
+    }
 
+    async fn mqtt_connect(
+        &self,
+        writer: &mut Writer<BufferPoolImpl>,
+        properties: ConnectProperties,
+    ) {
         // Transport has been established. Send CONNECT and wait for CONNACK.
         // TODO: Get values from properties
         let connect = Packet::Connect(Connect {
@@ -312,7 +377,9 @@ impl ConnectHandle {
             .await
             .expect("TODO: error handling");
         writer.flush().await.expect("TODO: error handling");
+    }
 
+    async fn mqtt_receive(&self, reader: &mut Reader<BufferPoolImpl>) -> Packet<SharedImpl> {
         let mut raw_packet = reader.read().await.expect("TODO: error handling");
         let packet = Packet::decode(
             raw_packet.first_byte,
@@ -320,27 +387,7 @@ impl ConnectHandle {
             ProtocolVersion::V5,
         )
         .expect("TODO: error handling");
-        let Packet::ConnAck(connack) = packet else {
-            panic!("TODO: error handling");
-        };
-        self.session
-            .complete_inflight(CompletedOperation::Connect(connack.clone()));
-        let connack = connack.into();
-
-        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-
-        self.session.ch.disconnect_rx = Some(disconnect_rx);
-        (
-            Connection {
-                session: self.session,
-                reader_pool: self.reader_pool,
-                writer_pool: self.writer_pool,
-                reader,
-                writer,
-            },
-            connack,
-            DisconnectHandle(disconnect_tx),
-        )
+        packet
     }
 }
 
@@ -479,6 +526,7 @@ impl DisconnectHandle {
 
 // TODO: Determine where some of these auth structures should live, and what a token vs. handle is semantically.
 
+// ConnectEnahncedAuthResult? implement unwrap?
 pub enum AuthResponse {
     Continue(Auth, AuthToken),
     Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
