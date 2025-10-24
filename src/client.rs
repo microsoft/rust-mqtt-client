@@ -619,13 +619,6 @@ impl DisconnectHandle {
 
 // TODO: Determine where some of these auth structures should live, and what a token vs. handle is semantically.
 
-// ConnectEnahncedAuthResult? implement unwrap?
-pub enum AuthResponse {
-    Continue(Auth, AuthHandle),
-    Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
-    Failure(ConnectHandle, Option<ConnAck>),
-}
-
 pub struct ReauthHandle {
     // TODO: implement
 }
@@ -638,6 +631,13 @@ impl ReauthHandle {
     ) -> Result<CompletionToken<ReauthResponse>, ClientError> {
         unimplemented!()
     }
+}
+
+// ConnectEnahncedAuthResult? implement unwrap?
+pub enum AuthResponse {
+    Continue(Auth, AuthHandle),
+    Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
+    Failure(ConnectHandle, Option<ConnAck>),
 }
 
 pub enum ReauthResponse {
