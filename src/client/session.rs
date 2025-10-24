@@ -52,13 +52,13 @@ where
     outgoing_queue: VecDeque<OutgoingOperation<O::Shared>>,
     /// Tracker of all inflight MQTT packets awaiting a response
     inflight: InflightTracker<O::Shared>,
-    /// Whether the session is currently connected
-    connected: bool,
+    /// Whether the session is currently connected, and if so, the CONNACK
+    connected: ConnectionState<O::Shared>,
     /// Identifier for the current connection epoch
     connection_epoch: u64,
     transient: bool,
     pingreq_timer: Option<Timer>,
-    owned: O,
+    pub(crate) owned: O, // NOTE: This really shouldn't be pub(crate)
 }
 
 impl<O> Session<O>
@@ -92,12 +92,16 @@ where
             pkid_pool: PkidPool::new(max_pkid),
             outgoing_queue: Default::default(),
             inflight: InflightTracker::default(),
-            connected: false,
-            connection_epoch: 0,
-            transient: false,
+            connected: ConnectionState::Disconnected,
+            connection_epoch: 0, // move this to the connection state?
+            transient: false,    // move this to the connection state?
             pingreq_timer: None,
             owned,
         }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        matches!(self.connected, ConnectionState::Connected { .. })
     }
 
     /// Returns the next outgoing MQTT packet to be sent over the network
@@ -105,8 +109,8 @@ where
     pub async fn next_outgoing_packet(&mut self) -> Option<Packet<O::Shared>> {
         // TODO: remove option
         // TODO: Now that sending CONNECT is handled outside of `Session::next_outgoing_packet`,
-        // it will only ever be called after `complete_inflight(ConnAck)` has been called, right?
-        assert!(self.connected);
+        // it will only ever be called after `incoming_connack(ConnAck)` has been called, right?
+        assert!(self.is_connected());
 
         // Get the next outgoing packet request, and turn it into a packet
         #[allow(unreachable_code)] // TODO: Remove when todo!()s are resolved
@@ -379,30 +383,6 @@ where
     /// Adjusts state as appropriate.
     pub fn complete_inflight(&mut self, operation: CompletedOperation<O::Shared>) {
         match operation {
-            CompletedOperation::Connect(connack) => {
-                if let ConnectReasonCode::Success { session_present } = connack.reason_code {
-                    self.connected = true;
-
-                    if !session_present {
-                        // Previous session, if any, is not present on the server.
-                        self.session_expired();
-                    }
-
-                    self.connection_epoch += 1;
-
-                    if matches!(
-                        connack.other_properties.session_expiry_interval,
-                        Some(SessionExpiryInterval::Duration(0))
-                    ) && !self.transient
-                    {
-                        // We asked for a persistent session but the server overrode it to transient.
-                        self.transient = true;
-                    }
-
-                    // TODO: Get PINGREQ duration from connect properties
-                    self.pingreq_timer = Some(Timer::new(Duration::from_secs(5)));
-                }
-            }
             CompletedOperation::Subscribe(suback) => {
                 self.pkid_pool.release_pkid(suback.packet_identifier);
                 let notifier = self
@@ -469,6 +449,31 @@ where
                     .expect("TODO: error handling");
                 _ = notifier.complete(pubcomp.into());
             }
+        }
+    }
+
+    pub fn incoming_connack(&mut self, connack: ConnAck<O::Shared>) {
+        if let ConnectReasonCode::Success { session_present } = connack.reason_code {
+            if !session_present {
+                // Previous session, if any, is not present on the server.
+                self.session_expired();
+            }
+
+            self.connection_epoch += 1;
+
+            if matches!(
+                connack.other_properties.session_expiry_interval,
+                Some(SessionExpiryInterval::Duration(0))
+            ) && !self.transient
+            {
+                // We asked for a persistent session but the server overrode it to transient.
+                self.transient = true;
+            }
+
+            self.connected = ConnectionState::Connected { connack };
+
+            // TODO: Get PINGREQ duration from connect properties
+            self.pingreq_timer = Some(Timer::new(Duration::from_secs(5)));
         }
     }
 
@@ -571,7 +576,7 @@ where
         // NOTE: When we cancel CompletionNotifiers here, we don't care about the Result because
         // if it fails, that just means the user no longer has the corresponding CompletionToken
 
-        self.connected = false;
+        self.connected = ConnectionState::Disconnected;
         self.pingreq_timer = None;
         // Remove and cancel all in-flight SUBSCRIBEs
         for (pkid, notifier) in self.inflight.subscribe.drain() {
@@ -609,6 +614,14 @@ where
     }
 }
 
+enum ConnectionState<S>
+where
+    S: Shared,
+{
+    Disconnected,
+    Connected { connack: ConnAck<S> },
+}
+
 /// A desired operation initiated by the client
 enum OutgoingOperation<S>
 where
@@ -624,7 +637,6 @@ pub enum CompletedOperation<S>
 where
     S: Shared,
 {
-    Connect(ConnAck<S>),
     PublishQoS1(PubAck<S>),
     PublishQoS2(PubRec<S>),
     PubRec(PubRel<S>),
