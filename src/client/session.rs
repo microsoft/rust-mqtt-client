@@ -8,6 +8,7 @@ use std::task::Poll;
 use bytes::Bytes;
 use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
+use indexmap::IndexMap;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 use tokio::time::Duration;
 
@@ -22,9 +23,10 @@ use crate::client::{
     session::pkid::PkidPool,
     session::timer::Timer,
     token::{
-        PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
-        PubRelToken, PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
-        PublishQoS2CompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+        CompletionNotifier, PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier,
+        PubRelCompletionNotifier, PubRelToken, PublishQoS0CompletionNotifier,
+        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
+        UnsubscribeCompletionNotifier,
     },
 };
 use crate::mqtt_proto::{
@@ -397,7 +399,7 @@ where
                 let (_, notifier) = self
                     .inflight
                     .publish_qos1
-                    .remove(&puback.packet_identifier)
+                    .shift_remove(&puback.packet_identifier)
                     .expect("TODO: error handling");
                 _ = notifier.complete(puback.into());
             }
@@ -417,7 +419,7 @@ where
                 let (_, notifier) = self
                     .inflight
                     .publish_qos2
-                    .remove(&pubrec.packet_identifier)
+                    .shift_remove(&pubrec.packet_identifier)
                     .expect("TODO: error handling");
 
                 _ = notifier.complete((pubrec.into(), token));
@@ -436,7 +438,7 @@ where
                 let (_, notifier) = self
                     .inflight
                     .pubrel
-                    .remove(&pubcomp.packet_identifier)
+                    .shift_remove(&pubcomp.packet_identifier)
                     .expect("TODO: error handling");
                 _ = notifier.complete(pubcomp.into());
             }
@@ -579,6 +581,8 @@ where
             let _ = notifier.cancel();
             self.pkid_pool.release_pkid(pkid);
         }
+        // Remove and cancel any in-flight AUTH
+        self.inflight.auth.take().map(CompletionNotifier::cancel);
     }
 
     /// Perform state changes when the session is known to be expired on the server:
@@ -588,20 +592,32 @@ where
     /// 3. A new connection was established and the CONNACK says session present == false
     fn session_expired(&mut self) {
         // Remove and cancel all in-flight QoS 1 PUBLISHes
-        for (pkid, (_, notifier)) in self.inflight.publish_qos1.drain() {
+        for (pkid, (_, notifier)) in self.inflight.publish_qos1.drain(..) {
             let _ = notifier.cancel();
             self.pkid_pool.release_pkid(pkid);
         }
         // Remove and cancel all in-flight QoS 2 PUBLISHes
-        for (pkid, (_, notifier)) in self.inflight.publish_qos2.drain() {
+        for (pkid, (_, notifier)) in self.inflight.publish_qos2.drain(..) {
+            let _ = notifier.cancel();
+            self.pkid_pool.release_pkid(pkid);
+        }
+        // Remove and cancel all in-flight PUBREC
+        for (pkid, (_, notifier)) in self.inflight.pubrec.drain() {
+            let _ = notifier.cancel();
+            self.pkid_pool.release_pkid(pkid);
+        }
+        // Remove and cancel all in-flight PUBREL
+        for (pkid, (_, notifier)) in self.inflight.pubrel.drain(..) {
             let _ = notifier.cancel();
             self.pkid_pool.release_pkid(pkid);
         }
 
+        // NOTE: No need to clear subscribe/unsubscribe/auth here because those are cleared on
+        // any disconnect. So any session expiry that happens, either due to disconnect or on the
+        // reconnect after the disconnect has already been handled.
+
         // NOTE: connection_epoch is NOT reset here, since that would allow for old tokens to become valid again.
         // If session had a different lifespan, this would work differently (and may need to at some point).
-
-        // TODO: PUBREL, PUBREC, PUBCOMP
     }
 }
 
@@ -778,28 +794,22 @@ fn poll_for_outgoing_request(
     })
 }
 
-// TODO: this may be completely unecessary - all we know for sure right now is we need to know the in-flight auth in order to pipe the response...
-// But what DOES that repsonse look like? How does it contain the next token?
-struct PendingReauth<S>
-where
-    S: Shared,
-{
-    last_sent: Auth<S>,
-    last_received: Option<Auth<S>>,
-}
-
 /// Contains data related to in-flight operations pending a response
 struct InflightTracker<S>
 where
     S: Shared,
 {
+    // NOTE: We use IndexMap to preserve insertion order for packet types where ordering matters
+    // e.g. Publishes are redelivered in the order they were originally sent.
+    // It is more performative to use a HashMap in cases where we do not care.
+
     // --- Operation tracking ---
     // None of these hashmaps should ever use the same key at the same time, although this is not
     // enforced for simplicity.
     /// All inflight QoS 1 PUBLISH operations
-    publish_qos1: HashMap<PacketIdentifier, (Publish<S>, PublishQoS1CompletionNotifier)>,
+    publish_qos1: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS1CompletionNotifier)>,
     /// All inflight QoS 2 PUBLISH operations
-    publish_qos2: HashMap<PacketIdentifier, (Publish<S>, PublishQoS2CompletionNotifier)>,
+    publish_qos2: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS2CompletionNotifier)>,
     /// All inflight SUBSCRIBE operations
     subscribe: HashMap<PacketIdentifier, SubscribeCompletionNotifier>,
     /// All inflight UNSUBSCRIBE operations
@@ -811,7 +821,7 @@ where
     /// All inflight PUBREC operations
     pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier)>,
     /// All inflight PUBREL operations
-    pubrel: HashMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier)>,
+    pubrel: IndexMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier)>,
 
     // --- Other ----
     /// Inflight AUTH operation, if any.
@@ -824,12 +834,12 @@ where
 {
     fn default() -> Self {
         Self {
-            publish_qos1: HashMap::new(),
-            publish_qos2: HashMap::new(),
+            publish_qos1: IndexMap::new(),
+            publish_qos2: IndexMap::new(),
             subscribe: HashMap::new(),
             unsubscribe: HashMap::new(),
             pubrec: HashMap::new(),
-            pubrel: HashMap::new(),
+            pubrel: IndexMap::new(),
             auth: None,
         }
     }

@@ -27,6 +27,7 @@ hkdf = { version = "0.12", default-features = false }
 hmac = { version = "0.12", default-features = false, features = [
     "reset", # for `hmac::Hmac::finalize_reset`
 ] }
+indexmap = { version = "2.12", default-features = false, features = ["std"] }
 # for kTLS support
 libc = { version = "0.2.151", default-features = false }
 log = {version = "0.4", default-features = false }
