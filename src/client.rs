@@ -18,7 +18,7 @@ use crate::client::token::{
     CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair,
 };
 use crate::client::{
-    channel_data::{DisconnectRequest, PublishRequest, SubscriptionRequest},
+    channel_data::{DisconnectRequest, PublishRequest, ReauthRequest, SubscriptionRequest},
     session::{CompletedOperation, Session},
 };
 use crate::error::ClientError;
@@ -56,6 +56,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(1);
     let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
     let (ack_tx, ack_rx) = tokio::sync::mpsc::channel(1);
+    let (auth_tx, auth_rx) = tokio::sync::mpsc::channel(1);
     // NOTE: We use an unbounded channel for incoming publishes, as messages read off the network must go
     // somewhere.
     let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -70,8 +71,10 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         sub_rx,
         o_pub_rx,
         ack_rx,
+        auth_rx,
         i_pub_tx,
         ack_tx,
+        auth_tx,
         PacketIdentifier::new(100).expect("100 is always okay"), // TODO: customizable
         owned,
     );
@@ -125,18 +128,6 @@ pub struct Client {
 }
 
 impl Client {
-    /// Sends an AUTH packet to the broker with reason code 0x19 (Reauthenticate).
-    ///
-    /// Returns a token that can be awaited for notification of the completion of the AUTH.
-    pub async fn reauthenticate(
-        &self,
-        properties: AuthProperties,
-    ) -> Result<CompletionToken<()>, ClientError> {
-        // TODO: How to preven this from being used illegally? Only valid to reauthenticate if the original CONNECT
-        // contained an authentication method. Perhaps this should not be a method, and instead some kind of AuthToken.
-        unimplemented!()
-    }
-
     /// Sends a PUBLISH packet to the broker at QoS 0.
     ///
     /// Returns a token that can be awaited for confirmation of the PUBLISH being sent.
@@ -278,6 +269,7 @@ impl ConnectHandle {
 
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+                    let auth_tx = self.session.ch.auth_tx.clone();
                     self.session.ch.disconnect_rx = Some(disconnect_rx);
                     let connection = Connection {
                         session: self.session,
@@ -289,7 +281,10 @@ impl ConnectHandle {
                     AuthResponse::Success(
                         connection,
                         connack.into(),
-                        ReauthHandle {},
+                        ReauthHandle {
+                            method: authentication_info.method,
+                            tx: auth_tx,
+                        },
                         DisconnectHandle(disconnect_tx),
                     )
                 } else {
@@ -455,6 +450,7 @@ impl AuthHandle {
 
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+                    let auth_tx = self.session.ch.auth_tx.clone();
                     self.session.ch.disconnect_rx = Some(disconnect_rx);
                     let connection = Connection {
                         session: self.session,
@@ -466,7 +462,10 @@ impl AuthHandle {
                     AuthResponse::Success(
                         connection,
                         connack.into(),
-                        ReauthHandle {},
+                        ReauthHandle {
+                            method: self.auth_method.clone(),
+                            tx: auth_tx,
+                        },
                         DisconnectHandle(disconnect_tx),
                     )
                 } else {
@@ -620,16 +619,30 @@ impl DisconnectHandle {
 // TODO: Determine where some of these auth structures should live, and what a token vs. handle is semantically.
 
 pub struct ReauthHandle {
-    // TODO: implement
+    method: String,
+    tx: tokio::sync::mpsc::Sender<ReauthRequest>,
 }
 
 impl ReauthHandle {
     pub async fn reauth(
-        &self, // TODO: should this consume itself?
+        &self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
     ) -> Result<CompletionToken<ReauthResponse>, ClientError> {
-        unimplemented!()
+        let (notifier, token) = completion_pair();
+        let auth = Auth {
+            reason: AuthReason::Reauthenticate,
+            authentication_info: Some(AuthenticationInfo {
+                method: self.method.clone(),
+                data: authentication_data,
+            }),
+            properties,
+        };
+        self.tx
+            .send(ReauthRequest(notifier, auth))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
     }
 }
 
@@ -641,12 +654,17 @@ pub enum AuthResponse {
 }
 
 pub enum ReauthResponse {
+    // TODO: should this be in channel data and merely re-exported?
     Continue(Auth, ReauthToken),
     Success(Auth),
-    Failure, // Cannot provide Disconnect packet here because it is not guarnateed to be sent by server
+    Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
 }
 
-pub struct ReauthToken {}
+// TODO: Should this live in token module? Probably, but is the module even a good idea at this point?
+pub struct ReauthToken {
+    method: String,
+    tx: tokio::sync::mpsc::Sender<ReauthRequest>,
+}
 
 impl ReauthToken {
     pub async fn continue_reauth(
@@ -654,7 +672,20 @@ impl ReauthToken {
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
     ) -> Result<CompletionToken<ReauthResponse>, ClientError> {
-        unimplemented!()
+        let (notifier, token) = completion_pair();
+        let auth = Auth {
+            reason: AuthReason::ContinueAuthentication,
+            authentication_info: Some(AuthenticationInfo {
+                method: self.method,
+                data: authentication_data,
+            }),
+            properties,
+        };
+        self.tx
+            .send(ReauthRequest(notifier, auth))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
     }
 }
 
