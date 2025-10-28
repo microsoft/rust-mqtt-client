@@ -604,20 +604,19 @@ where
         // Remove and cancel all in-flight PUBREC
         for (pkid, (_, notifier)) in self.inflight.pubrec.drain() {
             let _ = notifier.cancel();
-            self.pkid_pool.release_pkid(pkid);
         }
         // Remove and cancel all in-flight PUBREL
         for (pkid, (_, notifier)) in self.inflight.pubrel.drain(..) {
             let _ = notifier.cancel();
-            self.pkid_pool.release_pkid(pkid);
         }
 
         // NOTE: No need to clear subscribe/unsubscribe/auth here because those are cleared on
         // any disconnect. So any session expiry that happens, either due to disconnect or on the
         // reconnect after the disconnect has already been handled.
 
+        // NOTE: PUBREC/PUBREL do not release their PKIDs because those are not leased from the PKID pool.
+
         // NOTE: connection_epoch is NOT reset here, since that would allow for old tokens to become valid again.
-        // If session had a different lifespan, this would work differently (and may need to at some point).
     }
 }
 
