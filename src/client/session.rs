@@ -588,6 +588,11 @@ where
 
         // Build list of packets to replay
         self.inflight.packets_to_replay.clear();
+        for (pubrel, _) in self.inflight.pubrel.values() {
+            self.inflight
+                .packets_to_replay
+                .push_back(Packet::PubRel(pubrel.clone()));
+        }
         for publish in self
             .inflight
             .publish_qos1
@@ -610,11 +615,6 @@ where
             self.inflight
                 .packets_to_replay
                 .push_back(Packet::Publish(publish));
-        }
-        for (pubrel, _) in self.inflight.pubrel.values() {
-            self.inflight
-                .packets_to_replay
-                .push_back(Packet::PubRel(pubrel.clone()));
         }
 
         // Remove and cancel any in-flight AUTH
