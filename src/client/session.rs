@@ -109,243 +109,247 @@ where
     /// Returns the next outgoing MQTT packet to be sent over the network
     #[allow(clippy::unused_self)]
     pub async fn next_outgoing_packet(&mut self) -> Option<Packet<O::Shared>> {
-        // TODO: remove option
         // TODO: Now that sending CONNECT is handled outside of `Session::next_outgoing_packet`,
         // it will only ever be called after `incoming_connack(ConnAck)` has been called, right?
         assert!(self.is_connected());
 
-        // Get the next outgoing packet request, and turn it into a packet
-        #[allow(unreachable_code)] // TODO: Remove when todo!()s are resolved
-        let packet = match self.next_outgoing_request().await {
-            OutgoingPacketRequest::DisconnectRequest(disconnect_req) => {
-                Packet::Disconnect(Disconnect {
-                    reason_code: todo!(),
-                    other_properties: todo!(),
-                })
-            }
-
-            OutgoingPacketRequest::AcknowledgementRequest(ack_req) => match ack_req {
-                // TODO: Reject PUBACK if epoch does not match current connection epoch
-                // TODO: It would be preferable if the notifier was not triggered on
-                // PUBACK / PUBCOMP until they were actually sent over the network.
-                AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
-                    let puback = PubAck {
-                        packet_identifier: puback.packet_identifier,
-                        reason_code: puback.reason.into(),
-                        other_properties: puback
-                            .properties
-                            .into_buffered(&mut self.owned)
-                            .expect("TODO: error handling"),
-                    };
-                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
-                    let _ = notifier.complete(());
-                    Packet::PubAck(puback)
+        // TODO: Replayed PUBLISHes should be subject to server's receive-maximum.
+        let packet = if let Some(packet) = self.inflight.packets_to_replay.pop_front() {
+            packet
+        } else {
+            // Get the next outgoing packet request, and turn it into a packet
+            #[allow(unreachable_code)] // TODO: Remove when todo!()s are resolved
+            match self.next_outgoing_request().await {
+                OutgoingPacketRequest::DisconnectRequest(disconnect_req) => {
+                    Packet::Disconnect(Disconnect {
+                        reason_code: todo!(),
+                        other_properties: todo!(),
+                    })
                 }
 
-                AcknowledgementRequest::PubRecAccept(notifier, pubrec) => {
-                    let pubrec = PubRec {
-                        packet_identifier: pubrec.packet_identifier,
-                        reason_code: pubrec.reason.into(),
-                        other_properties: pubrec
-                            .properties
-                            .into_buffered(&mut self.owned)
-                            .expect("TODO: error handling"),
-                    };
-                    self.inflight
-                        .pubrec
-                        .insert(pubrec.packet_identifier, (pubrec.clone(), notifier));
-                    Packet::PubRec(pubrec)
-                }
-
-                AcknowledgementRequest::PubRecReject(notifier, pubrec) => {
-                    let pubrec = PubRec {
-                        packet_identifier: pubrec.packet_identifier,
-                        reason_code: pubrec.reason.into(),
-                        other_properties: pubrec
-                            .properties
-                            .into_buffered(&mut self.owned)
-                            .expect("TODO: error handling"),
-                    };
-                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
-                    let _ = notifier.complete(());
-                    Packet::PubRec(pubrec)
-                }
-
-                AcknowledgementRequest::PubRel(notifier, pubrel) => {
-                    let pubrel = PubRel {
-                        packet_identifier: pubrel.packet_identifier,
-                        reason_code: pubrel.reason.into(),
-                        other_properties: pubrel
-                            .properties
-                            .into_buffered(&mut self.owned)
-                            .expect("TODO: error handling"),
-                    };
-                    self.inflight
-                        .pubrel
-                        .insert(pubrel.packet_identifier, (pubrel.clone(), notifier));
-                    Packet::PubRel(pubrel)
-                }
-
-                AcknowledgementRequest::PubComp(notifier, pubcomp) => {
-                    let pubcomp = PubComp {
-                        packet_identifier: pubcomp.packet_identifier,
-                        reason_code: pubcomp.reason.into(),
-                        other_properties: pubcomp
-                            .properties
-                            .into_buffered(&mut self.owned)
-                            .expect("TODO: error handling"),
-                    };
-                    // Do not care about result - if the token was dropped, the user is no longer waiting for it.
-                    let _ = notifier.complete(());
-                    Packet::PubComp(pubcomp)
-                }
-            },
-
-            OutgoingPacketRequest::SubscriptionRequest(sub_req, packet_identifier) => {
-                match sub_req {
-                    SubscriptionRequest::Subscribe(
-                        notifier,
-                        topic_filter,
-                        qos,
-                        subscribe_properties,
-                    ) => {
-                        self.inflight.subscribe.insert(packet_identifier, notifier);
-                        Packet::Subscribe(Subscribe {
-                            packet_identifier,
-                            subscribe_to: vec![SubscribeTo {
-                                topic_filter: topic_filter
-                                    .into_inner()
-                                    .to_shared(&mut self.owned)
-                                    .expect("TODO: error handling"),
-                                options: SubscribeOptions {
-                                    maximum_qos: qos.into(),
-                                    // TODO: Get from subscribe_properties
-                                    other_properties: SubscribeOptionsOtherProperties {
-                                        no_local: false,
-                                        retain_as_published: false,
-                                        retain_handling: RetainHandling::Send,
-                                    },
-                                },
-                            }],
-                            other_properties: subscribe_properties
-                                .into_buffered(&mut self.owned)
-                                .expect("TODO: error handling"),
-                        })
-                    }
-
-                    SubscriptionRequest::Unsubscribe(notifier, ..) => {
-                        self.inflight
-                            .unsubscribe
-                            .insert(packet_identifier, notifier);
-                        Packet::Unsubscribe(Unsubscribe {
-                            packet_identifier,
-                            unsubscribe_from: todo!(),
-                            other_properties: todo!(),
-                        })
-                    }
-                }
-            }
-
-            OutgoingPacketRequest::PublishRequest(pub_req) => {
-                let packet = match pub_req {
-                    PublishRequestWithPkid::PublishQoS0(
-                        notifier,
-                        topic_name,
-                        payload,
-                        properties,
-                    ) => {
-                        let publish = Publish {
-                            topic_name: topic_name
-                                .into_inner()
-                                .to_shared(&mut self.owned)
-                                .expect("TODO: error handling"),
-                            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
-                            retain: false, // TODO: Get from properties
-                            payload: payload
-                                .into_buffered(&mut self.owned)
-                                .expect("TODO: error handling"),
-                            other_properties: properties
+                OutgoingPacketRequest::AcknowledgementRequest(ack_req) => match ack_req {
+                    // TODO: Reject PUBACK if epoch does not match current connection epoch
+                    // TODO: It would be preferable if the notifier was not triggered on
+                    // PUBACK / PUBCOMP until they were actually sent over the network.
+                    AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
+                        let puback = PubAck {
+                            packet_identifier: puback.packet_identifier,
+                            reason_code: puback.reason.into(),
+                            other_properties: puback
+                                .properties
                                 .into_buffered(&mut self.owned)
                                 .expect("TODO: error handling"),
                         };
                         // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                         let _ = notifier.complete(());
-                        publish
+                        Packet::PubAck(puback)
                     }
 
-                    PublishRequestWithPkid::PublishQoS1(
-                        notifier,
-                        topic_name,
-                        payload,
-                        properties,
-                        packet_identifier,
-                    ) => {
-                        let publish = Publish {
-                            topic_name: topic_name
-                                .into_inner()
-                                .to_shared(&mut self.owned)
-                                .expect("TODO: error handling"),
-                            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
-                                packet_identifier,
-                                false, // TODO: Get from properties
-                            ),
-                            retain: false, // TODO: Get from properties
-                            payload: payload
-                                .into_buffered(&mut self.owned)
-                                .expect("TODO: error handling"),
-                            other_properties: properties
+                    AcknowledgementRequest::PubRecAccept(notifier, pubrec) => {
+                        let pubrec = PubRec {
+                            packet_identifier: pubrec.packet_identifier,
+                            reason_code: pubrec.reason.into(),
+                            other_properties: pubrec
+                                .properties
                                 .into_buffered(&mut self.owned)
                                 .expect("TODO: error handling"),
                         };
                         self.inflight
-                            .publish_qos1
-                            .insert(packet_identifier, (publish.clone(), notifier));
-                        publish
+                            .pubrec
+                            .insert(pubrec.packet_identifier, (pubrec.clone(), notifier));
+                        Packet::PubRec(pubrec)
                     }
 
-                    PublishRequestWithPkid::PublishQoS2(
-                        notifier,
-                        topic_name,
-                        payload,
-                        properties,
-                        packet_identifier,
-                    ) => {
-                        let publish = Publish {
-                            topic_name: topic_name
-                                .into_inner()
-                                .to_shared(&mut self.owned)
-                                .expect("TODO: error handling"),
-                            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
-                                packet_identifier,
-                                false, // TODO: Get from properties
-                            ),
-                            retain: false, // TODO: Get from properties
-                            payload: payload
+                    AcknowledgementRequest::PubRecReject(notifier, pubrec) => {
+                        let pubrec = PubRec {
+                            packet_identifier: pubrec.packet_identifier,
+                            reason_code: pubrec.reason.into(),
+                            other_properties: pubrec
+                                .properties
                                 .into_buffered(&mut self.owned)
                                 .expect("TODO: error handling"),
-                            other_properties: properties
+                        };
+                        // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                        let _ = notifier.complete(());
+                        Packet::PubRec(pubrec)
+                    }
+
+                    AcknowledgementRequest::PubRel(notifier, pubrel) => {
+                        let pubrel = PubRel {
+                            packet_identifier: pubrel.packet_identifier,
+                            reason_code: pubrel.reason.into(),
+                            other_properties: pubrel
+                                .properties
                                 .into_buffered(&mut self.owned)
                                 .expect("TODO: error handling"),
                         };
                         self.inflight
-                            .publish_qos2
-                            .insert(packet_identifier, (publish.clone(), notifier));
-                        publish
+                            .pubrel
+                            .insert(pubrel.packet_identifier, (pubrel.clone(), notifier));
+                        Packet::PubRel(pubrel)
                     }
-                };
-                Packet::Publish(packet)
-            }
 
-            OutgoingPacketRequest::ReauthRequest(auth_req) => {
-                let (notifier, auth) = (auth_req.0, auth_req.1);
-                let packet = auth
-                    .into_buffered(&mut self.owned)
-                    .expect("TODO: error handling");
-                self.inflight.auth = Some(notifier);
-                Packet::Auth(packet)
-            }
+                    AcknowledgementRequest::PubComp(notifier, pubcomp) => {
+                        let pubcomp = PubComp {
+                            packet_identifier: pubcomp.packet_identifier,
+                            reason_code: pubcomp.reason.into(),
+                            other_properties: pubcomp
+                                .properties
+                                .into_buffered(&mut self.owned)
+                                .expect("TODO: error handling"),
+                        };
+                        // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                        let _ = notifier.complete(());
+                        Packet::PubComp(pubcomp)
+                    }
+                },
 
-            OutgoingPacketRequest::PingReq => Packet::PingReq(PingReq),
+                OutgoingPacketRequest::SubscriptionRequest(sub_req, packet_identifier) => {
+                    match sub_req {
+                        SubscriptionRequest::Subscribe(
+                            notifier,
+                            topic_filter,
+                            qos,
+                            subscribe_properties,
+                        ) => {
+                            self.inflight.subscribe.insert(packet_identifier, notifier);
+                            Packet::Subscribe(Subscribe {
+                                packet_identifier,
+                                subscribe_to: vec![SubscribeTo {
+                                    topic_filter: topic_filter
+                                        .into_inner()
+                                        .to_shared(&mut self.owned)
+                                        .expect("TODO: error handling"),
+                                    options: SubscribeOptions {
+                                        maximum_qos: qos.into(),
+                                        // TODO: Get from subscribe_properties
+                                        other_properties: SubscribeOptionsOtherProperties {
+                                            no_local: false,
+                                            retain_as_published: false,
+                                            retain_handling: RetainHandling::Send,
+                                        },
+                                    },
+                                }],
+                                other_properties: subscribe_properties
+                                    .into_buffered(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                            })
+                        }
+
+                        SubscriptionRequest::Unsubscribe(notifier, ..) => {
+                            self.inflight
+                                .unsubscribe
+                                .insert(packet_identifier, notifier);
+                            Packet::Unsubscribe(Unsubscribe {
+                                packet_identifier,
+                                unsubscribe_from: todo!(),
+                                other_properties: todo!(),
+                            })
+                        }
+                    }
+                }
+
+                OutgoingPacketRequest::PublishRequest(pub_req) => {
+                    let packet = match pub_req {
+                        PublishRequestWithPkid::PublishQoS0(
+                            notifier,
+                            topic_name,
+                            payload,
+                            properties,
+                        ) => {
+                            let publish = Publish {
+                                topic_name: topic_name
+                                    .into_inner()
+                                    .to_shared(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                                packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
+                                retain: false, // TODO: Get from properties
+                                payload: payload
+                                    .into_buffered(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                                other_properties: properties
+                                    .into_buffered(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                            };
+                            // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                            let _ = notifier.complete(());
+                            publish
+                        }
+
+                        PublishRequestWithPkid::PublishQoS1(
+                            notifier,
+                            topic_name,
+                            payload,
+                            properties,
+                            packet_identifier,
+                        ) => {
+                            let publish = Publish {
+                                topic_name: topic_name
+                                    .into_inner()
+                                    .to_shared(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                                packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
+                                    packet_identifier,
+                                    false, // TODO: Get from properties
+                                ),
+                                retain: false, // TODO: Get from properties
+                                payload: payload
+                                    .into_buffered(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                                other_properties: properties
+                                    .into_buffered(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                            };
+                            self.inflight
+                                .publish_qos1
+                                .insert(packet_identifier, (publish.clone(), notifier));
+                            publish
+                        }
+
+                        PublishRequestWithPkid::PublishQoS2(
+                            notifier,
+                            topic_name,
+                            payload,
+                            properties,
+                            packet_identifier,
+                        ) => {
+                            let publish = Publish {
+                                topic_name: topic_name
+                                    .into_inner()
+                                    .to_shared(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                                packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
+                                    packet_identifier,
+                                    false, // TODO: Get from properties
+                                ),
+                                retain: false, // TODO: Get from properties
+                                payload: payload
+                                    .into_buffered(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                                other_properties: properties
+                                    .into_buffered(&mut self.owned)
+                                    .expect("TODO: error handling"),
+                            };
+                            self.inflight
+                                .publish_qos2
+                                .insert(packet_identifier, (publish.clone(), notifier));
+                            publish
+                        }
+                    };
+                    Packet::Publish(packet)
+                }
+
+                OutgoingPacketRequest::ReauthRequest(auth_req) => {
+                    let (notifier, auth) = (auth_req.0, auth_req.1);
+                    let packet = auth
+                        .into_buffered(&mut self.owned)
+                        .expect("TODO: error handling");
+                    self.inflight.auth = Some(notifier);
+                    Packet::Auth(packet)
+                }
+
+                OutgoingPacketRequest::PingReq => Packet::PingReq(PingReq),
+            }
         };
 
         // Reset the ping timer as we are returning a packet that will be sent.
@@ -581,6 +585,38 @@ where
             let _ = notifier.cancel();
             self.pkid_pool.release_pkid(pkid);
         }
+
+        // Build list of packets to replay
+        self.inflight.packets_to_replay.clear();
+        for (pubrel, _) in self.inflight.pubrel.values() {
+            self.inflight
+                .packets_to_replay
+                .push_back(Packet::PubRel(pubrel.clone()));
+        }
+        for publish in self
+            .inflight
+            .publish_qos1
+            .values()
+            .map(|(publish, _)| publish)
+            .chain(
+                self.inflight
+                    .publish_qos2
+                    .values()
+                    .map(|(publish, _)| publish),
+            )
+        {
+            let mut publish = publish.clone();
+            if let PacketIdentifierDupQoS::AtLeastOnce(_, dup)
+            | PacketIdentifierDupQoS::ExactlyOnce(_, dup) =
+                &mut publish.packet_identifier_dup_qos
+            {
+                *dup = true;
+            }
+            self.inflight
+                .packets_to_replay
+                .push_back(Packet::Publish(publish));
+        }
+
         // Remove and cancel any in-flight AUTH
         self.inflight.auth.take().map(CompletionNotifier::cancel);
     }
@@ -609,6 +645,7 @@ where
         for (pkid, (_, notifier)) in self.inflight.pubrel.drain(..) {
             let _ = notifier.cancel();
         }
+        self.inflight.packets_to_replay.clear();
 
         // NOTE: No need to clear subscribe/unsubscribe/auth here because those are cleared on
         // any disconnect. So any session expiry that happens, either due to disconnect or on the
@@ -794,6 +831,7 @@ fn poll_for_outgoing_request(
 }
 
 /// Contains data related to in-flight operations pending a response
+#[derive_where::derive_where(Default)]
 struct InflightTracker<S>
 where
     S: Shared,
@@ -822,26 +860,11 @@ where
     /// All inflight PUBREL operations
     pubrel: IndexMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier)>,
 
+    packets_to_replay: VecDeque<Packet<S>>,
+
     // --- Other ----
     /// Inflight AUTH operation, if any.
     auth: Option<ReauthCompletionNotifier>,
-}
-
-impl<S> Default for InflightTracker<S>
-where
-    S: Shared,
-{
-    fn default() -> Self {
-        Self {
-            publish_qos1: IndexMap::new(),
-            publish_qos2: IndexMap::new(),
-            subscribe: HashMap::new(),
-            unsubscribe: HashMap::new(),
-            pubrec: HashMap::new(),
-            pubrel: IndexMap::new(),
-            auth: None,
-        }
-    }
 }
 
 struct ReceiverStream<T>(Receiver<T>);
