@@ -331,6 +331,19 @@ where
     }
 }
 
+impl<S> From<Filter<String>> for Filter<ByteStr<S>>
+where
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
+{
+    fn from(s: Filter<String>) -> Self {
+        Self {
+            inner: s.inner.as_str().into(),
+            kind: s.kind,
+        }
+    }
+}
+
 #[cfg(test)]
 pub fn filter(
     s: impl AsRef<str>,

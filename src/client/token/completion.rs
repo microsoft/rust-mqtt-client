@@ -28,6 +28,12 @@ pub enum CompletionError {
 #[derive(Debug)]
 pub struct CompletionToken<T>(oneshot::Receiver<Result<T, CompletionError>>);
 
+impl<T> CompletionToken<T> {
+    pub(crate) fn map<F>(self, map: F) -> MappedCompletionToken<T, F> {
+        MappedCompletionToken { token: self, map }
+    }
+}
+
 impl<T> Future for CompletionToken<T> {
     type Output = Result<T, CompletionError>;
 
@@ -37,6 +43,30 @@ impl<T> Future for CompletionToken<T> {
     ) -> Poll<Self::Output> {
         match Pin::new(&mut self.0).poll(cx) {
             Poll::Ready(Ok(value)) => Poll::Ready(value),
+            Poll::Ready(Err(_)) => Poll::Ready(Err(CompletionError::Detatched)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+pub struct MappedCompletionToken<T, F> {
+    token: CompletionToken<T>,
+    map: F,
+}
+
+impl<T, F, U> Future for MappedCompletionToken<T, F>
+where
+    Self: Unpin,
+    F: FnMut(T) -> U,
+{
+    type Output = Result<U, CompletionError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Self::Output> {
+        match Pin::new(&mut self.token).poll(cx) {
+            Poll::Ready(Ok(value)) => Poll::Ready(Ok((self.map)(value))),
             Poll::Ready(Err(_)) => Poll::Ready(Err(CompletionError::Detatched)),
             Poll::Pending => Poll::Pending,
         }

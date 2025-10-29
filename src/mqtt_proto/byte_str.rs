@@ -236,6 +236,16 @@ where
     }
 }
 
+impl<S> From<&str> for ByteStr<S>
+where
+    S: Shared,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
+{
+    fn from(s: &str) -> Self {
+        Self(s.as_bytes().into())
+    }
+}
+
 #[cfg(test)]
 pub fn byte_str(s: impl AsRef<str>) -> ByteStr<buffer_pool::tests::SharedImpl> {
     ByteStr(crate::mqtt_proto::binary_data(s.as_ref().as_bytes()))

@@ -91,7 +91,7 @@ pub trait Owned: std::fmt::Debug {
 }
 
 pub trait Shared:
-    AsRef<[u8]> + Clone + std::fmt::Debug + Eq + std::hash::Hash + PartialEq + Send + Sync
+    AsRef<[u8]> + Clone + std::fmt::Debug + Eq + std::hash::Hash + PartialEq + Send + Sync + 'static
 {
     fn new<O>(owned: &mut O, value: &[u8]) -> Result<Self, Error>
     where
@@ -175,30 +175,6 @@ pub trait Shared:
         let n = u128::from_be_bytes(b.try_into().unwrap());
         self.drain(size_of::<u128>());
         Some(n)
-    }
-}
-
-impl Shared for &[u8] {
-    fn len(&self) -> usize {
-        <[u8]>::len(self)
-    }
-
-    fn is_empty(&self) -> bool {
-        <[u8]>::is_empty(self)
-    }
-
-    /// Retains the range i.. in self
-    ///
-    /// This is the same as [`Shared::split_to`] but does not require creating a new `Shared` for the range 0..i
-    fn drain(&mut self, i: usize) {
-        *self = &self[i..];
-    }
-
-    /// Retains the range i.. in self, and returns a new Shared for the range 0..i
-    fn split_to(&mut self, i: usize) -> Self {
-        let (first, second) = self.split_at(i);
-        *self = second;
-        first
     }
 }
 
