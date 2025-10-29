@@ -5,7 +5,6 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
 
-use bytes::Bytes;
 use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
 use indexmap::IndexMap;
@@ -15,7 +14,7 @@ use tokio::time::Duration;
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::token::ReauthCompletionNotifier;
 use crate::client::{
-    AckHandle, ReauthResponse, ReauthToken, TopicName,
+    ReauthResponse, ReauthToken,
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest,
         SubscriptionRequest,
@@ -23,19 +22,18 @@ use crate::client::{
     session::pkid::PkidPool,
     session::timer::Timer,
     token::{
-        CompletionNotifier, PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier,
+        AckHandle, CompletionNotifier, PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier,
         PubRelCompletionNotifier, PubRelToken, PublishQoS0CompletionNotifier,
         PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
         UnsubscribeCompletionNotifier,
     },
 };
 use crate::mqtt_proto::{
-    Auth, AuthenticateReasonCode, ConnAck, ConnectReasonCode, Disconnect, Packet, PacketIdentifier,
-    PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish, RetainHandling,
-    SessionExpiryInterval, SubAck, Subscribe, SubscribeOptions, SubscribeOptionsOtherProperties,
-    SubscribeTo, UnsubAck, Unsubscribe,
+    Auth, AuthenticateReasonCode, ByteStr, ConnAck, ConnectReasonCode, Disconnect, Packet,
+    PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish,
+    PublishOtherProperties, RetainHandling, SessionExpiryInterval, SubAck, Subscribe,
+    SubscribeOptions, SubscribeOptionsOtherProperties, SubscribeTo, Topic, UnsubAck, Unsubscribe,
 };
-use crate::packet::{IntoBuffered, PublishProperties};
 
 mod pkid;
 mod timer;
@@ -46,7 +44,7 @@ where
     O: Owned,
 {
     /// Struct containing channels in and out of the Session
-    pub(crate) ch: Channels,
+    pub(crate) ch: Channels<O::Shared>,
     /// Pool of packet identifiers for outgoing packets that can be leased
     pkid_pool: PkidPool,
     /// Queue of outgoing operations that are not yet in-flight
@@ -69,13 +67,13 @@ where
 {
     #[allow(clippy::too_many_arguments)] // TODO: Honestly, probably should address this
     pub fn new(
-        sub_rx: Receiver<SubscriptionRequest>,
-        o_pub_rx: Receiver<PublishRequest>,
-        ack_rx: Receiver<AcknowledgementRequest>,
-        auth_rx: Receiver<ReauthRequest>,
-        i_pub_tx: UnboundedSender<IncomingPublish>,
-        ack_tx: Sender<AcknowledgementRequest>,
-        auth_tx: Sender<ReauthRequest>,
+        sub_rx: Receiver<SubscriptionRequest<O::Shared>>,
+        o_pub_rx: Receiver<PublishRequest<O::Shared>>,
+        ack_rx: Receiver<AcknowledgementRequest<O::Shared>>,
+        auth_rx: Receiver<ReauthRequest<O::Shared>>,
+        i_pub_tx: UnboundedSender<IncomingPublish<O::Shared>>,
+        ack_tx: Sender<AcknowledgementRequest<O::Shared>>,
+        auth_tx: Sender<ReauthRequest<O::Shared>>,
         max_pkid: PacketIdentifier,
         owned: O,
     ) -> Self {
@@ -132,28 +130,12 @@ where
                     // TODO: It would be preferable if the notifier was not triggered on
                     // PUBACK / PUBCOMP until they were actually sent over the network.
                     AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
-                        let puback = PubAck {
-                            packet_identifier: puback.packet_identifier,
-                            reason_code: puback.reason.into(),
-                            other_properties: puback
-                                .properties
-                                .into_buffered(&mut self.owned)
-                                .expect("TODO: error handling"),
-                        };
                         // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                         let _ = notifier.complete(());
                         Packet::PubAck(puback)
                     }
 
                     AcknowledgementRequest::PubRecAccept(notifier, pubrec) => {
-                        let pubrec = PubRec {
-                            packet_identifier: pubrec.packet_identifier,
-                            reason_code: pubrec.reason.into(),
-                            other_properties: pubrec
-                                .properties
-                                .into_buffered(&mut self.owned)
-                                .expect("TODO: error handling"),
-                        };
                         self.inflight
                             .pubrec
                             .insert(pubrec.packet_identifier, (pubrec.clone(), notifier));
@@ -161,28 +143,12 @@ where
                     }
 
                     AcknowledgementRequest::PubRecReject(notifier, pubrec) => {
-                        let pubrec = PubRec {
-                            packet_identifier: pubrec.packet_identifier,
-                            reason_code: pubrec.reason.into(),
-                            other_properties: pubrec
-                                .properties
-                                .into_buffered(&mut self.owned)
-                                .expect("TODO: error handling"),
-                        };
                         // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                         let _ = notifier.complete(());
                         Packet::PubRec(pubrec)
                     }
 
                     AcknowledgementRequest::PubRel(notifier, pubrel) => {
-                        let pubrel = PubRel {
-                            packet_identifier: pubrel.packet_identifier,
-                            reason_code: pubrel.reason.into(),
-                            other_properties: pubrel
-                                .properties
-                                .into_buffered(&mut self.owned)
-                                .expect("TODO: error handling"),
-                        };
                         self.inflight
                             .pubrel
                             .insert(pubrel.packet_identifier, (pubrel.clone(), notifier));
@@ -190,14 +156,6 @@ where
                     }
 
                     AcknowledgementRequest::PubComp(notifier, pubcomp) => {
-                        let pubcomp = PubComp {
-                            packet_identifier: pubcomp.packet_identifier,
-                            reason_code: pubcomp.reason.into(),
-                            other_properties: pubcomp
-                                .properties
-                                .into_buffered(&mut self.owned)
-                                .expect("TODO: error handling"),
-                        };
                         // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                         let _ = notifier.complete(());
                         Packet::PubComp(pubcomp)
@@ -210,19 +168,16 @@ where
                             notifier,
                             topic_filter,
                             qos,
-                            subscribe_properties,
+                            other_properties,
                         ) => {
                             self.inflight.subscribe.insert(packet_identifier, notifier);
                             Packet::Subscribe(Subscribe {
                                 packet_identifier,
                                 subscribe_to: vec![SubscribeTo {
-                                    topic_filter: topic_filter
-                                        .into_inner()
-                                        .to_shared(&mut self.owned)
-                                        .expect("TODO: error handling"),
+                                    topic_filter,
                                     options: SubscribeOptions {
                                         maximum_qos: qos.into(),
-                                        // TODO: Get from subscribe_properties
+                                        // TODO: Get from sub_req
                                         other_properties: SubscribeOptionsOtherProperties {
                                             no_local: false,
                                             retain_as_published: false,
@@ -230,9 +185,7 @@ where
                                         },
                                     },
                                 }],
-                                other_properties: subscribe_properties
-                                    .into_buffered(&mut self.owned)
-                                    .expect("TODO: error handling"),
+                                other_properties,
                             })
                         }
 
@@ -255,21 +208,14 @@ where
                             notifier,
                             topic_name,
                             payload,
-                            properties,
+                            other_properties,
                         ) => {
                             let publish = Publish {
-                                topic_name: topic_name
-                                    .into_inner()
-                                    .to_shared(&mut self.owned)
-                                    .expect("TODO: error handling"),
+                                topic_name,
                                 packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
-                                retain: false, // TODO: Get from properties
-                                payload: payload
-                                    .into_buffered(&mut self.owned)
-                                    .expect("TODO: error handling"),
-                                other_properties: properties
-                                    .into_buffered(&mut self.owned)
-                                    .expect("TODO: error handling"),
+                                retain: false, // TODO: Get from pub_req
+                                payload,
+                                other_properties,
                             };
                             // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                             let _ = notifier.complete(());
@@ -280,25 +226,18 @@ where
                             notifier,
                             topic_name,
                             payload,
-                            properties,
+                            other_properties,
                             packet_identifier,
                         ) => {
                             let publish = Publish {
-                                topic_name: topic_name
-                                    .into_inner()
-                                    .to_shared(&mut self.owned)
-                                    .expect("TODO: error handling"),
+                                topic_name,
                                 packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
                                     packet_identifier,
-                                    false, // TODO: Get from properties
+                                    false, // TODO: Get from pub_req
                                 ),
-                                retain: false, // TODO: Get from properties
-                                payload: payload
-                                    .into_buffered(&mut self.owned)
-                                    .expect("TODO: error handling"),
-                                other_properties: properties
-                                    .into_buffered(&mut self.owned)
-                                    .expect("TODO: error handling"),
+                                retain: false, // TODO: Get from pub_req
+                                payload,
+                                other_properties,
                             };
                             self.inflight
                                 .publish_qos1
@@ -310,25 +249,18 @@ where
                             notifier,
                             topic_name,
                             payload,
-                            properties,
+                            other_properties,
                             packet_identifier,
                         ) => {
                             let publish = Publish {
-                                topic_name: topic_name
-                                    .into_inner()
-                                    .to_shared(&mut self.owned)
-                                    .expect("TODO: error handling"),
+                                topic_name,
                                 packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
                                     packet_identifier,
-                                    false, // TODO: Get from properties
+                                    false, // TODO: Get from pub_req
                                 ),
-                                retain: false, // TODO: Get from properties
-                                payload: payload
-                                    .into_buffered(&mut self.owned)
-                                    .expect("TODO: error handling"),
-                                other_properties: properties
-                                    .into_buffered(&mut self.owned)
-                                    .expect("TODO: error handling"),
+                                retain: false, // TODO: Get from pub_req
+                                payload,
+                                other_properties,
                             };
                             self.inflight
                                 .publish_qos2
@@ -341,11 +273,8 @@ where
 
                 OutgoingPacketRequest::ReauthRequest(auth_req) => {
                     let (notifier, auth) = (auth_req.0, auth_req.1);
-                    let packet = auth
-                        .into_buffered(&mut self.owned)
-                        .expect("TODO: error handling");
                     self.inflight.auth = Some(notifier);
-                    Packet::Auth(packet)
+                    Packet::Auth(auth)
                 }
 
                 OutgoingPacketRequest::PingReq => Packet::PingReq(PingReq),
@@ -360,7 +289,7 @@ where
         Some(packet)
     }
 
-    async fn next_outgoing_request(&mut self) -> OutgoingPacketRequest {
+    async fn next_outgoing_request(&mut self) -> OutgoingPacketRequest<O::Shared> {
         // TODO: put this poll in a loop that returns when it receives a packet request that
         // should be turned into a packet and sent over the network (i.e. not an unordered ack)
         // This (as well as the below validation TODO) may become irrelevant depending on error
@@ -536,7 +465,7 @@ where
         // TODO: Register ack tracking if QoS 1 or 2
         self.ch
             .i_pub_tx
-            .send((publish.into(), ack_handle))
+            .send((publish, ack_handle))
             .expect("TODO: error handling");
     }
 
@@ -689,71 +618,83 @@ where
 }
 
 /// Organizational struct containing channels on which the `Session` receives input
-pub(crate) struct Channels {
+pub(crate) struct Channels<S>
+where
+    S: Shared,
+{
     // --- Channels used to receive in the Session ---
     /// Channel for receiving outgoing CONNECT and DISCONNECT requests
-    pub(crate) disconnect_rx: Option<tokio::sync::oneshot::Receiver<DisconnectRequest>>,
+    pub(crate) disconnect_rx: Option<tokio::sync::oneshot::Receiver<DisconnectRequest<S>>>,
     /// Channel for receiving outgoing PUBLISH requests
-    o_pub_rx: Peekable<ReceiverStream<PublishRequest>>,
+    o_pub_rx: Peekable<ReceiverStream<PublishRequest<S>>>,
     /// Channel for receiving outgoing SUBSCRIBE and UNSUBSCRIBE requests
-    sub_rx: Peekable<ReceiverStream<SubscriptionRequest>>,
+    sub_rx: Peekable<ReceiverStream<SubscriptionRequest<S>>>,
     /// Channel for receving outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
-    ack_rx: Receiver<AcknowledgementRequest>,
+    ack_rx: Receiver<AcknowledgementRequest<S>>,
     /// Channel for receiving outgoing AUTH requests
-    auth_rx: Receiver<ReauthRequest>,
+    auth_rx: Receiver<ReauthRequest<S>>,
     /// Channel for sending incoming PUBLISH requests
-    i_pub_tx: UnboundedSender<IncomingPublish>,
+    i_pub_tx: UnboundedSender<IncomingPublish<S>>,
 
     // --- Channels stored here to be cloned, and should not be used directly ---
     // TODO: Is this really the correct place for these?
     /// Channel for sending outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
-    ack_tx: Sender<AcknowledgementRequest>,
+    ack_tx: Sender<AcknowledgementRequest<S>>,
     /// Channel for sending outgoing AUTH requests
-    pub(crate) auth_tx: Sender<ReauthRequest>, // TODO: ideally this would not be pub crate
+    pub(crate) auth_tx: Sender<ReauthRequest<S>>, // TODO: ideally this would not be pub crate
 }
 
-enum OutgoingPacketRequest {
-    DisconnectRequest(DisconnectRequest),
-    AcknowledgementRequest(AcknowledgementRequest),
-    SubscriptionRequest(SubscriptionRequest, PacketIdentifier),
-    PublishRequest(PublishRequestWithPkid),
-    ReauthRequest(ReauthRequest),
+enum OutgoingPacketRequest<S>
+where
+    S: Shared,
+{
+    DisconnectRequest(DisconnectRequest<S>),
+    AcknowledgementRequest(AcknowledgementRequest<S>),
+    SubscriptionRequest(SubscriptionRequest<S>, PacketIdentifier),
+    PublishRequest(PublishRequestWithPkid<S>),
+    ReauthRequest(ReauthRequest<S>),
     PingReq,
 }
 
 /// This represents a `PublishRequest` that has been assigned a packet identifier if it needed one.
 /// So its definition is identical to `PublishRequest`, but with an additional `PacketIdentifier` field
 /// for the QoS 1 and QoS 2 variants.
-enum PublishRequestWithPkid {
+enum PublishRequestWithPkid<S>
+where
+    S: Shared,
+{
     PublishQoS0(
         PublishQoS0CompletionNotifier,
-        TopicName,
-        Bytes,
-        PublishProperties,
+        Topic<ByteStr<S>>,
+        S,
+        PublishOtherProperties<S>,
     ),
     PublishQoS1(
         PublishQoS1CompletionNotifier,
-        TopicName,
-        Bytes,
-        PublishProperties,
+        Topic<ByteStr<S>>,
+        S,
+        PublishOtherProperties<S>,
         PacketIdentifier,
     ),
     PublishQoS2(
-        PublishQoS2CompletionNotifier,
-        TopicName,
-        Bytes,
-        PublishProperties,
+        PublishQoS2CompletionNotifier<S>,
+        Topic<ByteStr<S>>,
+        S,
+        PublishOtherProperties<S>,
         PacketIdentifier,
     ),
 }
 
 /// Poll for the next outgoing packet request.
 /// Priority order: Disconnects, Acknowledgements, Subscriptions, Publishes, Pings
-fn poll_for_outgoing_request(
-    ch: &mut Channels,
+fn poll_for_outgoing_request<S>(
+    ch: &mut Channels<S>,
     mut pingreq_timer: Option<&mut Timer>,
     pkid_pool: &mut PkidPool,
-) -> impl Future<Output = OutgoingPacketRequest> {
+) -> impl Future<Output = OutgoingPacketRequest<S>>
+where
+    S: Shared,
+{
     futures_util::future::poll_fn(move |cx| {
         // Disconnects get top priority, since they indicate the user wants to close the connection now.
         if let Some(disconnect_rx) = &mut ch.disconnect_rx
@@ -846,7 +787,7 @@ where
     /// All inflight QoS 1 PUBLISH operations
     publish_qos1: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS1CompletionNotifier)>,
     /// All inflight QoS 2 PUBLISH operations
-    publish_qos2: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS2CompletionNotifier)>,
+    publish_qos2: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS2CompletionNotifier<S>)>,
     /// All inflight SUBSCRIBE operations
     subscribe: HashMap<PacketIdentifier, SubscribeCompletionNotifier>,
     /// All inflight UNSUBSCRIBE operations
@@ -856,7 +797,7 @@ where
     // None of these hashmaps should ever use the same key at the same time, although this is not
     // enforced for simplicity.
     /// All inflight PUBREC operations
-    pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier)>,
+    pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier<S>)>,
     /// All inflight PUBREL operations
     pubrel: IndexMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier)>,
 
@@ -864,7 +805,7 @@ where
 
     // --- Other ----
     /// Inflight AUTH operation, if any.
-    auth: Option<ReauthCompletionNotifier>,
+    auth: Option<ReauthCompletionNotifier<S>>,
 }
 
 struct ReceiverStream<T>(Receiver<T>);

@@ -205,6 +205,16 @@ where
     }
 }
 
+impl<S> From<Topic<String>> for Topic<ByteStr<S>>
+where
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
+{
+    fn from(s: Topic<String>) -> Self {
+        Self(s.0.as_str().into())
+    }
+}
+
 #[cfg(test)]
 pub fn topic(
     s: impl AsRef<str>,

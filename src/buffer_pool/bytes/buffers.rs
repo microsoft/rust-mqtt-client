@@ -122,6 +122,12 @@ impl PartialEq<[u8]> for SharedImpl {
     }
 }
 
+impl From<Bytes> for SharedImpl {
+    fn from(b: Bytes) -> Self {
+        Self(b)
+    }
+}
+
 impl Ord for SharedImpl {
     fn cmp(&self, other: &Self) -> Ordering {
         self.0.cmp(&other.0)

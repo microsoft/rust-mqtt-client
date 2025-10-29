@@ -3,6 +3,8 @@
 
 use std::mem::size_of;
 
+use bytes::{BufMut as _, BytesMut};
+
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{DecodeError, EncodeError};
 
@@ -234,12 +236,31 @@ where
     }
 }
 
+impl From<&[u8]> for BinaryData<buffer_pool::bytes::SharedImpl> {
+    fn from(s: &[u8]) -> Self {
+        let mut result = BytesMut::with_capacity(U16_SIZE + s.len());
+        result.put(&u16::try_from(s.len()).unwrap().to_be_bytes()[..]);
+        result.put(s);
+        Self(result.freeze().into())
+    }
+}
+
+#[cfg(test)]
+impl From<&[u8]> for BinaryData<buffer_pool::tests::SharedImpl> {
+    fn from(s: &[u8]) -> Self {
+        let mut result = BytesMut::with_capacity(U16_SIZE + s.len());
+        result.put(&u16::try_from(s.len()).unwrap().to_be_bytes()[..]);
+        result.put(s);
+        Self(result.freeze().into())
+    }
+}
+
 const U16_SIZE: usize = size_of::<u16>();
 
 #[cfg(test)]
 pub fn binary_data(s: impl AsRef<[u8]>) -> BinaryData<buffer_pool::tests::SharedImpl> {
     let s = s.as_ref();
-    let mut result = Vec::with_capacity(size_of::<u16>() + s.len());
+    let mut result = Vec::with_capacity(U16_SIZE + s.len());
     result.extend_from_slice(&u16::try_from(s.len()).unwrap().to_be_bytes());
     result.extend_from_slice(s);
     BinaryData(result.into())

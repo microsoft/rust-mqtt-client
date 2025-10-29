@@ -9,9 +9,9 @@
 
 use crate::client::{AuthResponse, ReauthResponse};
 use crate::packet::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck};
-pub use acknowledgement::{PubAckToken, PubCompToken, PubRecToken, PubRelToken};
-pub use completion::CompletionToken;
+pub use acknowledgement::{AckHandle, PubAckToken, PubCompToken, PubRecToken, PubRelToken};
 pub(crate) use completion::{CompletionNotifier, completion_pair};
+pub use completion::{CompletionToken, MappedCompletionToken};
 
 mod acknowledgement;
 mod completion;
@@ -20,13 +20,14 @@ mod completion;
 // For internal use where we'd prefer to avoid the mix of user-facing and internal packet types.
 pub(crate) type PublishQoS0CompletionNotifier = CompletionNotifier<()>;
 pub(crate) type PublishQoS1CompletionNotifier = CompletionNotifier<PubAck>;
-pub(crate) type PublishQoS2CompletionNotifier = CompletionNotifier<(PubRec, Option<PubRelToken>)>;
+pub(crate) type PublishQoS2CompletionNotifier<S> =
+    CompletionNotifier<(PubRec, Option<PubRelToken<S>>)>;
 pub(crate) type SubscribeCompletionNotifier = CompletionNotifier<SubAck>;
 pub(crate) type UnsubscribeCompletionNotifier = CompletionNotifier<UnsubAck>;
 pub(crate) type PubAckCompletionNotifier = CompletionNotifier<()>;
-pub(crate) type PubRecAcceptCompletionNotifier = CompletionNotifier<(PubRel, PubCompToken)>;
+pub(crate) type PubRecAcceptCompletionNotifier<S> = CompletionNotifier<(PubRel, PubCompToken<S>)>;
 pub(crate) type PubRecRejectCompletionNotifier = CompletionNotifier<()>;
 pub(crate) type PubRelCompletionNotifier = CompletionNotifier<PubComp>;
 pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
 pub(crate) type AuthCompletionNotifier = CompletionNotifier<AuthResponse>;
-pub(crate) type ReauthCompletionNotifier = CompletionNotifier<ReauthResponse>;
+pub(crate) type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResponse<S>>;

@@ -8,15 +8,14 @@
 #![allow(dead_code)]
 #![allow(clippy::unused_async)]
 
+use std::future::Future;
 use std::pin::pin;
 
 use bytes::Bytes;
 use futures_util::future::{self, FutureExt as _};
 
-use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
-use crate::client::token::{
-    CompletionToken, PubAckToken, PubRecToken, PubRelToken, completion_pair,
-};
+use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, Shared, SharedImpl};
+use crate::client::token::{CompletionToken, MappedCompletionToken, PubRelToken, completion_pair};
 use crate::client::{
     channel_data::{DisconnectRequest, PublishRequest, ReauthRequest, SubscriptionRequest},
     session::{CompletedOperation, Session},
@@ -34,8 +33,9 @@ use crate::mqtt_proto::{
 };
 use crate::packet::{
     Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
-    DisconnectProperties, IntoBuffered, PacketIdentifier, PubAck, PubRec, Publish,
-    PublishProperties, QoS, SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
+    DisconnectProperties, PacketIdentifier, PubAck, PubAckProperties, PubCompProperties, PubRec,
+    PubRecProperties, PubRejectReason, PubRel, Publish, PublishProperties, QoS, SubAck,
+    SubscribeProperties, UnsubAck, UnsubscribeProperties,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -122,9 +122,9 @@ pub struct Client {
     // NOTE: We use different channels for publishes vs. control packets to allow for
     // prioritization of operations by the receiver.
     /// Channel that transmits outgoing PUBLISH requests
-    pub_tx: tokio::sync::mpsc::Sender<PublishRequest>,
+    pub_tx: tokio::sync::mpsc::Sender<PublishRequest<SharedImpl>>,
     /// Channel that transmits outgoing SUBSCRIBE/UNSUBSCRIBE requests
-    sub_tx: tokio::sync::mpsc::Sender<SubscriptionRequest>,
+    sub_tx: tokio::sync::mpsc::Sender<SubscriptionRequest<SharedImpl>>,
 }
 
 impl Client {
@@ -140,7 +140,10 @@ impl Client {
         let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS0(
-                notifier, topic_name, payload, properties,
+                notifier,
+                topic_name.into_inner().into(),
+                payload.into(),
+                properties.into(),
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
@@ -159,7 +162,10 @@ impl Client {
         let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS1(
-                notifier, topic_name, payload, properties,
+                notifier,
+                topic_name.into_inner().into(),
+                payload.into(),
+                properties.into(),
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
@@ -175,11 +181,14 @@ impl Client {
         topic_name: TopicName,
         payload: Bytes,
         properties: PublishProperties,
-    ) -> Result<CompletionToken<(PubRec, Option<PubRelToken>)>, ClientError> {
+    ) -> Result<CompletionToken<(PubRec, Option<PubRelToken<SharedImpl>>)>, ClientError> {
         let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS2(
-                notifier, topic_name, payload, properties,
+                notifier,
+                topic_name.into_inner().into(),
+                payload.into(),
+                properties.into(),
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
@@ -199,9 +208,9 @@ impl Client {
         self.sub_tx
             .send(SubscriptionRequest::Subscribe(
                 notifier,
-                topic_filter,
+                topic_filter.into_inner().into(),
                 qos,
-                properties,
+                properties.into(),
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
@@ -220,8 +229,8 @@ impl Client {
         self.sub_tx
             .send(SubscriptionRequest::Unsubscribe(
                 notifier,
-                topic_filter,
-                properties,
+                topic_filter.into_inner().into(),
+                properties.into(),
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
@@ -232,8 +241,12 @@ impl Client {
 /// Receives incoming Application Messages as `Publish`es.
 pub struct Receiver {
     /// Channel for receiving incoming PUBLISH packets
-    rx: tokio::sync::mpsc::UnboundedReceiver<(Publish, AckHandle)>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<(
+        crate::mqtt_proto::Publish<SharedImpl>,
+        token::AckHandle<SharedImpl>,
+    )>,
 }
+
 impl Receiver {
     /// Receive an incoming `Publish`, and any `AckToken` that may be associated with it.
     ///
@@ -241,7 +254,10 @@ impl Receiver {
     ///
     /// Receiving None indicates that the client has been dropped, and no more messages will be received.
     pub async fn recv(&mut self) -> Option<(Publish, AckHandle)> {
-        self.rx.recv().await
+        self.rx
+            .recv()
+            .await
+            .map(|(publish, ack_handle)| (publish.into(), ack_handle.into()))
     }
 }
 
@@ -426,8 +442,7 @@ impl AuthHandle {
                 }),
                 properties,
             }
-            .into_buffered(&mut self.session.owned)
-            .expect("TODO: error handling"),
+            .into(),
         );
         self.writer
             .write(&auth, ProtocolVersion::V5)
@@ -606,12 +621,12 @@ impl Connection {
     }
 }
 
-pub struct DisconnectHandle(tokio::sync::oneshot::Sender<DisconnectRequest>);
+pub struct DisconnectHandle(tokio::sync::oneshot::Sender<DisconnectRequest<SharedImpl>>);
 
 impl DisconnectHandle {
-    pub fn disconnect(self, properties: DisconnectProperties) -> Result<(), ClientError> {
+    pub fn disconnect(self, properties: &DisconnectProperties) -> Result<(), ClientError> {
         self.0
-            .send(DisconnectRequest(properties))
+            .send(DisconnectRequest::new(properties))
             .map_err(|_| ClientError::DetachedClient)
     }
 }
@@ -620,7 +635,7 @@ impl DisconnectHandle {
 
 pub struct ReauthHandle {
     method: String,
-    tx: tokio::sync::mpsc::Sender<ReauthRequest>,
+    tx: tokio::sync::mpsc::Sender<ReauthRequest<SharedImpl>>,
 }
 
 impl ReauthHandle {
@@ -628,7 +643,7 @@ impl ReauthHandle {
         &self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> Result<CompletionToken<ReauthResponse>, ClientError> {
+    ) -> Result<CompletionToken<ReauthResponse<SharedImpl>>, ClientError> {
         let (notifier, token) = completion_pair();
         let auth = Auth {
             reason: AuthReason::Reauthenticate,
@@ -639,7 +654,7 @@ impl ReauthHandle {
             properties,
         };
         self.tx
-            .send(ReauthRequest(notifier, auth))
+            .send(ReauthRequest(notifier, auth.into()))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -653,25 +668,31 @@ pub enum AuthResponse {
     Failure(ConnectHandle, Option<ConnAck>),
 }
 
-pub enum ReauthResponse {
+pub enum ReauthResponse<S>
+where
+    S: Shared,
+{
     // TODO: should this be in channel data and merely re-exported?
-    Continue(Auth, ReauthToken),
+    Continue(Auth, ReauthToken<S>),
     Success(Auth),
     Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
 }
 
 // TODO: Should this live in token module? Probably, but is the module even a good idea at this point?
-pub struct ReauthToken {
+pub struct ReauthToken<S>
+where
+    S: Shared,
+{
     method: String,
-    tx: tokio::sync::mpsc::Sender<ReauthRequest>,
+    tx: tokio::sync::mpsc::Sender<ReauthRequest<S>>,
 }
 
-impl ReauthToken {
+impl ReauthToken<SharedImpl> {
     pub async fn continue_reauth(
         self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> Result<CompletionToken<ReauthResponse>, ClientError> {
+    ) -> Result<CompletionToken<ReauthResponse<SharedImpl>>, ClientError> {
         let (notifier, token) = completion_pair();
         let auth = Auth {
             reason: AuthReason::ContinueAuthentication,
@@ -682,7 +703,7 @@ impl ReauthToken {
             properties,
         };
         self.tx
-            .send(ReauthRequest(notifier, auth))
+            .send(ReauthRequest(notifier, auth.into()))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
         Ok(token)
@@ -696,9 +717,130 @@ pub enum DisconnectedEvent {
     ServerRequested(Disconnect),
 }
 
-// TODO: where should this live?
 pub enum AckHandle {
     QoS0,
     QoS1(PubAckToken),
     QoS2(PubRecToken),
+}
+
+impl From<token::AckHandle<SharedImpl>> for AckHandle {
+    fn from(inner: token::AckHandle<SharedImpl>) -> Self {
+        match inner {
+            token::AckHandle::QoS0 => Self::QoS0,
+            token::AckHandle::QoS1(token) => Self::QoS1(PubAckToken(token)),
+            token::AckHandle::QoS2(token) => Self::QoS2(PubRecToken(token)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PubAckToken(token::PubAckToken<SharedImpl>);
+
+impl PubAckToken {
+    /// Accept the received PUBLISH by issuing a PUBACK indicating success.
+    ///
+    /// Consumes itself on call, so it cannot be used again.
+    ///
+    /// Returns once the PUBACK has been accepted into the MQTT session.
+    /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
+    ///
+    /// Can only be successfully used during the same connection epoch on which it was received.
+    pub fn accept(
+        self,
+        properties: PubAckProperties,
+    ) -> impl Future<Output = Result<CompletionToken<()>, ClientError>> {
+        self.0.accept(properties.into())
+    }
+
+    /// Reject the received PUBLISH by issuing a PUBACK with an error reason code.
+    ///
+    /// Consumes itself on call so it cannot be used again.
+    ///
+    /// Returns once the PUBACK has been accepted into the MQTT session.
+    /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
+    pub fn reject(
+        self,
+        reason: PubRejectReason,
+        properties: PubAckProperties,
+    ) -> impl Future<Output = Result<CompletionToken<()>, ClientError>> {
+        self.0.reject(reason.into(), properties.into())
+    }
+}
+
+#[derive(Debug)]
+pub struct PubRecToken(token::PubRecToken<SharedImpl>);
+
+impl PubRecToken {
+    /// Accept the received PUBLISH by issuing a PUBREC indicating success.
+    ///
+    /// Consumes itself on call, so it cannot be used again.
+    ///
+    /// Returns once the PUBREC has been accepted into the MQTT session.
+    /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
+    ///
+    /// Can only be successfully used during the same session epoch on which it was received.
+    pub async fn accept(
+        self,
+        properties: PubRecProperties,
+    ) -> Result<
+        MappedCompletionToken<
+            (
+                crate::mqtt_proto::PubRel<SharedImpl>,
+                token::PubCompToken<SharedImpl>,
+            ),
+            impl FnMut(
+                (
+                    crate::mqtt_proto::PubRel<SharedImpl>,
+                    token::PubCompToken<SharedImpl>,
+                ),
+            ) -> (PubRel, PubCompToken),
+        >,
+        ClientError,
+    > {
+        self.0.accept(properties.into()).await.map(|token| {
+            token.map(
+                |(pubrel, pubcomp_token): (
+                    crate::mqtt_proto::PubRel<SharedImpl>,
+                    token::PubCompToken<SharedImpl>,
+                )| { (pubrel.into(), PubCompToken(pubcomp_token)) },
+            )
+        })
+    }
+
+    /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
+    ///
+    /// Consumes itself on call so it cannot be used again.
+    ///
+    /// Returns once the PUBREC has been accepted into the MQTT session.
+    /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
+    ///
+    /// Can only be successfully used during the same session epoch on which it was received.
+    pub fn reject(
+        self,
+        reason: PubRejectReason,
+        properties: PubRecProperties,
+    ) -> impl Future<Output = Result<CompletionToken<()>, ClientError>> {
+        self.0.reject(reason.into(), properties.into())
+    }
+}
+
+/// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
+#[derive(Debug)]
+pub struct PubCompToken(token::PubCompToken<SharedImpl>);
+
+impl PubCompToken {
+    /// Confirm the PUBREL was received by issuing a PUBCOMP.
+    ///
+    /// Consumes itself on call so it cannot be used again.
+    ///
+    /// Returns once the PUBCOMP has been accepted into the MQTT session.
+    /// The returned `CompletionToken` resolves once the PUBCOMP is sent (*after* any ordering necessary).
+    ///
+    /// Can only be successfully used during the same session epoch on which it was received.
+    pub fn confirm(
+        self,
+        properties: PubCompProperties,
+    ) -> impl Future<Output = Result<CompletionToken<()>, ClientError>> {
+        self.0.confirm(properties.into())
+    }
 }

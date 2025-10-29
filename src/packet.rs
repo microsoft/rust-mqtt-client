@@ -11,13 +11,14 @@ use std::num::{NonZeroU16, NonZeroU32};
 
 use bytes::Bytes;
 
+use crate::buffer_pool::Shared;
 use crate::error::OperationFailure;
 // TODO: Replace instead of re-export?
-pub use crate::mqtt_proto::{KeepAlive, PacketIdentifier, SessionExpiryInterval};
+pub use crate::mqtt_proto::{
+    BinaryData, ByteStr, KeepAlive, PacketIdentifier, SessionExpiryInterval,
+};
 use crate::topic::TopicName;
 use crate::{buffer_pool, mqtt_proto};
-
-// TODO: Optimize all conversions of Bytes in this module for S = SharedImpl
 
 //////////////////// Misc. ////////////////////
 
@@ -125,21 +126,17 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::Authentication<O::Shared>, O> for AuthenticationInfo
+impl<S> From<AuthenticationInfo> for mqtt_proto::Authentication<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::Authentication<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::Authentication {
-            method: mqtt_proto::ByteStr::new(owned, self.method)?,
-            data: self
-                .data
-                .map(|d| mqtt_proto::BinaryData::new(owned, d))
-                .transpose()?,
-        })
+    fn from(ai: AuthenticationInfo) -> Self {
+        Self {
+            method: ai.method.as_str().into(),
+            data: ai.data.as_deref().map(Into::into),
+        }
     }
 }
 
@@ -506,30 +503,19 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::Auth<O::Shared>, O> for Auth
+impl<S> From<Auth> for mqtt_proto::Auth<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::Auth<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::Auth {
-            reason_code: self.reason.into(),
-            authentication: self
-                .authentication_info
-                .map(|a| a.into_buffered(owned))
-                .transpose()?,
-            reason_string: self
-                .properties
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(
-                owned,
-                self.properties.user_properties,
-            )?,
-        })
+    fn from(a: Auth) -> Self {
+        Self {
+            reason_code: a.reason.into(),
+            authentication: a.authentication_info.map(Into::into),
+            reason_string: a.properties.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(a.properties.user_properties),
+        }
     }
 }
 
@@ -584,24 +570,22 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::ConnectOtherProperties<O::Shared>, O> for ConnectProperties
+impl<S> From<ConnectProperties> for mqtt_proto::ConnectOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::ConnectOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::ConnectOtherProperties {
-            session_expiry_interval: self.session_expiry_interval,
-            receive_maximum: self.receive_maximum,
-            maximum_packet_size: self.maximum_packet_size,
-            topic_alias_maximum: self.topic_alias_maximum,
-            request_response_information: self.request_response_information,
-            request_problem_information: self.request_problem_information,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
+    fn from(cp: ConnectProperties) -> Self {
+        Self {
+            session_expiry_interval: cp.session_expiry_interval,
+            receive_maximum: cp.receive_maximum,
+            maximum_packet_size: cp.maximum_packet_size,
+            topic_alias_maximum: cp.topic_alias_maximum,
+            request_response_information: cp.request_response_information,
+            request_problem_information: cp.request_problem_information,
+            user_properties: map_user_properties_to_bytestr(cp.user_properties),
             authentication: None, // TODO: Add auth support
-        })
+        }
     }
 }
 
@@ -678,44 +662,30 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::ConnAckOtherProperties<O::Shared>, O> for ConnAckProperties
+impl<S> From<ConnAckProperties> for mqtt_proto::ConnAckOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::ConnAckOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::ConnAckOtherProperties {
-            session_expiry_interval: self.session_expiry_interval,
-            receive_maximum: self.receive_maximum,
-            maximum_qos: self.maximum_qos.into(),
-            retain_available: self.retain_available,
-            maximum_packet_size: self.maximum_packet_size,
-            assigned_client_id: self
-                .assigned_client_identifier
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            topic_alias_maximum: self.topic_alias_maximum,
-            reason_string: self
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-            wildcard_subscription_available: self.wildcard_subscription_available,
-            subscription_identifiers_available: self.subscription_identifiers_available,
-            shared_subscription_available: self.shared_subscription_available,
-            server_keep_alive: self.server_keep_alive,
-            response_information: self
-                .response_information
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            server_reference: self
-                .server_reference
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
+    fn from(cap: ConnAckProperties) -> Self {
+        Self {
+            session_expiry_interval: cap.session_expiry_interval,
+            receive_maximum: cap.receive_maximum,
+            maximum_qos: cap.maximum_qos.into(),
+            retain_available: cap.retain_available,
+            maximum_packet_size: cap.maximum_packet_size,
+            assigned_client_id: cap.assigned_client_identifier.as_deref().map(Into::into),
+            topic_alias_maximum: cap.topic_alias_maximum,
+            reason_string: cap.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(cap.user_properties),
+            wildcard_subscription_available: cap.wildcard_subscription_available,
+            subscription_identifiers_available: cap.subscription_identifiers_available,
+            shared_subscription_available: cap.shared_subscription_available,
+            server_keep_alive: cap.server_keep_alive,
+            response_information: cap.response_information.as_deref().map(Into::into),
+            server_reference: cap.server_reference.as_deref().map(Into::into),
             authentication: None, // TODO: Add auth support
-        })
+        }
     }
 }
 
@@ -776,33 +746,37 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::PublishOtherProperties<O::Shared>, O> for PublishProperties
+impl<S> From<PublishProperties> for mqtt_proto::PublishOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::PublishOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::PublishOtherProperties {
-            payload_is_utf8: matches!(self.payload_format_indicator, PayloadFormatIndicator::UTF8),
-            message_expiry_interval: self.message_expiry_interval,
-            topic_alias: self.topic_alias,
-            response_topic: self
-                .response_topic
-                .map(|t| t.into_inner().to_shared(owned))
-                .transpose()?,
-            correlation_data: self
-                .correlation_data
-                .map(|b| mqtt_proto::BinaryData::new(owned, b))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-            subscription_identifiers: self.subscription_identifiers,
-            content_type: self
-                .content_type
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-        })
+    fn from(pp: PublishProperties) -> Self {
+        Self {
+            payload_is_utf8: matches!(pp.payload_format_indicator, PayloadFormatIndicator::UTF8),
+            message_expiry_interval: pp.message_expiry_interval,
+            topic_alias: pp.topic_alias,
+            response_topic: pp.response_topic.map(|t| t.into_inner().into()),
+            correlation_data: pp.correlation_data.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(pp.user_properties),
+            subscription_identifiers: pp.subscription_identifiers,
+            content_type: pp.content_type.as_deref().map(Into::into),
+        }
+    }
+}
+
+impl<S> From<PubAck> for mqtt_proto::PubAck<S>
+where
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
+{
+    fn from(pa: PubAck) -> Self {
+        Self {
+            packet_identifier: pa.packet_identifier,
+            reason_code: pa.reason.into(),
+            other_properties: pa.properties.into(),
+        }
     }
 }
 
@@ -829,21 +803,16 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::PubAckOtherProperties<O::Shared>, O> for PubAckProperties
+impl<S> From<PubAckProperties> for mqtt_proto::PubAckOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::PubAckOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::PubAckOtherProperties {
-            reason_string: self
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-        })
+    fn from(pap: PubAckProperties) -> Self {
+        Self {
+            reason_string: pap.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(pap.user_properties),
+        }
     }
 }
 
@@ -870,21 +839,16 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::PubRecOtherProperties<O::Shared>, O> for PubRecProperties
+impl<S> From<PubRecProperties> for mqtt_proto::PubRecOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::PubRecOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::PubRecOtherProperties {
-            reason_string: self
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-        })
+    fn from(prp: PubRecProperties) -> Self {
+        Self {
+            reason_string: prp.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(prp.user_properties),
+        }
     }
 }
 
@@ -911,21 +875,16 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::PubRelOtherProperties<O::Shared>, O> for PubRelProperties
+impl<S> From<PubRelProperties> for mqtt_proto::PubRelOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::PubRelOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::PubRelOtherProperties {
-            reason_string: self
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-        })
+    fn from(prp: PubRelProperties) -> Self {
+        Self {
+            reason_string: prp.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(prp.user_properties),
+        }
     }
 }
 
@@ -952,21 +911,16 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::PubCompOtherProperties<O::Shared>, O> for PubCompProperties
+impl<S> From<PubCompProperties> for mqtt_proto::PubCompOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::PubCompOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::PubCompOtherProperties {
-            reason_string: self
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-        })
+    fn from(pcp: PubCompProperties) -> Self {
+        Self {
+            reason_string: pcp.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(pcp.user_properties),
+        }
     }
 }
 
@@ -993,18 +947,16 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::SubscribeOtherProperties<O::Shared>, O> for SubscribeProperties
+impl<S> From<SubscribeProperties> for mqtt_proto::SubscribeOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::SubscribeOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::SubscribeOtherProperties {
-            subscription_identifier: self.subscription_identifier,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-        })
+    fn from(srp: SubscribeProperties) -> Self {
+        Self {
+            subscription_identifier: srp.subscription_identifier,
+            user_properties: map_user_properties_to_bytestr(srp.user_properties),
+        }
     }
 }
 
@@ -1031,21 +983,16 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::SubAckOtherProperties<O::Shared>, O> for SubAckProperties
+impl<S> From<SubAckProperties> for mqtt_proto::SubAckOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::SubAckOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::SubAckOtherProperties {
-            reason_string: self
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-        })
+    fn from(sap: SubAckProperties) -> Self {
+        Self {
+            reason_string: sap.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(sap.user_properties),
+        }
     }
 }
 
@@ -1070,17 +1017,15 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::UnsubscribeOtherProperties<O::Shared>, O> for UnsubscribeProperties
+impl<S> From<UnsubscribeProperties> for mqtt_proto::UnsubscribeOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::UnsubscribeOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::UnsubscribeOtherProperties {
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-        })
+    fn from(up: UnsubscribeProperties) -> Self {
+        Self {
+            user_properties: map_user_properties_to_bytestr(up.user_properties),
+        }
     }
 }
 
@@ -1107,21 +1052,16 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::UnsubAckOtherProperties<O::Shared>, O> for UnsubAckProperties
+impl<S> From<UnsubAckProperties> for mqtt_proto::UnsubAckOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::UnsubAckOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::UnsubAckOtherProperties {
-            reason_string: self
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-        })
+    fn from(uap: UnsubAckProperties) -> Self {
+        Self {
+            reason_string: uap.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(uap.user_properties),
+        }
     }
 }
 
@@ -1152,26 +1092,18 @@ where
     }
 }
 
-impl<O> IntoBuffered<mqtt_proto::DisconnectOtherProperties<O::Shared>, O> for DisconnectProperties
+impl<S> From<DisconnectProperties> for mqtt_proto::DisconnectOtherProperties<S>
 where
-    O: buffer_pool::Owned,
+    S: Shared,
+    for<'a> &'a str: Into<ByteStr<S>>,
 {
-    fn into_buffered(
-        self,
-        owned: &mut O,
-    ) -> Result<mqtt_proto::DisconnectOtherProperties<O::Shared>, buffer_pool::Error> {
-        Ok(mqtt_proto::DisconnectOtherProperties {
-            session_expiry_interval: self.session_expiry_interval,
-            reason_string: self
-                .reason_string
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-            user_properties: map_user_properties_to_bytestr(owned, self.user_properties)?,
-            server_reference: self
-                .server_reference
-                .map(|s| mqtt_proto::ByteStr::new(owned, s))
-                .transpose()?,
-        })
+    fn from(dp: DisconnectProperties) -> Self {
+        Self {
+            session_expiry_interval: dp.session_expiry_interval,
+            reason_string: dp.reason_string.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(dp.user_properties),
+            server_reference: dp.server_reference.as_deref().map(Into::into),
+        }
     }
 }
 
@@ -1181,9 +1113,6 @@ pub struct AuthProperties {
     pub reason_string: Option<String>,
     pub user_properties: Vec<(String, String)>,
 }
-
-// NOTE: there is no IntoBuffered implementation for AuthProperties because mqtt_proto::Auth does
-// not have a dedicated properties struct equivalent
 
 //////////////////// Reasons ////////////////////
 
@@ -1893,68 +1822,26 @@ impl From<AuthReason> for mqtt_proto::AuthenticateReasonCode {
 
 //////////////////// Utility ////////////////////
 
-#[allow(dead_code)] // TODO: remove suppression
-fn map_user_properties_to_bytestr<S, O>(
-    owned: &mut O,
-    props: Vec<(String, String)>,
-) -> Result<Vec<(mqtt_proto::ByteStr<S>, mqtt_proto::ByteStr<S>)>, buffer_pool::Error>
+fn map_user_properties_to_bytestr<I, SIn, SOut>(
+    props: I,
+) -> Vec<(mqtt_proto::ByteStr<SOut>, mqtt_proto::ByteStr<SOut>)>
 where
-    S: buffer_pool::Shared,
-    O: buffer_pool::Owned<Shared = S>,
+    I: IntoIterator<Item = (SIn, SIn)>,
+    SIn: AsRef<str>,
+    SOut: Shared,
+    for<'a> &'a str: Into<ByteStr<SOut>>,
 {
     props
         .into_iter()
-        .map(|(k, v)| {
-            let k = mqtt_proto::ByteStr::new(owned, k)?;
-            let v = mqtt_proto::ByteStr::new(owned, v)?;
-            Ok((k, v))
-        })
+        .map(|(k, v)| (k.as_ref().into(), v.as_ref().into()))
         .collect()
-}
-
-/// Trait for converting a packet to a buffer-backed internal variant.
-// TODO: Should this be here, or will it make more sense to implement as functions in some kind of
-// conversion module? Depends on where and how the boundary between public and internal types works
-pub(crate) trait IntoBuffered<T, O>
-where
-    O: buffer_pool::Owned,
-{
-    fn into_buffered(self, owned: &mut O) -> Result<T, buffer_pool::Error>;
-}
-
-impl<O> IntoBuffered<O::Shared, O> for Bytes
-where
-    O: buffer_pool::Owned,
-{
-    fn into_buffered(self, owned: &mut O) -> Result<O::Shared, buffer_pool::Error> {
-        let len = self.len();
-
-        owned.reserve(len)?;
-
-        // SAFETY: Requirements of `unfilled_mut` and `fill` are upheld.
-        unsafe {
-            let buf = owned.unfilled_mut();
-            crate::buffer_pool::maybe_uninit_copy_from_slice(&mut buf[..len], &self);
-            owned.fill(len);
-        }
-
-        let filled_len = owned.filled_len();
-        let shared = owned.split_to(filled_len).freeze();
-        Ok(shared)
-    }
 }
 
 #[cfg(test)]
 mod test {
     use crate::mqtt_proto::{binary_data, byte_str, topic};
-    use crate::packet::{self, IntoBuffered, PacketIdentifier, SessionExpiryInterval};
-    use crate::{
-        buffer_pool::{
-            BufferPool as _,
-            tests::{BufferPoolImpl, OwnedImpl, SharedImpl},
-        },
-        packet::KeepAlive,
-    };
+    use crate::packet::{self, PacketIdentifier, SessionExpiryInterval};
+    use crate::{buffer_pool::tests::SharedImpl, packet::KeepAlive};
     use crate::{mqtt_proto, topic};
     use std::num::{NonZeroU16, NonZeroU32};
 
@@ -1963,11 +1850,10 @@ mod test {
     #[allow(clippy::needless_pass_by_value)]
     fn compare_as_buffered<T, U>(packet: T, proto_packet: U)
     where
-        T: IntoBuffered<U, OwnedImpl>,
+        T: Into<U>,
         U: PartialEq + std::fmt::Debug,
     {
-        let mut owned = BufferPoolImpl.take_empty_owned();
-        let buffered = packet.into_buffered(&mut owned).unwrap();
+        let buffered = packet.into();
         assert_eq!(buffered, proto_packet);
     }
 
@@ -2047,51 +1933,51 @@ mod test {
     fn property_defaults() {
         compare_as_buffered(
             packet::ConnectProperties::default(),
-            mqtt_proto::ConnectOtherProperties::default(),
+            mqtt_proto::ConnectOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::ConnAckProperties::default(),
-            mqtt_proto::ConnAckOtherProperties::default(),
+            mqtt_proto::ConnAckOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::PublishProperties::default(),
-            mqtt_proto::PublishOtherProperties::default(),
+            mqtt_proto::PublishOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::PubAckProperties::default(),
-            mqtt_proto::PubAckOtherProperties::default(),
+            mqtt_proto::PubAckOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::PubRecProperties::default(),
-            mqtt_proto::PubRecOtherProperties::default(),
+            mqtt_proto::PubRecOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::PubRelProperties::default(),
-            mqtt_proto::PubRelOtherProperties::default(),
+            mqtt_proto::PubRelOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::PubCompProperties::default(),
-            mqtt_proto::PubCompOtherProperties::default(),
+            mqtt_proto::PubCompOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::SubscribeProperties::default(),
-            mqtt_proto::SubscribeOtherProperties::default(),
+            mqtt_proto::SubscribeOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::SubAckProperties::default(),
-            mqtt_proto::SubAckOtherProperties::default(),
+            mqtt_proto::SubAckOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::UnsubscribeProperties::default(),
-            mqtt_proto::UnsubscribeOtherProperties::default(),
+            mqtt_proto::UnsubscribeOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::UnsubAckProperties::default(),
-            mqtt_proto::UnsubAckOtherProperties::default(),
+            mqtt_proto::UnsubAckOtherProperties::<SharedImpl>::default(),
         );
         compare_as_buffered(
             packet::DisconnectProperties::default(),
-            mqtt_proto::DisconnectOtherProperties::default(),
+            mqtt_proto::DisconnectOtherProperties::<SharedImpl>::default(),
         );
     }
 
