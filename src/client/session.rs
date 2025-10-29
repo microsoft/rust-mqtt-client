@@ -14,10 +14,9 @@ use tokio::time::Duration;
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::token::ReauthCompletionNotifier;
 use crate::client::{
-    ReauthResponse, ReauthToken,
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest,
-        SubscriptionRequest,
+        ReauthResponse, ReauthToken, SubscriptionRequest,
     },
     session::pkid::PkidPool,
     session::timer::Timer,
@@ -176,7 +175,7 @@ where
                                 subscribe_to: vec![SubscribeTo {
                                     topic_filter,
                                     options: SubscribeOptions {
-                                        maximum_qos: qos.into(),
+                                        maximum_qos: qos,
                                         // TODO: Get from sub_req
                                         other_properties: SubscribeOptionsOtherProperties {
                                             no_local: false,
@@ -316,7 +315,7 @@ where
                     .subscribe
                     .remove(&suback.packet_identifier)
                     .expect("TODO: error handling");
-                _ = notifier.complete(suback.into());
+                _ = notifier.complete(suback);
             }
             CompletedOperation::Unsubscribe(unsuback) => {
                 self.pkid_pool.release_pkid(unsuback.packet_identifier);
@@ -325,7 +324,7 @@ where
                     .unsubscribe
                     .remove(&unsuback.packet_identifier)
                     .expect("TODO: error handling");
-                _ = notifier.complete(unsuback.into());
+                _ = notifier.complete(unsuback);
             }
             CompletedOperation::PublishQoS1(puback) => {
                 self.pkid_pool.release_pkid(puback.packet_identifier);
@@ -334,7 +333,7 @@ where
                     .publish_qos1
                     .shift_remove(&puback.packet_identifier)
                     .expect("TODO: error handling");
-                _ = notifier.complete(puback.into());
+                _ = notifier.complete(puback);
             }
             CompletedOperation::PublishQoS2(pubrec) => {
                 let token = if pubrec.reason_code.is_success() {
@@ -355,7 +354,7 @@ where
                     .shift_remove(&pubrec.packet_identifier)
                     .expect("TODO: error handling");
 
-                _ = notifier.complete((pubrec.into(), token));
+                _ = notifier.complete((pubrec, token));
             }
             CompletedOperation::PubRec(pubrel) => {
                 let (_, notifier) = self
@@ -364,7 +363,7 @@ where
                     .remove(&pubrel.packet_identifier)
                     .expect("TODO: error handling");
                 let token = PubCompToken::new(pubrel.packet_identifier, self.ch.ack_tx.clone());
-                _ = notifier.complete((pubrel.into(), token));
+                _ = notifier.complete((pubrel, token));
             }
             CompletedOperation::PubRel(pubcomp) => {
                 self.pkid_pool.release_pkid(pubcomp.packet_identifier);
@@ -373,7 +372,7 @@ where
                     .pubrel
                     .shift_remove(&pubcomp.packet_identifier)
                     .expect("TODO: error handling");
-                _ = notifier.complete(pubcomp.into());
+                _ = notifier.complete(pubcomp);
             }
         }
     }
@@ -475,7 +474,7 @@ where
             // TODO: Validate authentication method from CONNACK
             AuthenticateReasonCode::Success => {
                 let notifier = self.inflight.auth.take().expect("TODO: error handling");
-                _ = notifier.complete(ReauthResponse::Success(auth.into()));
+                _ = notifier.complete(ReauthResponse::Success(auth));
             }
             AuthenticateReasonCode::ContinueAuthentication => {
                 //pass on, do not stop tracking
@@ -486,10 +485,10 @@ where
                         .as_ref()
                         .expect("Authentication Method must be present for reason code 0x18")
                         .method
-                        .to_string(),
+                        .clone(),
                     tx: self.ch.auth_tx.clone(),
                 };
-                _ = notifier.complete(ReauthResponse::Continue(auth.into(), token));
+                _ = notifier.complete(ReauthResponse::Continue(auth, token));
             }
             AuthenticateReasonCode::ReAuthenticate => unreachable!(
                 "AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server"
@@ -599,9 +598,9 @@ enum OutgoingOperation<S>
 where
     S: Shared,
 {
-    Subscribe(PacketIdentifier, SubscribeCompletionNotifier),
-    Unsubscribe(PacketIdentifier, UnsubscribeCompletionNotifier),
-    PublishQoS1(Publish<S>, PublishQoS1CompletionNotifier),
+    Subscribe(PacketIdentifier, SubscribeCompletionNotifier<S>),
+    Unsubscribe(PacketIdentifier, UnsubscribeCompletionNotifier<S>),
+    PublishQoS1(Publish<S>, PublishQoS1CompletionNotifier<S>),
 }
 
 /// A response to an operation initiated by the client
@@ -670,7 +669,7 @@ where
         PublishOtherProperties<S>,
     ),
     PublishQoS1(
-        PublishQoS1CompletionNotifier,
+        PublishQoS1CompletionNotifier<S>,
         Topic<ByteStr<S>>,
         S,
         PublishOtherProperties<S>,
@@ -785,13 +784,13 @@ where
     // None of these hashmaps should ever use the same key at the same time, although this is not
     // enforced for simplicity.
     /// All inflight QoS 1 PUBLISH operations
-    publish_qos1: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS1CompletionNotifier)>,
+    publish_qos1: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS1CompletionNotifier<S>)>,
     /// All inflight QoS 2 PUBLISH operations
     publish_qos2: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS2CompletionNotifier<S>)>,
     /// All inflight SUBSCRIBE operations
-    subscribe: HashMap<PacketIdentifier, SubscribeCompletionNotifier>,
+    subscribe: HashMap<PacketIdentifier, SubscribeCompletionNotifier<S>>,
     /// All inflight UNSUBSCRIBE operations
-    unsubscribe: HashMap<PacketIdentifier, UnsubscribeCompletionNotifier>,
+    unsubscribe: HashMap<PacketIdentifier, UnsubscribeCompletionNotifier<S>>,
 
     // --- Acknowledgement tracking ---
     // None of these hashmaps should ever use the same key at the same time, although this is not
@@ -799,7 +798,7 @@ where
     /// All inflight PUBREC operations
     pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier<S>)>,
     /// All inflight PUBREL operations
-    pubrel: IndexMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier)>,
+    pubrel: IndexMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier<S>)>,
 
     packets_to_replay: VecDeque<Packet<S>>,
 

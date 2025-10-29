@@ -7,8 +7,9 @@
 #![allow(unused_variables)]
 #![allow(clippy::unused_async)]
 
-use crate::client::{AuthResponse, ReauthResponse};
-use crate::packet::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck};
+use crate::client::AuthResponse;
+use crate::client::channel_data::ReauthResponse;
+use crate::mqtt_proto::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck};
 pub use acknowledgement::{AckHandle, PubAckToken, PubCompToken, PubRecToken, PubRelToken};
 pub(crate) use completion::{CompletionNotifier, completion_pair};
 pub use completion::{CompletionToken, MappedCompletionToken};
@@ -19,15 +20,16 @@ mod completion;
 // Aliases for completion notifier types.
 // For internal use where we'd prefer to avoid the mix of user-facing and internal packet types.
 pub(crate) type PublishQoS0CompletionNotifier = CompletionNotifier<()>;
-pub(crate) type PublishQoS1CompletionNotifier = CompletionNotifier<PubAck>;
+pub(crate) type PublishQoS1CompletionNotifier<S> = CompletionNotifier<PubAck<S>>;
 pub(crate) type PublishQoS2CompletionNotifier<S> =
-    CompletionNotifier<(PubRec, Option<PubRelToken<S>>)>;
-pub(crate) type SubscribeCompletionNotifier = CompletionNotifier<SubAck>;
-pub(crate) type UnsubscribeCompletionNotifier = CompletionNotifier<UnsubAck>;
+    CompletionNotifier<(PubRec<S>, Option<PubRelToken<S>>)>;
+pub(crate) type SubscribeCompletionNotifier<S> = CompletionNotifier<SubAck<S>>;
+pub(crate) type UnsubscribeCompletionNotifier<S> = CompletionNotifier<UnsubAck<S>>;
 pub(crate) type PubAckCompletionNotifier = CompletionNotifier<()>;
-pub(crate) type PubRecAcceptCompletionNotifier<S> = CompletionNotifier<(PubRel, PubCompToken<S>)>;
+pub(crate) type PubRecAcceptCompletionNotifier<S> =
+    CompletionNotifier<(PubRel<S>, PubCompToken<S>)>;
 pub(crate) type PubRecRejectCompletionNotifier = CompletionNotifier<()>;
-pub(crate) type PubRelCompletionNotifier = CompletionNotifier<PubComp>;
+pub(crate) type PubRelCompletionNotifier<S> = CompletionNotifier<PubComp<S>>;
 pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
 pub(crate) type AuthCompletionNotifier = CompletionNotifier<AuthResponse>;
 pub(crate) type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResponse<S>>;

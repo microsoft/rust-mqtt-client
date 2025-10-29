@@ -3,52 +3,28 @@
 
 //! Types that define requests for an MQTT operation
 
-use crate::buffer_pool::{Shared, SharedImpl};
+use crate::buffer_pool::Shared;
 use crate::client::token::{
-    AckHandle, PubAckCompletionNotifier, PubCompCompletionNotifier, PubRecAcceptCompletionNotifier,
-    PubRecRejectCompletionNotifier, PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
-    PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, ReauthCompletionNotifier,
-    SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+    AckHandle, CompletionToken, PubAckCompletionNotifier, PubCompCompletionNotifier,
+    PubRecAcceptCompletionNotifier, PubRecRejectCompletionNotifier, PubRelCompletionNotifier,
+    PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
+    ReauthCompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+    completion_pair,
 };
+use crate::error::ClientError;
 use crate::mqtt_proto::{
-    Auth, ByteStr, Filter, PubAck, PubComp, PubRec, PubRel, Publish, PublishOtherProperties,
-    SessionExpiryInterval, SubscribeOtherProperties, Topic, UnsubscribeOtherProperties,
+    Auth, AuthenticateReasonCode, Authentication, BinaryData, ByteStr, Disconnect, Filter, PubAck,
+    PubComp, PubRec, PubRel, Publish, PublishOtherProperties, QoS, SubscribeOtherProperties, Topic,
+    UnsubscribeOtherProperties, UserProperties,
 };
-use crate::packet::{DisconnectProperties, QoS};
 
 // TODO: I don't love the "Request" naming, because it implies a "Response" structure which doens't exist.
 // It also isn't symmetrical with the IncomingPublish type.
 // Revisit naming.
 
-pub struct DisconnectRequest<S>
+pub struct DisconnectRequest<S>(pub Disconnect<S>)
 where
-    S: Shared,
-{
-    pub session_expiry_interval: Option<SessionExpiryInterval>,
-    pub reason_string: Option<ByteStr<S>>,
-    pub user_properties: Vec<(ByteStr<S>, ByteStr<S>)>,
-    pub server_reference: Option<ByteStr<S>>,
-}
-
-impl DisconnectRequest<SharedImpl> {
-    pub fn new(properties: &DisconnectProperties) -> Self {
-        let DisconnectProperties {
-            session_expiry_interval,
-            reason_string,
-            user_properties,
-            server_reference,
-        } = properties;
-        Self {
-            session_expiry_interval: *session_expiry_interval,
-            reason_string: reason_string.as_deref().map(Into::into),
-            user_properties: user_properties
-                .iter()
-                .map(|(key, value)| (key.as_str().into(), value.as_str().into()))
-                .collect(),
-            server_reference: server_reference.as_deref().map(Into::into),
-        }
-    }
-}
+    S: Shared;
 
 /// Request to send a PUBLISH packet.
 #[allow(clippy::redundant_field_names)]
@@ -63,7 +39,7 @@ where
         PublishOtherProperties<S>,
     ),
     PublishQoS1(
-        PublishQoS1CompletionNotifier,
+        PublishQoS1CompletionNotifier<S>,
         Topic<ByteStr<S>>,
         S,
         PublishOtherProperties<S>,
@@ -84,13 +60,13 @@ where
     // NOTE: A PUBLISH *is* a control packet, but it is not included here as it has a dedicated
     // channel and enum to allow for prioritization.
     Subscribe(
-        SubscribeCompletionNotifier,
+        SubscribeCompletionNotifier<S>,
         Filter<ByteStr<S>>,
         QoS,
         SubscribeOtherProperties<S>,
     ),
     Unsubscribe(
-        UnsubscribeCompletionNotifier,
+        UnsubscribeCompletionNotifier<S>,
         Filter<ByteStr<S>>,
         UnsubscribeOtherProperties<S>,
     ),
@@ -107,7 +83,7 @@ where
     PubAck(PubAckCompletionNotifier, PubAck<S>, u64),
     PubRecAccept(PubRecAcceptCompletionNotifier<S>, PubRec<S>),
     PubRecReject(PubRecRejectCompletionNotifier, PubRec<S>),
-    PubRel(PubRelCompletionNotifier, PubRel<S>),
+    PubRel(PubRelCompletionNotifier<S>, PubRel<S>),
     PubComp(PubCompCompletionNotifier, PubComp<S>),
 }
 
@@ -118,3 +94,52 @@ where
 
 /// Incoming Publish + Acknowledgement infrastructure
 pub type IncomingPublish<S> = (Publish<S>, AckHandle<S>);
+
+// TODO: Move these to a more appropriate place
+
+pub enum ReauthResponse<S>
+where
+    S: Shared,
+{
+    // TODO: should this be in channel data and merely re-exported?
+    Continue(Auth<S>, ReauthToken<S>),
+    Success(Auth<S>),
+    Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
+}
+
+// TODO: Should this live in token module? Probably, but is the module even a good idea at this point?
+pub struct ReauthToken<S>
+where
+    S: Shared,
+{
+    pub method: ByteStr<S>,
+    pub tx: tokio::sync::mpsc::Sender<ReauthRequest<S>>,
+}
+
+impl<S> ReauthToken<S>
+where
+    S: Shared,
+{
+    pub async fn continue_reauth(
+        self,
+        authentication_data: Option<BinaryData<S>>,
+        reason_string: Option<ByteStr<S>>,
+        user_properties: UserProperties<S>,
+    ) -> Result<CompletionToken<ReauthResponse<S>>, ClientError> {
+        let (notifier, token) = completion_pair();
+        let auth = Auth {
+            reason_code: AuthenticateReasonCode::ContinueAuthentication,
+            authentication: Some(Authentication {
+                method: self.method,
+                data: authentication_data,
+            }),
+            reason_string,
+            user_properties,
+        };
+        self.tx
+            .send(ReauthRequest(notifier, auth))
+            .await
+            .map_err(|_| ClientError::DetachedClient)?;
+        Ok(token)
+    }
+}

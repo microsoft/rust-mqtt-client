@@ -1822,7 +1822,7 @@ impl From<AuthReason> for mqtt_proto::AuthenticateReasonCode {
 
 //////////////////// Utility ////////////////////
 
-fn map_user_properties_to_bytestr<I, SIn, SOut>(
+pub(crate) fn map_user_properties_to_bytestr<I, SIn, SOut>(
     props: I,
 ) -> Vec<(mqtt_proto::ByteStr<SOut>, mqtt_proto::ByteStr<SOut>)>
 where
