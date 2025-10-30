@@ -22,12 +22,14 @@ use tokio::{
 };
 
 use crate::buffer_pool::{BufferPool, EitherBytesAccumulator};
+use crate::client::ConnectionTransportTlsConfig;
 use crate::io::{ReadableStream, Reader, WritableStream, Writer, tokio_tls};
 
 /// Establish a WebSocket connection using the given request parameters,
 /// and use the given buffer pools to initialize the buffers for the stream reader and writer.
 pub async fn connect<BP>(
     request: impl IntoClientRequest,
+    tls_config: ConnectionTransportTlsConfig,
     reader_pool: &BP,
 ) -> io::Result<(Reader<BP>, Writer<BP>)>
 where
@@ -51,7 +53,7 @@ where
         ));
     };
     let stream = if scheme == "https" {
-        tokio_tls::connect_inner(addr).await?
+        tokio_tls::connect_inner(addr, tls_config).await?
     } else {
         Either::Left(TcpStream::connect(addr).await?)
     };

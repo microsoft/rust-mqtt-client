@@ -22,8 +22,7 @@ use nix::{
     },
 };
 use openssl::ssl::{
-    ErrorCode, HandshakeError, SslConnector, SslContextBuilder, SslMethod, SslRef,
-    SslStream as StdSslStream, SslVersion,
+    ErrorCode, HandshakeError, SslContextBuilder, SslRef, SslStream as StdSslStream, SslVersion,
 };
 use parking_lot::Mutex;
 use tokio::{
@@ -33,6 +32,7 @@ use tokio::{
 use tokio_openssl::SslStream;
 
 use crate::buffer_pool::{BufferPool, EitherBytesAccumulator};
+use crate::client::ConnectionTransportTlsConfig;
 use crate::io::{ReadableStream, Reader, WritableStream, Writer, tokio_tcp};
 use crate::opensslext::ssl::{ConnectionTrafficSecrets, ExtractedSecrets};
 
@@ -42,13 +42,14 @@ use crate::opensslext::ssl::{ConnectionTrafficSecrets, ExtractedSecrets};
 /// The hostname part of the address will be matched against the server cert SAN.
 pub async fn connect<BP>(
     addr: &str,
+    config: ConnectionTransportTlsConfig,
     reader_pool: &BP,
     writer_pool: &BP,
 ) -> io::Result<(Reader<BP>, Writer<BP>)>
 where
     BP: BufferPool,
 {
-    Ok(match connect_inner(addr).await? {
+    Ok(match connect_inner(addr, config).await? {
         Either::Left(tcp_stream) => tokio_tcp::connect_inner(tcp_stream, reader_pool, writer_pool),
 
         Either::Right(ssl_stream) => {
@@ -66,6 +67,7 @@ where
 
 pub(crate) async fn connect_inner(
     addr: &str,
+    config: ConnectionTransportTlsConfig,
 ) -> io::Result<Either<TcpStream, SslStream<TcpStream>>> {
     /// We haven't attempted to create a TLS connection yet, so whether the kernel supports TLS or not
     /// is not yet known.
@@ -77,8 +79,7 @@ pub(crate) async fn connect_inner(
 
     static TLS_METHOD: AtomicU8 = AtomicU8::new(TLS_METHOD_UNKNOWN);
 
-    let mut connector = SslConnector::builder(SslMethod::tls_client())?;
-    connector.set_min_proto_version(Some(openssl::ssl::SslVersion::TLS1_2))?;
+    let ConnectionTransportTlsConfig(mut connector) = config;
 
     let hostname = addr
         .rsplit_once(':')
