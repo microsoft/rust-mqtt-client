@@ -51,6 +51,8 @@ where
     outgoing_queue: VecDeque<OutgoingOperation<O::Shared>>,
     /// Tracker of all inflight MQTT packets awaiting a response
     inflight: InflightTracker<O::Shared>,
+    /// Tracker of MQTT packets sent to the application, awaiting a response
+    in_application: InApplicationTracker,
     /// Whether the session is currently connected, and if so, the CONNACK
     connected: ConnectionState<O::Shared>,
     /// Identifier for the current connection epoch
@@ -91,6 +93,7 @@ where
             pkid_pool: PkidPool::new(max_pkid),
             outgoing_queue: Default::default(),
             inflight: InflightTracker::default(),
+            in_application: InApplicationTracker::default(),
             connected: ConnectionState::Disconnected,
             connection_epoch: 0, // move this to the connection state?
             transient: false,    // move this to the connection state?
@@ -111,6 +114,7 @@ where
         assert!(self.is_connected());
 
         // TODO: Replayed PUBLISHes should be subject to server's receive-maximum.
+        // TODO: Need to set dup flag on replayed PUBLISHes.
         let packet = if let Some(packet) = self.inflight.packets_to_replay.pop_front() {
             packet
         } else {
@@ -124,7 +128,11 @@ where
                     })
                 }
 
-                OutgoingPacketRequest::AcknowledgementRequest(ack_req) => match ack_req {
+                OutgoingPacketRequest::UnorderedAcknowledgementRequest(ack_req) => {
+                    todo!("Implement unordered acknowledgement");
+                }
+
+                OutgoingPacketRequest::OrderedAcknowledgementRequest(ack_req) => match ack_req {
                     // TODO: Reject PUBACK if epoch does not match current connection epoch
                     // TODO: It would be preferable if the notifier was not triggered on
                     // PUBACK / PUBCOMP until they were actually sent over the network.
@@ -648,7 +656,8 @@ where
     S: Shared,
 {
     DisconnectRequest(DisconnectRequest<S>),
-    AcknowledgementRequest(AcknowledgementRequest<S>),
+    UnorderedAcknowledgementRequest(AcknowledgementRequest<S>),
+    OrderedAcknowledgementRequest(AcknowledgementRequest<S>),
     SubscriptionRequest(SubscriptionRequest<S>, PacketIdentifier),
     PublishRequest(PublishRequestWithPkid<S>),
     ReauthRequest(ReauthRequest<S>),
@@ -709,7 +718,7 @@ where
         // TODO: Add support for ordered acking ready notification here
 
         if let Poll::Ready(Some(ack_req)) = ch.ack_rx.poll_recv(cx) {
-            return Poll::Ready(OutgoingPacketRequest::AcknowledgementRequest(ack_req));
+            return Poll::Ready(OutgoingPacketRequest::UnorderedAcknowledgementRequest(ack_req));
         }
 
         // TODO: Ideally, no polling for reauth if one is already in progress
@@ -806,6 +815,17 @@ where
     /// Inflight AUTH operation, if any.
     auth: Option<ReauthCompletionNotifier<S>>,
 }
+
+#[derive(Default)]
+struct InApplicationTracker {
+    publishes: IndexMap<PacketIdentifier, AcknowledgementEntry>
+}
+
+// Need to track notifier of some kind here
+struct AcknowledgementEntry {
+    ready: bool,
+}
+
 
 struct ReceiverStream<T>(Receiver<T>);
 
