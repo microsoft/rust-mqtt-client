@@ -9,7 +9,9 @@ use azure_mqtt::client::{
     AckHandle, Client, ClientOptions, ConnectHandle, ConnectionTransportConfig, Receiver,
     new_client,
 };
-use azure_mqtt::packet::{ConnectProperties, Publish, QoS, SubscribeProperties};
+use azure_mqtt::packet::{
+    ConnectOptions, ConnectProperties, KeepAlive, Publish, QoS, SubscribeProperties,
+};
 use azure_mqtt::topic::TopicFilter;
 
 const CLIENT_ID: &str = "my_client";
@@ -83,6 +85,9 @@ async fn mqtt_run(
                     hostname: HOSTNAME.to_string(),
                     port: PORT,
                 },
+                false,
+                KeepAlive::Infinite,
+                ConnectOptions::default(),
                 ConnectProperties::default(),
             )
             .await;

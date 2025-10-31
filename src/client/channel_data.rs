@@ -36,18 +36,21 @@ where
         PublishQoS0CompletionNotifier,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
     ),
     PublishQoS1(
         PublishQoS1CompletionNotifier<S>,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
     ),
     PublishQoS2(
         PublishQoS2CompletionNotifier<S>,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
     ),
 }

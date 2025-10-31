@@ -207,12 +207,13 @@ where
                             notifier,
                             topic_name,
                             payload,
+                            retain,
                             other_properties,
                         ) => {
                             let publish = Publish {
                                 topic_name,
                                 packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
-                                retain: false, // TODO: Get from pub_req
+                                retain,
                                 payload,
                                 other_properties,
                             };
@@ -225,6 +226,7 @@ where
                             notifier,
                             topic_name,
                             payload,
+                            retain,
                             other_properties,
                             packet_identifier,
                         ) => {
@@ -234,7 +236,7 @@ where
                                     packet_identifier,
                                     false, // TODO: Get from pub_req
                                 ),
-                                retain: false, // TODO: Get from pub_req
+                                retain,
                                 payload,
                                 other_properties,
                             };
@@ -248,6 +250,7 @@ where
                             notifier,
                             topic_name,
                             payload,
+                            retain,
                             other_properties,
                             packet_identifier,
                         ) => {
@@ -257,7 +260,7 @@ where
                                     packet_identifier,
                                     false, // TODO: Get from pub_req
                                 ),
-                                retain: false, // TODO: Get from pub_req
+                                retain,
                                 payload,
                                 other_properties,
                             };
@@ -666,12 +669,14 @@ where
         PublishQoS0CompletionNotifier,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
     ),
     PublishQoS1(
         PublishQoS1CompletionNotifier<S>,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
         PacketIdentifier,
     ),
@@ -679,6 +684,7 @@ where
         PublishQoS2CompletionNotifier<S>,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
         PacketIdentifier,
     ),
@@ -732,13 +738,16 @@ where
                     notifier,
                     topic,
                     payload,
+                    retain,
                     properties,
                 ))) = ch.o_pub_rx.poll_next_unpin(cx)
                 else {
                     unreachable!("peek() confirmed the stream has an element");
                 };
                 return Poll::Ready(OutgoingPacketRequest::PublishRequest(
-                    PublishRequestWithPkid::PublishQoS0(notifier, topic, payload, properties),
+                    PublishRequestWithPkid::PublishQoS0(
+                        notifier, topic, payload, retain, properties,
+                    ),
                 ));
             } else if let Some(pkid) = pkid_pool.lease_next_pkid() {
                 let Poll::Ready(Some(publish)) = ch.o_pub_rx.poll_next_unpin(cx) else {
@@ -746,14 +755,14 @@ where
                 };
                 return Poll::Ready(OutgoingPacketRequest::PublishRequest(match publish {
                     PublishRequest::PublishQoS0(..) => unreachable!("handled above"),
-                    PublishRequest::PublishQoS1(notifier, topic, payload, properties) => {
+                    PublishRequest::PublishQoS1(notifier, topic, payload, retain, properties) => {
                         PublishRequestWithPkid::PublishQoS1(
-                            notifier, topic, payload, properties, pkid,
+                            notifier, topic, payload, retain, properties, pkid,
                         )
                     }
-                    PublishRequest::PublishQoS2(notifier, topic, payload, properties) => {
+                    PublishRequest::PublishQoS2(notifier, topic, payload, retain, properties) => {
                         PublishRequestWithPkid::PublishQoS2(
-                            notifier, topic, payload, properties, pkid,
+                            notifier, topic, payload, retain, properties, pkid,
                         )
                     }
                 }));

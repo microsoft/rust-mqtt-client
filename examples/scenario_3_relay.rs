@@ -4,7 +4,9 @@
 use azure_mqtt::client::{
     Client, ClientOptions, ConnectHandle, ConnectionTransportConfig, Receiver, new_client,
 };
-use azure_mqtt::packet::{ConnectProperties, DeliveryQoS, QoS, SubscribeProperties};
+use azure_mqtt::packet::{
+    ConnectOptions, ConnectProperties, DeliveryQoS, KeepAlive, QoS, SubscribeProperties,
+};
 use azure_mqtt::topic::TopicFilter;
 
 const DOWNSTREAM_CLIENT_ID: &str = "downstream_client";
@@ -51,6 +53,9 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                     hostname: HOSTNAME.to_string(),
                     port: PORT,
                 },
+                false,
+                KeepAlive::Infinite,
+                ConnectOptions::default(),
                 ConnectProperties::default(),
             )
             .await;
@@ -82,7 +87,12 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
         match publish.qos {
             DeliveryQoS::AtMostOnce => {
                 let ct = us_client
-                    .publish_qos0(publish.topic_name, publish.payload, publish.properties)
+                    .publish_qos0(
+                        publish.topic_name,
+                        publish.payload,
+                        false,
+                        publish.properties,
+                    )
                     .await
                     .unwrap();
                 match ct.await {
@@ -98,7 +108,12 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
             }
             DeliveryQoS::AtLeastOnce(_) => {
                 let ct = us_client
-                    .publish_qos1(publish.topic_name, publish.payload, publish.properties)
+                    .publish_qos1(
+                        publish.topic_name,
+                        publish.payload,
+                        false,
+                        publish.properties,
+                    )
                     .await
                     .unwrap();
                 match ct.await {
@@ -114,7 +129,12 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
             }
             DeliveryQoS::ExactlyOnce(_) => {
                 let ct = us_client
-                    .publish_qos2(publish.topic_name, publish.payload, publish.properties)
+                    .publish_qos2(
+                        publish.topic_name,
+                        publish.payload,
+                        false,
+                        publish.properties,
+                    )
                     .await
                     .unwrap();
                 match ct.await {

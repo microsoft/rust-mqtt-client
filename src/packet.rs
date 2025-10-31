@@ -140,6 +140,23 @@ where
     }
 }
 
+pub struct Will {
+    //delay: ,  // TODO: why is this not in mqtt_proto?
+    pub topic_name: TopicName,
+    pub qos: QoS,
+    pub retain: bool,
+    pub payload: Bytes,
+    pub properties: PublishProperties,
+}
+
+#[derive(Default)]
+pub struct ConnectOptions {
+    pub client_id: Option<String>,
+    pub will: Option<Will>,
+    pub username: Option<String>,
+    pub password: Option<Bytes>,
+}
+
 //////////////////// Packets ////////////////////
 
 /// CONNACK packet

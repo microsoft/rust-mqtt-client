@@ -33,19 +33,17 @@ use crate::io::{Reader, Writer};
 use crate::mqtt_proto::{
     // TODO: this gets too confusing with packet types. Can we abstract these away somehow?
     Connect,
-    ConnectOtherProperties,
     DisconnectOtherProperties,
     DisconnectReasonCode,
-    KeepAlive,
     Packet,
     ProtocolVersion,
-    SessionExpiryInterval,
 };
 use crate::packet::{
-    Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
-    DisconnectProperties, PacketIdentifier, PubAck, PubAckProperties, PubComp, PubCompProperties,
-    PubRec, PubRecProperties, PubRejectReason, PubRel, PubRelProperties, Publish,
-    PublishProperties, QoS, SubAck, SubscribeProperties, UnsubAck, UnsubscribeProperties,
+    Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectOptions,
+    ConnectProperties, Disconnect, DisconnectProperties, KeepAlive, PacketIdentifier, PubAck,
+    PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties, PubRejectReason,
+    PubRel, PubRelProperties, Publish, PublishProperties, QoS, SubAck, SubscribeProperties,
+    UnsubAck, UnsubscribeProperties,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -218,6 +216,7 @@ impl Client {
         &self,
         topic_name: TopicName,
         payload: Bytes,
+        retain: bool,
         properties: PublishProperties,
     ) -> Result<CompletionToken<()>, ClientError> {
         let (notifier, token) = completion_pair();
@@ -226,6 +225,7 @@ impl Client {
                 notifier,
                 topic_name.into_inner().into(),
                 payload.into(),
+                retain,
                 properties.into(),
             ))
             .await
@@ -240,6 +240,7 @@ impl Client {
         &self,
         topic_name: TopicName,
         payload: Bytes,
+        retain: bool,
         properties: PublishProperties,
     ) -> Result<
         MappedCompletionToken<
@@ -254,6 +255,7 @@ impl Client {
                 notifier,
                 topic_name.into_inner().into(),
                 payload.into(),
+                retain,
                 properties.into(),
             ))
             .await
@@ -269,6 +271,7 @@ impl Client {
         &self,
         topic_name: TopicName,
         payload: Bytes,
+        retain: bool,
         properties: PublishProperties,
     ) -> Result<
         MappedCompletionToken<
@@ -291,6 +294,7 @@ impl Client {
                 notifier,
                 topic_name.into_inner().into(),
                 payload.into(),
+                retain,
                 properties.into(),
             ))
             .await
@@ -385,12 +389,16 @@ impl ConnectHandle {
     pub async fn connect_enhanced_auth(
         mut self,
         connection_transport: ConnectionTransportConfig,
+        clean_start: bool,
+        keep_alive: KeepAlive,
+        options: ConnectOptions,
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
     ) -> AuthResponse {
         // TODO: Even with enhanced auth, we may need skip the intermediate auth step if we get a connack
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
-        self.mqtt_connect(&mut writer, properties).await;
+        self.mqtt_connect(&mut writer, clean_start, keep_alive, options, properties)
+            .await;
 
         match self.mqtt_receive(&mut reader).await {
             Packet::ConnAck(connack) => {
@@ -439,10 +447,14 @@ impl ConnectHandle {
     pub async fn connect(
         mut self,
         connection_transport: ConnectionTransportConfig,
+        clean_start: bool,
+        keep_alive: KeepAlive,
+        options: ConnectOptions,
         properties: ConnectProperties,
     ) -> (Connection, ConnAck, DisconnectHandle) {
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
-        self.mqtt_connect(&mut writer, properties).await;
+        self.mqtt_connect(&mut writer, clean_start, keep_alive, options, properties)
+            .await;
         let Packet::ConnAck(connack) = self.mqtt_receive(&mut reader).await else {
             panic!("TODO: error handling");
         };
@@ -499,21 +511,21 @@ impl ConnectHandle {
     async fn mqtt_connect(
         &self,
         writer: &mut Writer<BufferPoolImpl>,
+        clean_start: bool,
+        keep_alive: KeepAlive,
+        options: ConnectOptions,
         properties: ConnectProperties,
     ) {
         // Transport has been established. Send CONNECT and wait for CONNACK.
-        // TODO: Get values from properties
+        // TODO: Get values from options
         let connect = Packet::Connect(Connect {
-            username: None,
-            password: None,
+            username: None, // TODO
+            password: None, // TODO
             will: None,
             client_id: None,
-            clean_start: true,
-            keep_alive: KeepAlive::Infinite,
-            other_properties: ConnectOtherProperties {
-                session_expiry_interval: SessionExpiryInterval::Infinite,
-                ..Default::default()
-            },
+            clean_start,
+            keep_alive,
+            other_properties: properties.into(),
         });
         writer
             .write(&connect, ProtocolVersion::V5)

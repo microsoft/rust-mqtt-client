@@ -5,8 +5,8 @@ use azure_mqtt::client::{
     AckHandle, Client, ClientOptions, Connection, ConnectionTransportConfig, Receiver, new_client,
 };
 use azure_mqtt::packet::{
-    ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
-    QoS, SubscribeProperties,
+    ConnectOptions, ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties,
+    PublishProperties, QoS, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -30,6 +30,9 @@ async fn main() {
                 hostname: HOSTNAME.to_string(),
                 port: PORT,
             },
+            false,
+            azure_mqtt::packet::KeepAlive::Infinite,
+            ConnectOptions::default(),
             ConnectProperties::default(),
         )
         .await;
@@ -71,6 +74,7 @@ async fn program(client: Client) {
             .publish_qos1(
                 TopicName::new("test/topic").unwrap(),
                 "Hello, MQTT!".into(),
+                false,
                 publish_properties,
             )
             .await
