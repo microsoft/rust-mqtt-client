@@ -47,15 +47,16 @@ where
             "request URI does not contain a host component",
         ));
     };
+    let port = request.uri().port_u16();
     let Some(scheme) = request.uri().scheme_str() else {
         return Err(io::Error::other(
             "request URI does not contain a scheme component",
         ));
     };
     let stream = if scheme == "https" {
-        tokio_tls::connect_inner(addr, tls_config).await?
+        tokio_tls::connect_inner(addr, port.unwrap_or(443), tls_config).await?
     } else {
-        Either::Left(TcpStream::connect(addr).await?)
+        Either::Left(TcpStream::connect((addr, port.unwrap_or(80))).await?)
     };
     match stream {
         Either::Left(stream) => {

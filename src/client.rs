@@ -116,6 +116,7 @@ pub enum ConnectionTransportConfig {
     },
     Tls {
         hostname: String,
+        port: u16,
         config: ConnectionTransportTlsConfig,
     },
     Ws {
@@ -478,8 +479,13 @@ impl ConnectHandle {
             .await
             .expect("TODO: error handling"),
 
-            ConnectionTransportConfig::Tls { hostname, config } => crate::io::tokio_tls::connect(
+            ConnectionTransportConfig::Tls {
+                hostname,
+                port,
+                config,
+            } => crate::io::tokio_tls::connect(
                 &hostname,
+                port,
                 config,
                 &self.reader_pool,
                 &self.writer_pool,
