@@ -20,6 +20,7 @@ use openssl::{
     x509::X509,
 };
 
+use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
 use crate::client::token::{CompletionToken, MappedCompletionToken, completion_pair};
 use crate::client::{
     channel_data::{
@@ -30,6 +31,7 @@ use crate::client::{
 use crate::error::ClientError;
 use crate::io::{Reader, Writer};
 use crate::mqtt_proto::{
+    self,
     // TODO: this gets too confusing with packet types. Can we abstract these away somehow?
     Connect,
     DisconnectOtherProperties,
@@ -41,14 +43,10 @@ use crate::packet::{
     Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectOptions,
     ConnectProperties, Disconnect, DisconnectProperties, KeepAlive, PacketIdentifier, PubAck,
     PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties, PubRejectReason,
-    PubRel, PubRelProperties, Publish, PublishProperties, SubAck, SubscribeProperties, UnsubAck,
-    UnsubscribeProperties,
+    PubRel, PubRelProperties, Publish, PublishProperties, QoS, RetainHandling, SubAck,
+    SubscribeProperties, UnsubAck, UnsubscribeProperties,
 };
 use crate::topic::{TopicFilter, TopicName};
-use crate::{
-    buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl},
-    packet::SubscriptionOptions,
-};
 
 mod channel_data;
 mod session;
@@ -312,7 +310,10 @@ impl Client {
     pub async fn subscribe(
         &self,
         topic_filter: TopicFilter,
-        options: SubscriptionOptions,
+        max_qos: QoS,
+        no_local: bool,
+        retain_as_published: bool,
+        retain_handling: RetainHandling,
         properties: SubscribeProperties,
     ) -> Result<
         MappedCompletionToken<
@@ -322,11 +323,21 @@ impl Client {
         ClientError,
     > {
         let (notifier, token) = completion_pair();
+
+        let options = mqtt_proto::SubscribeOptions {
+            maximum_qos: max_qos.into(),
+            other_properties: mqtt_proto::SubscribeOptionsOtherProperties {
+                no_local,
+                retain_as_published,
+                retain_handling,
+            },
+        };
+
         self.sub_tx
             .send(SubscriptionRequest::Subscribe(
                 notifier,
                 topic_filter.into_inner().into(),
-                options.into(),
+                options,
                 properties.into(),
             ))
             .await

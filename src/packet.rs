@@ -157,27 +157,6 @@ pub struct ConnectOptions {
     pub password: Option<String>,
 }
 
-// NOTE: Do not derive default - there is no default in the spec
-pub struct SubscriptionOptions {
-    pub max_qos: QoS,
-    pub no_local: bool,
-    pub retain_as_published: bool,
-    pub retain_handling: RetainHandling,
-}
-
-impl From<SubscriptionOptions> for mqtt_proto::SubscribeOptions {
-    fn from(so: SubscriptionOptions) -> Self {
-        Self {
-            maximum_qos: so.max_qos.into(),
-            other_properties: mqtt_proto::SubscribeOptionsOtherProperties {
-                no_local: so.no_local,
-                retain_as_published: so.retain_as_published,
-                retain_handling: so.retain_handling,
-            },
-        }
-    }
-}
-
 //////////////////// Packets ////////////////////
 
 /// CONNACK packet

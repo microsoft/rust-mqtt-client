@@ -6,7 +6,7 @@ use azure_mqtt::client::{
 };
 use azure_mqtt::packet::{
     ConnectOptions, ConnectProperties, DeliveryQoS, KeepAlive, QoS, RetainHandling,
-    SubscribeProperties, SubscriptionOptions,
+    SubscribeProperties,
 };
 use azure_mqtt::topic::TopicFilter;
 
@@ -72,12 +72,10 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
     ds_client
         .subscribe(
             TopicFilter::new(DOWNSTREAM_SUB_FILTER).unwrap(),
-            SubscriptionOptions {
-                max_qos: QoS::AtLeastOnce,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: RetainHandling::DoNotSend,
-            },
+            QoS::AtLeastOnce,
+            false,
+            false,
+            RetainHandling::DoNotSend,
             SubscribeProperties::default(),
         )
         .await
