@@ -20,7 +20,6 @@ use openssl::{
     x509::X509,
 };
 
-use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
 use crate::client::token::{CompletionToken, MappedCompletionToken, completion_pair};
 use crate::client::{
     channel_data::{
@@ -42,10 +41,14 @@ use crate::packet::{
     Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectOptions,
     ConnectProperties, Disconnect, DisconnectProperties, KeepAlive, PacketIdentifier, PubAck,
     PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties, PubRejectReason,
-    PubRel, PubRelProperties, Publish, PublishProperties, QoS, SubAck, SubscribeProperties,
-    UnsubAck, UnsubscribeProperties,
+    PubRel, PubRelProperties, Publish, PublishProperties, SubAck, SubscribeProperties, UnsubAck,
+    UnsubscribeProperties,
 };
 use crate::topic::{TopicFilter, TopicName};
+use crate::{
+    buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl},
+    packet::SubscriptionOptions,
+};
 
 mod channel_data;
 mod session;
@@ -309,7 +312,7 @@ impl Client {
     pub async fn subscribe(
         &self,
         topic_filter: TopicFilter,
-        qos: QoS,
+        options: SubscriptionOptions,
         properties: SubscribeProperties,
     ) -> Result<
         MappedCompletionToken<
@@ -323,7 +326,7 @@ impl Client {
             .send(SubscriptionRequest::Subscribe(
                 notifier,
                 topic_filter.into_inner().into(),
-                qos.into(),
+                options.into(),
                 properties.into(),
             ))
             .await

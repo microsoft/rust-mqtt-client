@@ -10,7 +10,8 @@ use azure_mqtt::client::{
     new_client,
 };
 use azure_mqtt::packet::{
-    ConnectOptions, ConnectProperties, KeepAlive, Publish, QoS, SubscribeProperties,
+    ConnectOptions, ConnectProperties, KeepAlive, Publish, QoS, RetainHandling,
+    SubscribeProperties, SubscriptionOptions,
 };
 use azure_mqtt::topic::TopicFilter;
 
@@ -123,7 +124,12 @@ async fn maintain_document(
     client
         .subscribe(
             TopicFilter::new(GET_FILTER).unwrap(),
-            QoS::AtLeastOnce,
+            SubscriptionOptions {
+                max_qos: QoS::AtLeastOnce,
+                no_local: false,
+                retain_as_published: false,
+                retain_handling: RetainHandling::DoNotSend,
+            },
             SubscribeProperties::default(),
         )
         .await
@@ -140,7 +146,12 @@ async fn maintain_document(
         client
             .subscribe(
                 TopicFilter::new(UPDATE_FILTER).unwrap(),
-                QoS::AtLeastOnce,
+                SubscriptionOptions {
+                    max_qos: QoS::AtLeastOnce,
+                    no_local: false,
+                    retain_as_published: false,
+                    retain_handling: RetainHandling::DoNotSend,
+                },
                 SubscribeProperties::default(),
             )
             .await

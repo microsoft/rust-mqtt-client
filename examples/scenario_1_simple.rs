@@ -6,7 +6,7 @@ use azure_mqtt::client::{
 };
 use azure_mqtt::packet::{
     ConnectOptions, ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties,
-    PublishProperties, QoS, SubscribeProperties,
+    PublishProperties, QoS, RetainHandling, SubscribeProperties, SubscriptionOptions,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -54,10 +54,16 @@ async fn main() {
 async fn program(client: Client) {
     // Subscribe to a topic and wait for the subscription to complete
     let subscribe_properties = SubscribeProperties::default();
+    let subscribe_options = SubscriptionOptions {
+        max_qos: QoS::AtLeastOnce,
+        no_local: false,
+        retain_as_published: false,
+        retain_handling: RetainHandling::DoNotSend,
+    };
     let ct = client
         .subscribe(
             TopicFilter::new("test/topic").unwrap(),
-            QoS::AtLeastOnce,
+            subscribe_options,
             subscribe_properties,
         )
         .await
