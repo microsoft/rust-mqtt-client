@@ -6,7 +6,7 @@ use azure_mqtt::client::{
 };
 use azure_mqtt::packet::{
     ConnectOptions, ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties,
-    PublishProperties, QoS, RetainHandling, SubscribeProperties,
+    PublishProperties, QoS, RetainHandling, SubscribeProperties, KeepAlive,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -31,7 +31,7 @@ async fn main() {
                 port: PORT,
             },
             false,
-            azure_mqtt::packet::KeepAlive::Infinite,
+            KeepAlive::Infinite,
             ConnectOptions::default(),
             ConnectProperties::default(),
         )
