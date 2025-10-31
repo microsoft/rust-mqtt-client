@@ -5,6 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
 
+use derive_where::derive_where;
 use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
 use indexmap::IndexMap;
@@ -52,7 +53,7 @@ where
     /// Tracker of all inflight MQTT packets awaiting a response
     inflight: InflightTracker<O::Shared>,
     /// Tracker of MQTT packets sent to the application, awaiting a response
-    in_application: InApplicationTracker,
+    in_application: InApplicationTracker<O::Shared>,
     /// Whether the session is currently connected, and if so, the CONNACK
     connected: ConnectionState<O::Shared>,
     /// Identifier for the current connection epoch
@@ -129,7 +130,16 @@ where
                 }
 
                 OutgoingPacketRequest::UnorderedAcknowledgementRequest(ack_req) => {
-                    todo!("Implement unordered acknowledgement");
+                    let pkid = match &ack_req {
+                        AcknowledgementRequest::PubAck(_, puback, _) => puback.packet_identifier,
+                        AcknowledgementRequest::PubRecAccept(_, pubrec) => pubrec.packet_identifier,
+                        AcknowledgementRequest::PubRecReject(_, pubrec) => pubrec.packet_identifier,
+                        AcknowledgementRequest::PubRel(_, pubrel) => pubrel.packet_identifier,
+                        AcknowledgementRequest::PubComp(_, pubcomp) => pubcomp.packet_identifier,
+                    };
+                    let pending = self.in_application.publishes.get_mut(&pkid).expect("TODO: error handling");
+                    *pending = PendingAcknowledgement::Ready(ack_req);
+                    continue
                 }
 
                 OutgoingPacketRequest::OrderedAcknowledgementRequest(ack_req) => match ack_req {
@@ -459,6 +469,7 @@ where
         let ack_handle = match publish.packet_identifier_dup_qos {
             PacketIdentifierDupQoS::AtMostOnce => AckHandle::QoS0,
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
+                self.in_application.publishes.insert(packet_identifier, PendingAcknowledgement::NotReady);
                 AckHandle::QoS1(PubAckToken::new(
                     packet_identifier,
                     self.connection_epoch,
@@ -466,6 +477,7 @@ where
                 ))
             }
             PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
+                self.in_application.publishes.insert(packet_identifier, PendingAcknowledgement::NotReady);
                 todo!()
             }
         };
@@ -780,7 +792,7 @@ where
 }
 
 /// Contains data related to in-flight operations pending a response
-#[derive_where::derive_where(Default)]
+#[derive_where(Default)]
 struct InflightTracker<S>
 where
     S: Shared,
@@ -816,14 +828,18 @@ where
     auth: Option<ReauthCompletionNotifier<S>>,
 }
 
-#[derive(Default)]
-struct InApplicationTracker {
-    publishes: IndexMap<PacketIdentifier, AcknowledgementEntry>
+#[derive_where(Default)]
+struct InApplicationTracker<S>
+where S: Shared
+{
+    publishes: IndexMap<PacketIdentifier, PendingAcknowledgement<S>>
 }
 
-// Need to track notifier of some kind here
-struct AcknowledgementEntry {
-    ready: bool,
+enum PendingAcknowledgement<S>
+where S: Shared
+{
+    NotReady,
+    Ready(AcknowledgementRequest<S>)
 }
 
 
