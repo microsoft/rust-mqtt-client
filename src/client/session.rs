@@ -123,7 +123,7 @@ where
                 // TODO: Need to set dup flag on replayed PUBLISHes.
                 break packet;
             }
-            // Check if a the next pending acknowledgement in order is ready
+            // Check if the next pending acknowledgement in order is ready
             else if let Some((_, PendingAcknowledgement::Ready(ack_req))) =
                 self.in_application.publishes.first()
             {
