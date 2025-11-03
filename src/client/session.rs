@@ -324,8 +324,9 @@ where
                 {
                     break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
                 }
-            } else {
-                // Poll for next outgoing request
+            }
+            // Otherwise, poll for next outgoing request
+            else {
                 let request = poll_for_outgoing_request(
                     &mut self.ch,
                     self.pingreq_timer.as_mut(),
