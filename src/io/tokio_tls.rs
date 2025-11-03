@@ -36,12 +36,13 @@ use crate::client::ConnectionTransportTlsConfig;
 use crate::io::{ReadableStream, Reader, WritableStream, Writer, tokio_tcp};
 use crate::opensslext::ssl::{ConnectionTrafficSecrets, ExtractedSecrets};
 
-/// Connect to the given address with a TLS connection, and use the given buffer pools
+/// Connect to the given address and port with a TLS connection, and use the given buffer pools
 /// to initialize the buffers for the stream reader and writer.
 ///
-/// The hostname part of the address will be matched against the server cert SAN.
+/// The hostname will be matched against the server cert SAN.
 pub async fn connect<BP>(
-    addr: &str,
+    hostname: &str,
+    port: u16,
     config: ConnectionTransportTlsConfig,
     reader_pool: &BP,
     writer_pool: &BP,
@@ -49,7 +50,7 @@ pub async fn connect<BP>(
 where
     BP: BufferPool,
 {
-    Ok(match connect_inner(addr, config).await? {
+    Ok(match connect_inner(hostname, port, config).await? {
         Either::Left(tcp_stream) => tokio_tcp::connect_inner(tcp_stream, reader_pool, writer_pool),
 
         Either::Right(ssl_stream) => {
@@ -66,7 +67,8 @@ where
 }
 
 pub(crate) async fn connect_inner(
-    addr: &str,
+    hostname: &str,
+    port: u16,
     config: ConnectionTransportTlsConfig,
 ) -> io::Result<Either<TcpStream, SslStream<TcpStream>>> {
     /// We haven't attempted to create a TLS connection yet, so whether the kernel supports TLS or not
@@ -81,17 +83,13 @@ pub(crate) async fn connect_inner(
 
     let ConnectionTransportTlsConfig(mut connector) = config;
 
-    let hostname = addr
-        .rsplit_once(':')
-        .map_or(addr, |(hostname, _port)| hostname);
-
     let method = TLS_METHOD.load(Ordering::Relaxed);
     if method == TLS_METHOD_UNKNOWN {
         let traffic_secrets = prepare_for_ktls(&mut connector)?;
 
         let connector = connector.build();
 
-        let tcp_stream = TcpStream::connect(addr).await?;
+        let tcp_stream = TcpStream::connect((hostname, port)).await?;
 
         let std_tcp_stream = {
             let fd = tcp_stream.as_fd();
@@ -128,7 +126,7 @@ pub(crate) async fn connect_inner(
 
         let connector = connector.build();
 
-        let tcp_stream = TcpStream::connect(addr).await?;
+        let tcp_stream = TcpStream::connect((hostname, port)).await?;
 
         let std_tcp_stream = {
             let fd = tcp_stream.as_fd();
@@ -147,7 +145,7 @@ pub(crate) async fn connect_inner(
     } else {
         debug_assert_eq!(method, TLS_METHOD_USERSPACE);
 
-        let tcp_stream = TcpStream::connect(addr).await?;
+        let tcp_stream = TcpStream::connect((hostname, port)).await?;
 
         let connector = connector.build().configure()?;
 

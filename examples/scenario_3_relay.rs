@@ -4,7 +4,10 @@
 use azure_mqtt::client::{
     Client, ClientOptions, ConnectHandle, ConnectionTransportConfig, Receiver, new_client,
 };
-use azure_mqtt::packet::{ConnectProperties, DeliveryQoS, QoS, SubscribeProperties};
+use azure_mqtt::packet::{
+    ConnectOptions, ConnectProperties, DeliveryQoS, KeepAlive, QoS, RetainHandling,
+    SubscribeProperties,
+};
 use azure_mqtt::topic::TopicFilter;
 
 const DOWNSTREAM_CLIENT_ID: &str = "downstream_client";
@@ -18,14 +21,14 @@ const DOWNSTREAM_SUB_FILTER: &str = "downstream/#";
 async fn main() {
     // Downstream client
     let options = ClientOptions {
-        client_id: DOWNSTREAM_CLIENT_ID.to_string(),
+        client_id: Some(DOWNSTREAM_CLIENT_ID.to_string()),
         queue_size: 10,
     };
     let (ds_client, ds_connect_handle, ds_receiver) = new_client(options);
 
     // Upstream client
     let options = ClientOptions {
-        client_id: UPSTREAM_CLIENT_ID.to_string(),
+        client_id: Some(UPSTREAM_CLIENT_ID.to_string()),
         queue_size: 10,
     };
     let (us_client, us_connect_handle, _) = new_client(options);
@@ -51,6 +54,9 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                     hostname: HOSTNAME.to_string(),
                     port: PORT,
                 },
+                false,
+                KeepAlive::Infinite,
+                ConnectOptions::default(),
                 ConnectProperties::default(),
             )
             .await;
@@ -67,6 +73,9 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
         .subscribe(
             TopicFilter::new(DOWNSTREAM_SUB_FILTER).unwrap(),
             QoS::AtLeastOnce,
+            false,
+            false,
+            RetainHandling::DoNotSend,
             SubscribeProperties::default(),
         )
         .await
@@ -82,7 +91,12 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
         match publish.qos {
             DeliveryQoS::AtMostOnce => {
                 let ct = us_client
-                    .publish_qos0(publish.topic_name, publish.payload, publish.properties)
+                    .publish_qos0(
+                        publish.topic_name,
+                        publish.payload,
+                        false,
+                        publish.properties,
+                    )
                     .await
                     .unwrap();
                 match ct.await {
@@ -98,7 +112,12 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
             }
             DeliveryQoS::AtLeastOnce(_) => {
                 let ct = us_client
-                    .publish_qos1(publish.topic_name, publish.payload, publish.properties)
+                    .publish_qos1(
+                        publish.topic_name,
+                        publish.payload,
+                        false,
+                        publish.properties,
+                    )
                     .await
                     .unwrap();
                 match ct.await {
@@ -114,7 +133,12 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
             }
             DeliveryQoS::ExactlyOnce(_) => {
                 let ct = us_client
-                    .publish_qos2(publish.topic_name, publish.payload, publish.properties)
+                    .publish_qos2(
+                        publish.topic_name,
+                        publish.payload,
+                        false,
+                        publish.properties,
+                    )
                     .await
                     .unwrap();
                 match ct.await {

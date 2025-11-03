@@ -5,8 +5,8 @@ use azure_mqtt::client::{
     AckHandle, Client, ClientOptions, Connection, ConnectionTransportConfig, Receiver, new_client,
 };
 use azure_mqtt::packet::{
-    ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
-    QoS, SubscribeProperties,
+    ConnectOptions, ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties,
+    PubRecProperties, PublishProperties, QoS, RetainHandling, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -18,7 +18,7 @@ const PORT: u16 = 1883;
 async fn main() {
     // This would be a builder pattern in a real implementation.
     let options = ClientOptions {
-        client_id: CLIENT_ID.to_string(),
+        client_id: Some(CLIENT_ID.to_string()),
         queue_size: 10,
     };
     let (client, connect_handle, receiver) = new_client(options);
@@ -30,6 +30,9 @@ async fn main() {
                 hostname: HOSTNAME.to_string(),
                 port: PORT,
             },
+            false,
+            KeepAlive::Infinite,
+            ConnectOptions::default(),
             ConnectProperties::default(),
         )
         .await;
@@ -55,6 +58,9 @@ async fn program(client: Client) {
         .subscribe(
             TopicFilter::new("test/topic").unwrap(),
             QoS::AtLeastOnce,
+            false,
+            false,
+            RetainHandling::DoNotSend,
             subscribe_properties,
         )
         .await
@@ -71,6 +77,7 @@ async fn program(client: Client) {
             .publish_qos1(
                 TopicName::new("test/topic").unwrap(),
                 "Hello, MQTT!".into(),
+                false,
                 publish_properties,
             )
             .await

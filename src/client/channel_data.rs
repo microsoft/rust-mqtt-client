@@ -14,8 +14,8 @@ use crate::client::token::{
 use crate::error::ClientError;
 use crate::mqtt_proto::{
     Auth, AuthenticateReasonCode, Authentication, BinaryData, ByteStr, Disconnect, Filter, PubAck,
-    PubComp, PubRec, PubRel, Publish, PublishOtherProperties, QoS, SubscribeOtherProperties, Topic,
-    UnsubscribeOtherProperties, UserProperties,
+    PubComp, PubRec, PubRel, Publish, PublishOtherProperties, SubscribeOptions,
+    SubscribeOtherProperties, Topic, UnsubscribeOtherProperties, UserProperties,
 };
 
 // TODO: I don't love the "Request" naming, because it implies a "Response" structure which doens't exist.
@@ -36,18 +36,21 @@ where
         PublishQoS0CompletionNotifier,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
     ),
     PublishQoS1(
         PublishQoS1CompletionNotifier<S>,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
     ),
     PublishQoS2(
         PublishQoS2CompletionNotifier<S>,
         Topic<ByteStr<S>>,
         S,
+        bool,
         PublishOtherProperties<S>,
     ),
 }
@@ -62,7 +65,7 @@ where
     Subscribe(
         SubscribeCompletionNotifier<S>,
         Filter<ByteStr<S>>,
-        QoS,
+        SubscribeOptions,
         SubscribeOtherProperties<S>,
     ),
     Unsubscribe(
