@@ -509,9 +509,14 @@ where
         let ack_handle = match publish.packet_identifier_dup_qos {
             PacketIdentifierDupQoS::AtMostOnce => AckHandle::QoS0,
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
-                self.in_application
+                let r = self
+                    .in_application
                     .publishes
                     .insert(packet_identifier, PendingAcknowledgement::NotReady);
+                assert!(
+                    r.is_none(),
+                    "TODO: Handle case where message is redelivered"
+                );
                 AckHandle::QoS1(PubAckToken::new(
                     packet_identifier,
                     self.connection_epoch,
