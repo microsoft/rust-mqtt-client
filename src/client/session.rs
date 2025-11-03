@@ -514,7 +514,7 @@ where
                     .publishes
                     .insert(packet_identifier, PendingAcknowledgement::NotReady);
                 assert!(
-                    r.is_none(),
+                    r.is_some(),
                     "TODO: Handle case where message is redelivered"
                 );
                 AckHandle::QoS1(PubAckToken::new(
