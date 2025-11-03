@@ -21,14 +21,14 @@ const DOWNSTREAM_SUB_FILTER: &str = "downstream/#";
 async fn main() {
     // Downstream client
     let options = ClientOptions {
-        client_id: DOWNSTREAM_CLIENT_ID.to_string(),
+        client_id: Some(DOWNSTREAM_CLIENT_ID.to_string()),
         queue_size: 10,
     };
     let (ds_client, ds_connect_handle, ds_receiver) = new_client(options);
 
     // Upstream client
     let options = ClientOptions {
-        client_id: UPSTREAM_CLIENT_ID.to_string(),
+        client_id: Some(UPSTREAM_CLIENT_ID.to_string()),
         queue_size: 10,
     };
     let (us_client, us_connect_handle, _) = new_client(options);

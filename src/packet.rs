@@ -140,20 +140,30 @@ where
     }
 }
 
+/// Represents a Will Message that will be stored on the server and published after the MQTT
+/// session ends, or after the delay interval elapses after a disconnect
 pub struct Will {
-    //delay: ,  // TODO: why is this not in mqtt_proto?
+    /// Number of seconds after a disconnect before the Will message is published
+    pub delay_interval: u32,
+    /// Topic name to publish the Will message to
     pub topic_name: TopicName,
+    /// Quality of Service for the Will message
     pub qos: QoS,
+    /// Retain flag for the Will message
     pub retain: bool,
+    /// Payload for the Will message
     pub payload: Bytes,
+    /// Properties for the Will message
     pub properties: PublishProperties,
 }
 
 #[derive(Default)]
 pub struct ConnectOptions {
-    pub client_id: Option<String>,
+    /// Will message for the connection
     pub will: Option<Will>,
+    /// Username for authentication of the connection
     pub username: Option<String>,
+    /// Password for authentication of the connection
     pub password: Option<String>,
 }
 

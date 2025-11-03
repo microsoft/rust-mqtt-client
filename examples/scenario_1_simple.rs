@@ -18,7 +18,7 @@ const PORT: u16 = 1883;
 async fn main() {
     // This would be a builder pattern in a real implementation.
     let options = ClientOptions {
-        client_id: CLIENT_ID.to_string(),
+        client_id: Some(CLIENT_ID.to_string()),
         queue_size: 10,
     };
     let (client, connect_handle, receiver) = new_client(options);

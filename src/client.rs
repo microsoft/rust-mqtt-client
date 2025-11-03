@@ -98,13 +98,12 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
 
 /// Options for configuring the MQTT client
 pub struct ClientOptions {
-    /// MQTT Client Identifier
-    pub client_id: String,
+    /// MQTT Client Identifier. If None, the MQTT server will assign one.
+    pub client_id: Option<String>,
     /// Maximum size of the outgoing message queue
     pub queue_size: usize,
     // Any other options can be added here, but there really ought not be many.
     // TODO: Use a builder pattern?
-    // TODO: How to represent authentication options?
 }
 
 /// Parameters for establishing a new connection.
@@ -533,10 +532,10 @@ impl ConnectHandle {
         // Transport has been established. Send CONNECT and wait for CONNACK.
         // TODO: Get values from options
         let connect = Packet::Connect(Connect {
-            username: None, // TODO
-            password: None, // TODO
+            username: None, // TODO from options
+            password: None, // TODO from options
             will: None,
-            client_id: None,
+            client_id: None, // TODO from client-wide config
             clean_start,
             keep_alive,
             other_properties: properties.into(),
