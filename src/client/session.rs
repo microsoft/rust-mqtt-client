@@ -307,6 +307,7 @@ where
         Some(packet)
     }
 
+    /// Returns the next outgoing MQTT packet request to be sent over the network
     async fn next_outgoing_request(&mut self) -> OutgoingPacketRequest<O::Shared> {
         // NOTE: A loop is used here because not all outgoing requests result in a packet being sent
         // e.g. acknowledgement requests need to be ordered
