@@ -513,9 +513,12 @@ where
                     .in_application
                     .publishes
                     .insert(packet_identifier, PendingAcknowledgement::NotReady);
-                // TODO: How to handle the following case in the assert? What should the error
+                // TODO: How to handle if the pkid already exists? What should the error
                 // story / experience be precisely?
-                assert!(r.is_some(), "TODO: Handle this case");
+                assert!(
+                    r.is_none(),
+                    "TODO: Handle the case where pkid already exists"
+                );
                 AckHandle::QoS1(PubAckToken::new(
                     packet_identifier,
                     self.connection_epoch,
