@@ -21,7 +21,7 @@ use openssl::{
 };
 
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
-use crate::client::token::{CompletionToken, MappedCompletionToken, completion_pair};
+use crate::client::token::{CompletionToken, completion_pair};
 use crate::client::{
     channel_data::{
         DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest, SubscriptionRequest,
@@ -48,14 +48,59 @@ use crate::packet::{
 };
 use crate::topic::{TopicFilter, TopicName};
 
-mod channel_data;
-mod session;
-pub mod token;
-
 // TODO: What should this module and factory function be called?
 // The three components are the client collectively - so what should the outbound struct (currently called the Client) be?
 // Should it be MqttSender or something? Or are we fine with the duplicate semantic?
 // Alternatively, maybe we break up connect/disconnect/auth into a separate fourth component?
+
+macro_rules! make_completion_token_ty {
+    ($vis:vis struct $token_ty:ident $( < $($ty_param_name:ident : $ty_param_bound:path ),* > )? (CompletionToken< $element_ty:ty >)) => {
+        #[derive(Debug)]
+        $vis struct $token_ty $(< $($ty_param_name : $ty_param_bound),* >)? (pub(crate) CompletionToken<$element_ty>);
+
+        impl $(< $($ty_param_name : $ty_param_bound),* >)? std::future::Future for $token_ty $(< $($ty_param_name ),* >)? {
+            type Output = Result<$element_ty, $crate::client::token::CompletionError>;
+
+            fn poll(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Self::Output> {
+                std::pin::Pin::new(&mut self.0).poll(cx)
+            }
+        }
+    };
+
+    ($vis:vis struct $token_ty:ident (CompletionToken< $original_element_ty:ty > -> $element_ty:ty $map_fn:block )) => {
+        #[derive(Debug)]
+        $vis struct $token_ty(pub(crate) CompletionToken<$original_element_ty>);
+
+        impl std::future::Future for $token_ty {
+            type Output = Result<$element_ty, $crate::client::token::CompletionError>;
+
+            fn poll(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Self::Output> {
+                match std::pin::Pin::new(&mut self.0).poll(cx) {
+                    std::task::Poll::Ready(Ok(value)) => {
+                        std::task::Poll::Ready(Ok(($map_fn)(value)))
+                    }
+                    std::task::Poll::Ready(Err(_)) => {
+                        std::task::Poll::Ready(Err($crate::client::token::CompletionError::Detatched))
+                    }
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                }
+            }
+        }
+    };
+}
+
+mod channel_data;
+
+mod session;
+
+pub mod token;
+use token::{PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecRejectCompletionToken};
 
 /// Creates the three components needed to run the MQTT client
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
@@ -219,7 +264,7 @@ impl Client {
         payload: Bytes,
         retain: bool,
         properties: PublishProperties,
-    ) -> Result<CompletionToken<()>, ClientError> {
+    ) -> Result<PublishQoS0CompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS0(
@@ -231,7 +276,7 @@ impl Client {
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        Ok(token)
+        Ok(PublishQoS0CompletionToken(token))
     }
 
     /// Sends a PUBLISH packet to the broker at QoS 1
@@ -243,13 +288,7 @@ impl Client {
         payload: Bytes,
         retain: bool,
         properties: PublishProperties,
-    ) -> Result<
-        MappedCompletionToken<
-            crate::mqtt_proto::PubAck<SharedImpl>,
-            impl FnMut(crate::mqtt_proto::PubAck<SharedImpl>) -> PubAck,
-        >,
-        ClientError,
-    > {
+    ) -> Result<PublishQoS1CompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS1(
@@ -261,7 +300,7 @@ impl Client {
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        Ok(token.map(Into::into))
+        Ok(PublishQoS1CompletionToken(token))
     }
 
     /// Sends a PUBLISH packet to the broker at QoS 2
@@ -274,21 +313,7 @@ impl Client {
         payload: Bytes,
         retain: bool,
         properties: PublishProperties,
-    ) -> Result<
-        MappedCompletionToken<
-            (
-                crate::mqtt_proto::PubRec<SharedImpl>,
-                Option<token::PubRelToken<SharedImpl>>,
-            ),
-            impl FnMut(
-                (
-                    crate::mqtt_proto::PubRec<SharedImpl>,
-                    Option<token::PubRelToken<SharedImpl>>,
-                ),
-            ) -> (PubRec, Option<PubRelToken>),
-        >,
-        ClientError,
-    > {
+    ) -> Result<PublishQoS2CompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
         self.pub_tx
             .send(PublishRequest::PublishQoS2(
@@ -300,8 +325,7 @@ impl Client {
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        Ok(token
-            .map(|(pubrec, token): (_, Option<_>)| (PubRec::from(pubrec), token.map(PubRelToken))))
+        Ok(PublishQoS2CompletionToken(token))
     }
 
     /// Send a SUBSCRIBE packet to the broker.
@@ -315,13 +339,7 @@ impl Client {
         retain_as_published: bool,
         retain_handling: RetainHandling,
         properties: SubscribeProperties,
-    ) -> Result<
-        MappedCompletionToken<
-            crate::mqtt_proto::SubAck<SharedImpl>,
-            impl FnMut(crate::mqtt_proto::SubAck<SharedImpl>) -> SubAck,
-        >,
-        ClientError,
-    > {
+    ) -> Result<SubscribeCompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
 
         let options = mqtt_proto::SubscribeOptions {
@@ -342,7 +360,7 @@ impl Client {
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        Ok(token.map(Into::into))
+        Ok(SubscribeCompletionToken(token))
     }
 
     /// Send an UNSUBSCRIBE packet to the broker.
@@ -352,13 +370,7 @@ impl Client {
         &self,
         topic_filter: TopicFilter,
         properties: UnsubscribeProperties,
-    ) -> Result<
-        MappedCompletionToken<
-            crate::mqtt_proto::UnsubAck<SharedImpl>,
-            impl FnMut(crate::mqtt_proto::UnsubAck<SharedImpl>) -> UnsubAck,
-        >,
-        ClientError,
-    > {
+    ) -> Result<UnsubscribeCompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
         self.sub_tx
             .send(SubscriptionRequest::Unsubscribe(
@@ -368,9 +380,29 @@ impl Client {
             ))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        Ok(token.map(Into::into))
+        Ok(UnsubscribeCompletionToken(token))
     }
 }
+
+make_completion_token_ty!(pub struct PublishQoS0CompletionToken(CompletionToken<()>));
+
+make_completion_token_ty!(pub struct PublishQoS1CompletionToken(CompletionToken<crate::mqtt_proto::PubAck<SharedImpl>> -> PubAck { Into::into }));
+
+make_completion_token_ty!(pub struct PublishQoS2CompletionToken(
+    CompletionToken<(
+        crate::mqtt_proto::PubRec<SharedImpl>,
+        Option<token::PubRelToken<SharedImpl>>,
+    )> -> (
+        PubRec,
+        Option<PubRelToken>,
+    ) {
+        |(pubrec, token): (_, Option<_>)| (PubRec::from(pubrec), token.map(PubRelToken))
+    }
+));
+
+make_completion_token_ty!(pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<SharedImpl>> -> SubAck { Into::into }));
+
+make_completion_token_ty!(pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<SharedImpl>> -> UnsubAck { Into::into }));
 
 /// Receives incoming Application Messages as `Publish`es.
 pub struct Receiver {
@@ -808,13 +840,7 @@ impl ReauthHandle {
         &self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> Result<
-        MappedCompletionToken<
-            channel_data::ReauthResponse<SharedImpl>,
-            impl FnMut(channel_data::ReauthResponse<SharedImpl>) -> ReauthResponse,
-        >,
-        ClientError,
-    > {
+    ) -> Result<ReauthCompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
         let auth = Auth {
             reason: AuthReason::Reauthenticate,
@@ -828,9 +854,11 @@ impl ReauthHandle {
             .send(ReauthRequest(notifier, auth.into()))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        Ok(token.map(Into::into))
+        Ok(ReauthCompletionToken(token))
     }
 }
+
+make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<channel_data::ReauthResponse<SharedImpl>> -> ReauthResponse { Into::into }));
 
 // ConnectEnahncedAuthResult? implement unwrap?
 pub enum AuthResponse {
@@ -866,13 +894,7 @@ impl ReauthToken {
         self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> Result<
-        MappedCompletionToken<
-            channel_data::ReauthResponse<SharedImpl>,
-            impl FnMut(channel_data::ReauthResponse<SharedImpl>) -> ReauthResponse,
-        >,
-        ClientError,
-    > {
+    ) -> Result<ReauthCompletionToken, ClientError> {
         let token = self
             .0
             .continue_reauth(
@@ -881,7 +903,7 @@ impl ReauthToken {
                 crate::packet::map_user_properties_to_bytestr(properties.user_properties),
             )
             .await?;
-        Ok(token.map(Into::into))
+        Ok(ReauthCompletionToken(token.0))
     }
 }
 
@@ -923,7 +945,7 @@ impl PubAckToken {
     pub fn accept(
         self,
         properties: PubAckProperties,
-    ) -> impl Future<Output = Result<CompletionToken<()>, ClientError>> {
+    ) -> impl Future<Output = Result<PubAckCompletionToken, ClientError>> {
         self.0.accept(properties.into())
     }
 
@@ -937,7 +959,7 @@ impl PubAckToken {
         self,
         reason: PubRejectReason,
         properties: PubAckProperties,
-    ) -> impl Future<Output = Result<CompletionToken<()>, ClientError>> {
+    ) -> impl Future<Output = Result<PubAckCompletionToken, ClientError>> {
         self.0.reject(reason.into(), properties.into())
     }
 }
@@ -957,24 +979,11 @@ impl PubRecToken {
     pub async fn accept(
         self,
         properties: PubRecProperties,
-    ) -> Result<
-        MappedCompletionToken<
-            (
-                crate::mqtt_proto::PubRel<SharedImpl>,
-                token::PubCompToken<SharedImpl>,
-            ),
-            impl FnMut(
-                (
-                    crate::mqtt_proto::PubRel<SharedImpl>,
-                    token::PubCompToken<SharedImpl>,
-                ),
-            ) -> (PubRel, PubCompToken),
-        >,
-        ClientError,
-    > {
-        self.0.accept(properties.into()).await.map(|token| {
-            token.map(|(pubrel, pubcomp_token)| (PubRel::from(pubrel), PubCompToken(pubcomp_token)))
-        })
+    ) -> Result<PubRecAcceptCompletionToken, ClientError> {
+        self.0
+            .accept(properties.into())
+            .await
+            .map(|token| PubRecAcceptCompletionToken(token.0))
     }
 
     /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
@@ -989,10 +998,22 @@ impl PubRecToken {
         self,
         reason: PubRejectReason,
         properties: PubRecProperties,
-    ) -> impl Future<Output = Result<CompletionToken<()>, ClientError>> {
+    ) -> impl Future<Output = Result<PubRecRejectCompletionToken, ClientError>> {
         self.0.reject(reason.into(), properties.into())
     }
 }
+
+make_completion_token_ty!(pub struct PubRecAcceptCompletionToken(
+    CompletionToken<(
+        crate::mqtt_proto::PubRel<SharedImpl>,
+        token::PubCompToken<SharedImpl>,
+    )> -> (
+        PubRel,
+        PubCompToken,
+    ) {
+        |(pubrel, pubcomp_token)| (PubRel::from(pubrel), PubCompToken(pubcomp_token))
+    }
+));
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
 #[derive(Debug)]
@@ -1010,19 +1031,15 @@ impl PubRelToken {
     pub async fn confirm(
         self,
         properties: PubRelProperties,
-    ) -> Result<
-        MappedCompletionToken<
-            crate::mqtt_proto::PubComp<SharedImpl>,
-            impl FnMut(crate::mqtt_proto::PubComp<SharedImpl>) -> PubComp,
-        >,
-        ClientError,
-    > {
+    ) -> Result<PubRelCompletionToken, ClientError> {
         self.0
             .confirm(properties.into())
             .await
-            .map(|token| token.map(Into::into))
+            .map(|token| PubRelCompletionToken(token.0))
     }
 }
+
+make_completion_token_ty!(pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<SharedImpl>> -> PubComp { Into::into }));
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
 #[derive(Debug)]
@@ -1040,7 +1057,7 @@ impl PubCompToken {
     pub fn confirm(
         self,
         properties: PubCompProperties,
-    ) -> impl Future<Output = Result<CompletionToken<()>, ClientError>> {
+    ) -> impl Future<Output = Result<PubCompConfirmCompletionToken, ClientError>> {
         self.0.confirm(properties.into())
     }
 }

@@ -60,7 +60,7 @@ where
     pub async fn accept(
         self,
         properties: PubAckOtherProperties<S>,
-    ) -> Result<CompletionToken<()>, ClientError> {
+    ) -> Result<PubAckCompletionToken, ClientError> {
         self.send(properties, PubAckReasonCode::Success).await
     }
 
@@ -74,7 +74,7 @@ where
         self,
         reason: PubAckReasonCode,
         properties: PubAckOtherProperties<S>,
-    ) -> Result<CompletionToken<()>, ClientError> {
+    ) -> Result<PubAckCompletionToken, ClientError> {
         self.send(properties, reason).await
     }
 
@@ -83,7 +83,7 @@ where
         mut self,
         properties: PubAckOtherProperties<S>,
         reason: PubAckReasonCode,
-    ) -> Result<CompletionToken<()>, ClientError> {
+    ) -> Result<PubAckCompletionToken, ClientError> {
         self.triggered = true;
         PubAckToken::inner_send(&self.tx, self.pkid, properties, reason, self.epoch).await
     }
@@ -96,7 +96,7 @@ where
         other_properties: PubAckOtherProperties<S>,
         reason_code: PubAckReasonCode,
         epoch: u64,
-    ) -> Result<CompletionToken<()>, ClientError> {
+    ) -> Result<PubAckCompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
         let puback = PubAck {
             packet_identifier,
@@ -106,7 +106,7 @@ where
         tx.send(AcknowledgementRequest::PubAck(notifier, puback, epoch))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        Ok(token)
+        Ok(PubAckCompletionToken(token))
     }
 }
 
@@ -137,6 +137,8 @@ where
         }
     }
 }
+
+make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>));
 
 /// Token that allows the user to acknowledge a received PUBLISH on QoS 2 with a PUBREC.
 #[derive(Debug)]
@@ -172,7 +174,7 @@ where
     pub async fn accept(
         self,
         properties: PubRecOtherProperties<S>,
-    ) -> Result<CompletionToken<(PubRel<S>, PubCompToken<S>)>, ClientError> {
+    ) -> Result<PubRecAcceptCompletionToken<S>, ClientError> {
         unimplemented!()
     }
 
@@ -188,7 +190,7 @@ where
         self,
         reason: PubRecReasonCode,
         properties: PubRecOtherProperties<S>,
-    ) -> Result<CompletionToken<()>, ClientError> {
+    ) -> Result<PubRecRejectCompletionToken, ClientError> {
         unimplemented!()
     }
 }
@@ -202,6 +204,10 @@ where
         unimplemented!()
     }
 }
+
+make_completion_token_ty!(pub struct PubRecAcceptCompletionToken<S: Shared>(CompletionToken<(PubRel<S>, PubCompToken<S>)>));
+
+make_completion_token_ty!(pub struct PubRecRejectCompletionToken(CompletionToken<()>));
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
 #[derive(Debug)]
@@ -237,7 +243,7 @@ where
     pub async fn confirm(
         self,
         properties: PubRelOtherProperties<S>,
-    ) -> Result<CompletionToken<PubComp<S>>, ClientError> {
+    ) -> Result<PubRelConfirmCompletionToken<S>, ClientError> {
         unimplemented!()
     }
 }
@@ -251,6 +257,7 @@ where
         unimplemented!()
     }
 }
+make_completion_token_ty!(pub struct PubRelConfirmCompletionToken<S: Shared>(CompletionToken<PubComp<S>>));
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
 #[derive(Debug)]
@@ -286,7 +293,7 @@ where
     pub async fn confirm(
         self,
         properties: PubCompOtherProperties<S>,
-    ) -> Result<CompletionToken<()>, ClientError> {
+    ) -> Result<PubCompConfirmCompletionToken, ClientError> {
         unimplemented!()
     }
 }
@@ -300,6 +307,8 @@ where
         unimplemented!()
     }
 }
+
+make_completion_token_ty!(pub struct PubCompConfirmCompletionToken(CompletionToken<()>));
 
 // TODO: where should this live?
 pub enum AckHandle<S>
