@@ -5,8 +5,8 @@ use azure_mqtt::client::{
     AckHandle, Client, ClientOptions, Connection, ConnectionTransportConfig, Receiver, new_client,
 };
 use azure_mqtt::packet::{
-    ConnectOptions, ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties,
-    PublishProperties, QoS, RetainHandling, SubscribeProperties, KeepAlive,
+    ConnectOptions, ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties,
+    PubRecProperties, PublishProperties, QoS, RetainHandling, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
