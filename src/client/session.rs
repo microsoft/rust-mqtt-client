@@ -5,6 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
 
+use derive_where::derive_where;
 use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
 use indexmap::IndexMap;
@@ -51,6 +52,8 @@ where
     outgoing_queue: VecDeque<OutgoingOperation<O::Shared>>,
     /// Tracker of all inflight MQTT packets awaiting a response
     inflight: InflightTracker<O::Shared>,
+    /// Tracker of MQTT packets sent to the application, awaiting a response
+    in_application: InApplicationTracker<O::Shared>,
     /// Whether the session is currently connected, and if so, the CONNACK
     connected: ConnectionState<O::Shared>,
     /// Identifier for the current connection epoch
@@ -91,6 +94,7 @@ where
             pkid_pool: PkidPool::new(max_pkid),
             outgoing_queue: Default::default(),
             inflight: InflightTracker::default(),
+            in_application: InApplicationTracker::default(),
             connected: ConnectionState::Disconnected,
             connection_epoch: 0, // move this to the connection state?
             transient: false,    // move this to the connection state?
@@ -109,52 +113,73 @@ where
         // it will only ever be called after `incoming_connack(ConnAck)` has been called, right?
         assert!(self.is_connected());
 
-        // TODO: Replayed PUBLISHes should be subject to server's receive-maximum.
+        // Check for replayed packets first
         let packet = if let Some(packet) = self.inflight.packets_to_replay.pop_front() {
-            packet
-        } else {
+            // TODO: Replayed PUBLISHes should be subject to server's receive-maximum.
+
+            match packet {
+                Packet::Publish(mut publish) => {
+                    // For PUBLISH, we need to update the DUP flag
+                    match &mut publish.packet_identifier_dup_qos {
+                        PacketIdentifierDupQoS::AtLeastOnce(_, dup)
+                        | PacketIdentifierDupQoS::ExactlyOnce(_, dup) => {
+                            *dup = true;
+                        }
+                        PacketIdentifierDupQoS::AtMostOnce => {
+                            // No-op
+                        }
+                    }
+                    Packet::Publish(publish)
+                }
+                other => other,
+            }
+        }
+        // Otherwise get the next outgoing request
+        else {
             // Get the next outgoing packet request, and turn it into a packet
             match self.next_outgoing_request().await {
                 OutgoingPacketRequest::DisconnectRequest(disconnect_req) => {
                     Packet::Disconnect(disconnect_req.0)
                 }
 
-                OutgoingPacketRequest::AcknowledgementRequest(ack_req) => match ack_req {
-                    // TODO: Reject PUBACK if epoch does not match current connection epoch
-                    // TODO: It would be preferable if the notifier was not triggered on
-                    // PUBACK / PUBCOMP until they were actually sent over the network.
-                    AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
-                        // Do not care about result - if the token was dropped, the user is no longer waiting for it.
-                        let _ = notifier.complete(());
-                        Packet::PubAck(puback)
-                    }
+                OutgoingPacketRequest::AcknowledgementRequest(ack_req) => {
+                    match ack_req {
+                        // TODO: Reject PUBACK if epoch does not match current connection epoch. Unless this is superfluous. Verify.
+                        // TODO: It would be preferable if the notifier was not triggered on
+                        // PUBACK / PUBCOMP until they were actually sent over the network.
+                        AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
+                            // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                            let _ = notifier.complete(());
+                            Packet::PubAck(puback)
+                        }
 
-                    AcknowledgementRequest::PubRecAccept(notifier, pubrec) => {
-                        self.inflight
-                            .pubrec
-                            .insert(pubrec.packet_identifier, (pubrec.clone(), notifier));
-                        Packet::PubRec(pubrec)
-                    }
+                        AcknowledgementRequest::PubRecAccept(notifier, pubrec) => {
+                            self.inflight
+                                .pubrec
+                                .insert(pubrec.packet_identifier, (pubrec.clone(), notifier));
+                            Packet::PubRec(pubrec)
+                        }
 
-                    AcknowledgementRequest::PubRecReject(notifier, pubrec) => {
-                        // Do not care about result - if the token was dropped, the user is no longer waiting for it.
-                        let _ = notifier.complete(());
-                        Packet::PubRec(pubrec)
-                    }
+                        AcknowledgementRequest::PubRecReject(notifier, pubrec) => {
+                            // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                            let _ = notifier.complete(());
+                            Packet::PubRec(pubrec)
+                        }
 
-                    AcknowledgementRequest::PubRel(notifier, pubrel) => {
-                        self.inflight
-                            .pubrel
-                            .insert(pubrel.packet_identifier, (pubrel.clone(), notifier));
-                        Packet::PubRel(pubrel)
-                    }
+                        AcknowledgementRequest::PubRel(notifier, pubrel) => {
+                            self.inflight
+                                .pubrel
+                                .insert(pubrel.packet_identifier, (pubrel.clone(), notifier));
+                            Packet::PubRel(pubrel)
+                        }
 
-                    AcknowledgementRequest::PubComp(notifier, pubcomp) => {
-                        // Do not care about result - if the token was dropped, the user is no longer waiting for it.
-                        let _ = notifier.complete(());
-                        Packet::PubComp(pubcomp)
+                        AcknowledgementRequest::PubComp(notifier, pubcomp) => {
+                            // Do not care about result - if the token was dropped, the user is no longer waiting for it.
+                            let _ = notifier.complete(());
+                            Packet::PubComp(pubcomp)
+                        }
                     }
-                },
+                }
 
                 OutgoingPacketRequest::SubscriptionRequest(sub_req, packet_identifier) => {
                     match sub_req {
@@ -225,7 +250,7 @@ where
                                 topic_name,
                                 packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
                                     packet_identifier,
-                                    false, // TODO: Get from pub_req
+                                    false, // NOTE: Always dup=false on initial delivery
                                 ),
                                 retain,
                                 payload,
@@ -249,7 +274,7 @@ where
                                 topic_name,
                                 packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
                                     packet_identifier,
-                                    false, // TODO: Get from pub_req
+                                    false, // NOTE: Always dup=false on initial delivery
                                 ),
                                 retain,
                                 payload,
@@ -282,19 +307,59 @@ where
         Some(packet)
     }
 
+    /// Returns the next outgoing MQTT packet request to be sent over the network
     async fn next_outgoing_request(&mut self) -> OutgoingPacketRequest<O::Shared> {
-        // TODO: put this poll in a loop that returns when it receives a packet request that
-        // should be turned into a packet and sent over the network (i.e. not an unordered ack)
-        // This (as well as the below validation TODO) may become irrelevant depending on error
-        // handling in `next_outgoing_packet()` - if that needs a loop, this wrapper may be less relevant.
-        poll_for_outgoing_request(
-            &mut self.ch,
-            self.pingreq_timer.as_mut(),
-            &mut self.pkid_pool,
-        )
-        .await
-        // TODO: validation of request based on connection configuration
-        // TODO: do ack ordering insertion here
+        // NOTE: A loop is used here because not all outgoing requests result in a packet being sent
+        // e.g. acknowledgement requests need to be ordered
+        loop {
+            // First check the ordering for a pending acknowledgement that is now ready
+            if let Some((_, PendingAcknowledgement::Ready(ack_req))) =
+                self.in_application.publishes.first()
+            {
+                if let (_, PendingAcknowledgement::Ready(ack_req)) = self
+                    .in_application
+                    .publishes
+                    .shift_remove_index(0)
+                    .expect("Already checked")
+                {
+                    break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
+                }
+            }
+            // Otherwise, poll for next outgoing request
+            else {
+                let request = poll_for_outgoing_request(
+                    &mut self.ch,
+                    self.pingreq_timer.as_mut(),
+                    &mut self.pkid_pool,
+                )
+                .await;
+
+                // If it is acknowledgement, do not return it - instead, mark it as ready in the in_application tracker.
+                // This ensures ordering of acknowledgements.
+                // Do not return from the loop, as we need to continue it to determine the true next request.
+                if let OutgoingPacketRequest::AcknowledgementRequest(ack_req) = request {
+                    let pkid = match &ack_req {
+                        AcknowledgementRequest::PubAck(_, puback, _) => puback.packet_identifier,
+                        AcknowledgementRequest::PubRecAccept(_, pubrec)
+                        | AcknowledgementRequest::PubRecReject(_, pubrec) => {
+                            pubrec.packet_identifier
+                        }
+                        AcknowledgementRequest::PubRel(_, pubrel) => pubrel.packet_identifier,
+                        AcknowledgementRequest::PubComp(_, pubcomp) => pubcomp.packet_identifier,
+                    };
+                    let pending = self
+                        .in_application
+                        .publishes
+                        .get_mut(&pkid)
+                        .expect("TODO: error handling");
+                    *pending = PendingAcknowledgement::Ready(ack_req);
+                }
+                // For all other request types, return them as-is
+                else {
+                    break request;
+                }
+            }
+        }
     }
 
     // TODO: semantic fix - incoming_acknowledgement?
@@ -445,6 +510,16 @@ where
         let ack_handle = match publish.packet_identifier_dup_qos {
             PacketIdentifierDupQoS::AtMostOnce => AckHandle::QoS0,
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
+                let r = self
+                    .in_application
+                    .publishes
+                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
+                // TODO: How to handle if the pkid already exists? What should the error
+                // story / experience be precisely?
+                assert!(
+                    r.is_none(),
+                    "TODO: Handle the case where pkid already exists"
+                );
                 AckHandle::QoS1(PubAckToken::new(
                     packet_identifier,
                     self.connection_epoch,
@@ -452,6 +527,9 @@ where
                 ))
             }
             PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
+                self.in_application
+                    .publishes
+                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
                 todo!()
             }
         };
@@ -507,6 +585,8 @@ where
             let _ = notifier.cancel();
             self.pkid_pool.release_pkid(pkid);
         }
+        // Remove and cancel any in-flight AUTH
+        self.inflight.auth.take().map(CompletionNotifier::cancel);
 
         // Build list of packets to replay
         self.inflight.packets_to_replay.clear();
@@ -538,9 +618,6 @@ where
                 .packets_to_replay
                 .push_back(Packet::Publish(publish));
         }
-
-        // Remove and cancel any in-flight AUTH
-        self.inflight.auth.take().map(CompletionNotifier::cancel);
     }
 
     /// Perform state changes when the session is known to be expired on the server:
@@ -771,7 +848,7 @@ where
 }
 
 /// Contains data related to in-flight operations pending a response
-#[derive_where::derive_where(Default)]
+#[derive_where(Default)]
 struct InflightTracker<S>
 where
     S: Shared,
@@ -805,6 +882,22 @@ where
     // --- Other ----
     /// Inflight AUTH operation, if any.
     auth: Option<ReauthCompletionNotifier<S>>,
+}
+
+#[derive_where(Default)]
+struct InApplicationTracker<S>
+where
+    S: Shared,
+{
+    publishes: IndexMap<PacketIdentifier, PendingAcknowledgement<S>>,
+}
+
+enum PendingAcknowledgement<S>
+where
+    S: Shared,
+{
+    NotReady,
+    Ready(AcknowledgementRequest<S>),
 }
 
 struct ReceiverStream<T>(Receiver<T>);
