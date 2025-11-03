@@ -9,7 +9,9 @@ use azure_mqtt::client::{
     AckHandle, Client, ClientOptions, ConnectHandle, ConnectionTransportConfig, Receiver,
     new_client,
 };
-use azure_mqtt::packet::{ConnectProperties, Publish, QoS, SubscribeProperties};
+use azure_mqtt::packet::{
+    ConnectOptions, ConnectProperties, KeepAlive, Publish, QoS, RetainHandling, SubscribeProperties,
+};
 use azure_mqtt::topic::TopicFilter;
 
 const CLIENT_ID: &str = "my_client";
@@ -22,7 +24,7 @@ const UPDATE_FILTER: &str = "watchlist/update";
 async fn main() {
     // This would be a builder pattern in a real implementation.
     let options = ClientOptions {
-        client_id: CLIENT_ID.to_string(),
+        client_id: Some(CLIENT_ID.to_string()),
         queue_size: 10,
     };
     let (client, connect_handle, receiver) = new_client(options);
@@ -83,6 +85,9 @@ async fn mqtt_run(
                     hostname: HOSTNAME.to_string(),
                     port: PORT,
                 },
+                false,
+                KeepAlive::Infinite,
+                ConnectOptions::default(),
                 ConnectProperties::default(),
             )
             .await;
@@ -119,6 +124,9 @@ async fn maintain_document(
         .subscribe(
             TopicFilter::new(GET_FILTER).unwrap(),
             QoS::AtLeastOnce,
+            false,
+            false,
+            RetainHandling::DoNotSend,
             SubscribeProperties::default(),
         )
         .await
@@ -136,6 +144,9 @@ async fn maintain_document(
             .subscribe(
                 TopicFilter::new(UPDATE_FILTER).unwrap(),
                 QoS::AtLeastOnce,
+                false,
+                false,
+                RetainHandling::DoNotSend,
                 SubscribeProperties::default(),
             )
             .await
