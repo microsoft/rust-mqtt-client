@@ -513,10 +513,9 @@ where
                     .in_application
                     .publishes
                     .insert(packet_identifier, PendingAcknowledgement::NotReady);
-                assert!(
-                    r.is_some(),
-                    "TODO: Handle case where message is redelivered"
-                );
+                // TODO: How to handle the following case in the assert? What should the error
+                // story / experience be precisely?
+                assert!(r.is_some(), "TODO: Handle this case");
                 AckHandle::QoS1(PubAckToken::new(
                     packet_identifier,
                     self.connection_epoch,
@@ -582,6 +581,8 @@ where
             let _ = notifier.cancel();
             self.pkid_pool.release_pkid(pkid);
         }
+        // Remove and cancel any in-flight AUTH
+        self.inflight.auth.take().map(CompletionNotifier::cancel);
 
         // Build list of packets to replay
         self.inflight.packets_to_replay.clear();
@@ -613,9 +614,6 @@ where
                 .packets_to_replay
                 .push_back(Packet::Publish(publish));
         }
-
-        // Remove and cancel any in-flight AUTH
-        self.inflight.auth.take().map(CompletionNotifier::cancel);
     }
 
     /// Perform state changes when the session is known to be expired on the server:
