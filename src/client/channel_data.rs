@@ -100,6 +100,7 @@ pub type IncomingPublish<S> = (Publish<S>, AckHandle<S>);
 
 // TODO: Move these to a more appropriate place
 
+#[derive(Debug)]
 pub enum ReauthResponse<S>
 where
     S: Shared,
@@ -111,6 +112,7 @@ where
 }
 
 // TODO: Should this live in token module? Probably, but is the module even a good idea at this point?
+#[derive(Debug)]
 pub struct ReauthToken<S>
 where
     S: Shared,
@@ -128,7 +130,7 @@ where
         authentication_data: Option<BinaryData<S>>,
         reason_string: Option<ByteStr<S>>,
         user_properties: UserProperties<S>,
-    ) -> Result<CompletionToken<ReauthResponse<S>>, ClientError> {
+    ) -> Result<ReauthCompletionToken<S>, ClientError> {
         let (notifier, token) = completion_pair();
         let auth = Auth {
             reason_code: AuthenticateReasonCode::ContinueAuthentication,
@@ -143,6 +145,8 @@ where
             .send(ReauthRequest(notifier, auth))
             .await
             .map_err(|_| ClientError::DetachedClient)?;
-        Ok(token)
+        Ok(ReauthCompletionToken(token))
     }
 }
+
+make_completion_token_ty!(pub struct ReauthCompletionToken<S: Shared>(CompletionToken<ReauthResponse<S>>));
