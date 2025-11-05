@@ -98,6 +98,16 @@ pub struct ReauthRequest<S>(pub(crate) ReauthCompletionNotifier<S>, pub Auth<S>)
 where
     S: Shared;
 
+#[derive(Debug)]
+pub enum ReauthResponse<S>
+where
+    S: Shared,
+{
+    Continue(Auth<S>, ReauthToken<S>),
+    Success(Auth<S>),
+    Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
+}
+
 /// Incoming Publish + Acknowledgement infrastructure
 pub enum IncomingPublishAndToken<S>
 where
@@ -106,17 +116,4 @@ where
     QoS0(Publish<S>),
     QoS1(Publish<S>, PubAckToken<S>),
     QoS2(Publish<S>, PubRecToken<S>),
-}
-
-// TODO: Move these to a more appropriate place
-
-#[derive(Debug)]
-pub enum ReauthResponse<S>
-where
-    S: Shared,
-{
-    // TODO: should this be in channel data and merely re-exported?
-    Continue(Auth<S>, ReauthToken<S>),
-    Success(Auth<S>),
-    Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
 }

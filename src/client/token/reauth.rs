@@ -75,4 +75,14 @@ pub(crate) mod buffered {
             Ok(ReauthCompletionToken(token))
         }
     }
+
+    #[derive(Debug)]
+    pub enum ReauthResponse<S>
+    where
+        S: Shared,
+    {
+        Continue(Auth<S>, ReauthToken<S>),
+        Success(Auth<S>),
+        Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
+    }
 }

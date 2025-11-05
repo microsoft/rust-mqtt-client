@@ -94,10 +94,10 @@ impl From<DeliveryQoS> for mqtt_proto::PacketIdentifierDupQoS {
 }
 
 /// Information about a delivery of a PUBLISH packet with QoS 1 or 2
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct DeliveryInfo {
-    dup: bool,
-    packet_identifier: PacketIdentifier,
+    pub dup: bool,
+    pub packet_identifier: PacketIdentifier,
 }
 
 /// Indicates whether the payload is UTF-8 encoded or not

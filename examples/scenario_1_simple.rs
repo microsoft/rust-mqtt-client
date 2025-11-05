@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 use azure_mqtt::client::{
-    Client, ClientOptions, Connection, ConnectionTransportConfig, ManualAcknowledgement, Receiver,
-    new_client,
+    Client, ClientOptions, ConnectResponse, Connection, ConnectionTransportConfig,
+    ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
     ConnectOptions, ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties,
@@ -25,7 +25,7 @@ async fn main() {
     let (client, connect_handle, receiver) = new_client(options);
 
     // Connect to the MQTT broker and wait for the connection to complete
-    let (connected, _, _) = connect_handle
+    if let ConnectResponse::Success(connected, _, _) = connect_handle
         .connect(
             ConnectionTransportConfig::Tcp {
                 hostname: HOSTNAME.to_string(),
@@ -36,19 +36,23 @@ async fn main() {
             ConnectOptions::default(),
             ConnectProperties::default(),
         )
-        .await;
-    println!("Connected to MQTT broker");
+        .await
+    {
+        println!("Connected to MQTT broker");
 
-    tokio::select! {
-        () = connection_runner(connected) => {
-            // Connection runner finished
+        tokio::select! {
+            () = connection_runner(connected) => {
+                // Connection runner finished
+            }
+            () = receive(receiver) => {
+                // Receiver finished
+            }
+            () = program(client) => {
+                // Program finished
+            }
         }
-        () = receive(receiver) => {
-            // Receiver finished
-        }
-        () = program(client) => {
-            // Program finished
-        }
+    } else {
+        println!("Failed to connect to MQTT broker");
     }
 }
 

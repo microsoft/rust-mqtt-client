@@ -3,9 +3,6 @@
 
 //! Synchronization for portable reporting of remote operations
 
-// TODO: Remove when possible.
-#![allow(dead_code)]
-
 use crate::buffer_pool::SharedImpl;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -85,6 +82,8 @@ make_completion_token_ty!(pub struct PubRecAcceptCompletionToken(
     }
 ));
 
+make_completion_token_ty!(pub struct PubRecRejectCompletionToken(CompletionToken<()>));
+
 make_completion_token_ty!(pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<SharedImpl>> -> crate::packet::PubComp { Into::into }));
 
 make_completion_token_ty!(pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<SharedImpl>> -> crate::packet::SubAck { Into::into }));
@@ -94,8 +93,6 @@ make_completion_token_ty!(pub struct UnsubscribeCompletionToken(CompletionToken<
 make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<crate::client::channel_data::ReauthResponse<SharedImpl>> -> crate::client::ReauthResponse { Into::into }));
 
 make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>));
-
-make_completion_token_ty!(pub struct PubRecRejectCompletionToken(CompletionToken<()>));
 
 make_completion_token_ty!(pub struct PubCompConfirmCompletionToken(CompletionToken<()>));
 
@@ -110,7 +107,6 @@ pub(crate) mod buffered {
 
     use super::CompletionError;
     use crate::buffer_pool::Shared;
-    use crate::client::AuthResponse; // TODO
     use crate::client::channel_data::ReauthResponse;
     use crate::client::token::acknowledgement::buffered::{PubCompToken, PubRelToken};
     use crate::mqtt_proto::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck}; // TODO
@@ -147,7 +143,6 @@ pub(crate) mod buffered {
     pub(crate) type PubRecRejectCompletionNotifier = CompletionNotifier<()>;
     pub(crate) type PubRelCompletionNotifier<S> = CompletionNotifier<PubComp<S>>;
     pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
-    pub(crate) type AuthCompletionNotifier = CompletionNotifier<AuthResponse>;
     pub(crate) type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResponse<S>>;
 
     #[derive(Debug)]

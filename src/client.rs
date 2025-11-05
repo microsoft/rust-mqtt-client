@@ -358,7 +358,7 @@ impl Receiver {
     ///
     /// Receiving None indicates that the client has been dropped, and no more messages will be received.
     pub async fn recv(&mut self) -> Option<(Publish, ManualAcknowledgement)> {
-        self.rx.recv().await.map(|incoming| incoming.into())
+        self.rx.recv().await.map(Into::into)
     }
 }
 
@@ -378,7 +378,7 @@ impl ConnectHandle {
         options: ConnectOptions,
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
-    ) -> AuthResponse {
+    ) -> ConnectEnhancedAuthResponse {
         // TODO: Even with enhanced auth, we may need skip the intermediate auth step if we get a connack
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
         self.mqtt_connect(&mut writer, clean_start, keep_alive, options, properties)
@@ -399,7 +399,7 @@ impl ConnectHandle {
                         reader,
                         writer,
                     };
-                    AuthResponse::Success(
+                    ConnectEnhancedAuthResponse::Success(
                         connection,
                         connack.into(),
                         ReauthHandle {
@@ -409,11 +409,11 @@ impl ConnectHandle {
                         DisconnectHandle(disconnect_tx),
                     )
                 } else {
-                    AuthResponse::Failure(self, Some(connack.into()))
+                    ConnectEnhancedAuthResponse::Failure(self, Some(connack.into()))
                 }
             }
             Packet::Auth(auth) => {
-                let auth_handle = AuthHandle {
+                let auth_handle = EnhancedAuthHandle {
                     session: self.session,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
@@ -421,7 +421,7 @@ impl ConnectHandle {
                     writer,
                     auth_method: authentication_info.method,
                 };
-                AuthResponse::Continue(auth.into(), auth_handle)
+                ConnectEnhancedAuthResponse::Continue(auth.into(), auth_handle)
             }
             _ => panic!("TODO: error handling"),
         }
@@ -435,7 +435,7 @@ impl ConnectHandle {
         keep_alive: KeepAlive,
         options: ConnectOptions,
         properties: ConnectProperties,
-    ) -> (Connection, ConnAck, DisconnectHandle) {
+    ) -> ConnectResponse {
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
         self.mqtt_connect(&mut writer, clean_start, keep_alive, options, properties)
             .await;
@@ -448,7 +448,7 @@ impl ConnectHandle {
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
 
         self.session.ch.disconnect_rx = Some(disconnect_rx);
-        (
+        ConnectResponse::Success(
             Connection {
                 session: self.session,
                 reader_pool: self.reader_pool,
@@ -535,7 +535,7 @@ impl ConnectHandle {
 }
 
 /// Handle for the intermediate step of an MQTT CONNECT with enhanced authentication.
-pub struct AuthHandle {
+pub struct EnhancedAuthHandle {
     session: Session<OwnedImpl>,
     reader_pool: BufferPoolImpl,
     writer_pool: BufferPoolImpl,
@@ -544,12 +544,12 @@ pub struct AuthHandle {
     auth_method: String,
 }
 
-impl AuthHandle {
+impl EnhancedAuthHandle {
     pub async fn continue_auth(
         mut self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> AuthResponse {
+    ) -> ConnectEnhancedAuthResponse {
         // Send auth
         let auth = Packet::Auth(
             Auth {
@@ -592,7 +592,7 @@ impl AuthHandle {
                         reader: self.reader,
                         writer: self.writer,
                     };
-                    AuthResponse::Success(
+                    ConnectEnhancedAuthResponse::Success(
                         connection,
                         connack.into(),
                         ReauthHandle {
@@ -607,10 +607,10 @@ impl AuthHandle {
                         reader_pool: self.reader_pool,
                         writer_pool: self.writer_pool,
                     };
-                    AuthResponse::Failure(connect_handle, Some(connack.into()))
+                    ConnectEnhancedAuthResponse::Failure(connect_handle, Some(connack.into()))
                 }
             }
-            Packet::Auth(auth) => AuthResponse::Continue(auth.into(), self),
+            Packet::Auth(auth) => ConnectEnhancedAuthResponse::Continue(auth.into(), self),
             _ => panic!("TODO: error handling"),
         }
     }
@@ -796,15 +796,26 @@ impl ReauthHandle {
     }
 }
 
-// ConnectEnahncedAuthResult? implement unwrap?
-pub enum AuthResponse {
-    Continue(Auth, AuthHandle),
+pub enum ConnectEnhancedAuthResponse {
+    Continue(Auth, EnhancedAuthHandle),
     Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
     Failure(ConnectHandle, Option<ConnAck>),
+    Timeout(ConnectHandle),
 }
 
+pub enum ConnectResponse {
+    Success(Connection, ConnAck, DisconnectHandle),
+    Failure(ConnectHandle, Option<ConnAck>),
+    Timeout(ConnectHandle),
+}
+
+// NOTE: There is an asymmetry in definition location for `ReauthResponse` (defined here and its
+// inner buffered variant (currently defined in `channel_data`). This is due to it being used as the channel
+// enum, as well as the non-buffered version being part of the public API. Particularly odd since it is
+// returned by the `ReauthCompletionToken` from the `token` module, a consequence of strongly typed
+// Completion Tokens. Consider refactoring in the future.
+
 pub enum ReauthResponse {
-    // TODO: should this be in channel data and merely re-exported?
     Continue(Auth, ReauthToken),
     Success(Auth),
     Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server

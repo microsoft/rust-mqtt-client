@@ -481,8 +481,6 @@ where
     }
 
     /// Trigger a disconnect and adjust state based on the information in the incoming `Disconnect` packet
-    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
-    #[allow(clippy::unused_self)]
     pub fn server_disconnect(&mut self, disconnect: &Disconnect<O::Shared>) {
         log::error!("client disconnected due to server {disconnect:?}");
 

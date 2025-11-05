@@ -6,8 +6,8 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use azure_mqtt::client::{
-    Client, ClientOptions, ConnectHandle, ConnectionTransportConfig, ManualAcknowledgement,
-    Receiver, new_client,
+    Client, ClientOptions, ConnectHandle, ConnectResponse, ConnectionTransportConfig,
+    ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
     ConnectOptions, ConnectProperties, KeepAlive, Publish, QoS, RetainHandling, SubscribeProperties,
@@ -79,7 +79,7 @@ async fn mqtt_run(
     // Loop so that if we disconnect, we can reconnect.
     loop {
         println!("Attempting to connect to MQTT broker...");
-        let (connected, _, _) = connect_handle
+        connect_handle = match connect_handle
             .connect(
                 ConnectionTransportConfig::Tcp {
                     hostname: HOSTNAME.to_string(),
@@ -90,27 +90,41 @@ async fn mqtt_run(
                 ConnectOptions::default(),
                 ConnectProperties::default(),
             )
-            .await;
-        println!("Connected to MQTT broker");
+            .await
+        {
+            ConnectResponse::Success(connected, _, _) => {
+                println!("Connected to MQTT broker");
+                connect_handle = tokio::select! {
+                    (connect_handle, _) = connected.run_until_disconnect() => {
+                        // Drain the updates channel since we no longer want any of them
+                        // and we will be reconnecting with clean start true.
+                        // This will implicitly ack the messages, but again, we are discarding the session.
+                        while !update_rx.is_empty() {
+                            update_rx.try_recv().unwrap();
+                        }
 
-        tokio::select! {
-            (connect_handle_, _) = connected.run_until_disconnect() => {
-                // Drain the updates channel since we no longer want any of them
-                // and we will be reconnecting with clean start true.
-                // This will implicitly ack the messages, but again, we are discarding the session.
-                while !update_rx.is_empty() {
-                    update_rx.try_recv().unwrap();
-                }
-
-                connect_handle = connect_handle_;
-                println!("Disconnect detected, will reconnect in 5 seconds...");
+                        println!("Disconnect detected, will reconnect in 5 seconds...");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        connect_handle
+                    }
+                    () = maintain_document(client.clone(), &mut get_rx, &mut update_rx) => {
+                        // Maintaining document finished
+                        return;
+                    }
+                };
+                connect_handle
+            }
+            ConnectResponse::Failure(connect_handle, _) => {
+                println!("Failed to connect to MQTT broker, retrying in 5 seconds...");
                 tokio::time::sleep(Duration::from_secs(5)).await;
+                connect_handle
             }
-            () = maintain_document(client.clone(), &mut get_rx, &mut update_rx) => {
-                // Maintaining document finished
-                return;
+            ConnectResponse::Timeout(connect_handle) => {
+                println!("Connection attempt timed out, retrying in 5 seconds...");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                connect_handle
             }
-        }
+        };
     }
 }
 
