@@ -96,8 +96,6 @@ make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>))
 
 make_completion_token_ty!(pub struct PubCompConfirmCompletionToken(CompletionToken<()>));
 
-// TODO: fix the inconsistency in Response type locations for Auth and Reauth
-
 pub(crate) mod buffered {
     use std::future::Future;
     use std::pin::Pin;
@@ -119,7 +117,8 @@ pub(crate) mod buffered {
         (notifier, token)
     }
 
-    // TODO: Aliases for token types for consistency.
+    // NOTE: Currently there are not buffered equivalents for all tokens defined in the main module.
+    // This is because they are not currently used, but that may at some point be desirable.
 
     pub use super::{
         PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecRejectCompletionToken,
