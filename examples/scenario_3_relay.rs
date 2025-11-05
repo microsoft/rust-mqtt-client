@@ -48,7 +48,7 @@ async fn main() {
 
 async fn mqtt_run(mut connect_handle: ConnectHandle) {
     loop {
-        let (connected, _, _) = connect_handle
+        let (connection, _, _) = connect_handle
             .connect(
                 ConnectionTransportConfig::Tcp {
                     hostname: HOSTNAME.to_string(),
@@ -61,7 +61,7 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
             )
             .await;
         println!("Connected to MQTT broker");
-        (connect_handle, _) = connected.run_until_disconnect().await;
+        (connect_handle, _) = connection.run_until_disconnect().await;
         println!("Disconnected from MQTT broker");
         println!("Connection lost, will reconnect in 5 seconds...");
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;

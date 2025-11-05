@@ -13,6 +13,9 @@ use std::{
 mod reader;
 pub use reader::Reader;
 
+#[cfg(feature = "__integration")]
+pub mod test;
+
 pub mod tokio_tcp;
 
 pub mod tokio_tls;
