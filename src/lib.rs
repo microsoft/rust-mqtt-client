@@ -7,6 +7,9 @@
 // TODO: Revisit the exposed API of these modules, and remove the linting suppressions as necessary
 pub(crate) mod buffer_pool;
 pub(crate) mod io;
+#[cfg(not(feature = "__integration"))]
+pub(crate) mod mqtt_proto;
+#[cfg(feature = "__integration")]
 pub mod mqtt_proto;
 mod opensslext;
 
