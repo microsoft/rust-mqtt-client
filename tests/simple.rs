@@ -4,9 +4,9 @@
 use std::pin::pin;
 use std::time::Duration;
 
-use azure_mqtt::client::{ClientOptions, ConnectionTransportConfig, DisconnectedEvent, new_client};
+use azure_mqtt::client::{ClientOptions, ConnectResult, ConnectionTransportConfig, DisconnectedEvent, new_client};
 use azure_mqtt::mqtt_proto::{self, ConnectReasonCode, Packet};
-use azure_mqtt::packet::{ConnAck, ConnectOptions, ConnectProperties, KeepAlive};
+use azure_mqtt::packet::{ConnAck, ConnectProperties, KeepAlive};
 use matches::assert_matches;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -30,7 +30,7 @@ async fn connect_connack_success() {
         }))
         .unwrap();
 
-    let (connection, connack, _disconnect_handle) = connect_handle
+    let (connection, connack, _disconnect_handle) = match connect_handle
         .connect(
             ConnectionTransportConfig::Test {
                 incoming_packets: incoming_packets_rx,
@@ -38,10 +38,16 @@ async fn connect_connack_success() {
             },
             false,
             KeepAlive::Infinite,
-            ConnectOptions::default(),
+            None,
+            None,
+            None,
             ConnectProperties::default(),
+            None,
         )
-        .await;
+        .await {
+            ConnectResult::Success(connection, connack, disconnect_handle) => (connection, connack, disconnect_handle),
+            _ => panic!("Expected successful connection"),
+        };
     let server_connect = outgoing_packets_rx.recv().await.unwrap();
     assert_matches!(server_connect, Packet::Connect(mqtt_proto::Connect { .. }));
     assert_matches!(connack, ConnAck { .. });
