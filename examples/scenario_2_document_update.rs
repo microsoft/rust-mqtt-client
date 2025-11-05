@@ -95,10 +95,10 @@ async fn mqtt_run(
             )
             .await
         {
-            ConnectResult::Success(connected, _, _) => {
+            ConnectResult::Success(connection, _, _) => {
                 println!("Connected to MQTT broker");
                 connect_handle = tokio::select! {
-                    (connect_handle, _) = connected.run_until_disconnect() => {
+                    (connect_handle, _) = connection.run_until_disconnect() => {
                         // Drain the updates channel since we no longer want any of them
                         // and we will be reconnecting with clean start true.
                         // This will implicitly ack the messages, but again, we are discarding the session.

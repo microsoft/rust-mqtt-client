@@ -10,8 +10,10 @@ clean:
 
 .PHONY: test
 test:
-	cargo test
+	cargo test --lib
+	cargo test --features '__integration' --test '*'
 	cargo clippy \
+		--features '__integration' \
 		--tests \
 		--examples \
 		-- \

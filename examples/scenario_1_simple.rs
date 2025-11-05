@@ -25,7 +25,7 @@ async fn main() {
     let (client, connect_handle, receiver) = new_client(options);
 
     // Connect to the MQTT broker and wait for the connection to complete
-    if let ConnectResult::Success(connected, _, _) = connect_handle
+    if let ConnectResult::Success(connection, _, _) = connect_handle
         .connect(
             ConnectionTransportConfig::Tcp {
                 hostname: HOSTNAME.to_string(),
@@ -44,7 +44,7 @@ async fn main() {
         println!("Connected to MQTT broker");
 
         tokio::select! {
-            () = connection_runner(connected) => {
+            () = connection_runner(connection) => {
                 // Connection runner finished
             }
             () = receive(receiver) => {

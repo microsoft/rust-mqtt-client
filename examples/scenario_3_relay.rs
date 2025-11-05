@@ -65,9 +65,9 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
             )
             .await
         {
-            ConnectResult::Success(connected, _, _) => {
+            ConnectResult::Success(connection, _, _) => {
                 println!("Connected to MQTT broker");
-                connect_handle = connected.run_until_disconnect().await.0;
+                connect_handle = connection.run_until_disconnect().await.0;
                 println!("Disconnected from MQTT broker");
                 println!("Connection lost, will reconnect in 5 seconds...");
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
