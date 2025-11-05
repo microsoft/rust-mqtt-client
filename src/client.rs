@@ -8,8 +8,7 @@
 #![allow(dead_code)]
 #![allow(clippy::unused_async)]
 
-use std::io;
-use std::pin::pin;
+use std::{io, pin::pin, time::Duration};
 
 use bytes::Bytes;
 use futures_util::future::{self, FutureExt as _};
@@ -20,21 +19,21 @@ use openssl::{
 };
 
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
-use crate::client::token::{
-    acknowledgement::{PubAckToken, PubRecToken},
-    completion::buffered::completion_pair,
-    completion::{
-        PublishQoS0CompletionToken, PublishQoS1CompletionToken, PublishQoS2CompletionToken,
-        ReauthCompletionToken, SubscribeCompletionToken, UnsubscribeCompletionToken,
-    },
-    reauth::ReauthToken,
-};
 use crate::client::{
     channel_data::{
         DisconnectRequest, IncomingPublishAndToken, PublishRequest, ReauthRequest,
         SubscriptionRequest,
     },
     session::{CompletedOperation, Session},
+    token::{
+        acknowledgement::{PubAckToken, PubRecToken},
+        completion::buffered::completion_pair,
+        completion::{
+            PublishQoS0CompletionToken, PublishQoS1CompletionToken, PublishQoS2CompletionToken,
+            ReauthCompletionToken, SubscribeCompletionToken, UnsubscribeCompletionToken,
+        },
+        reauth::ReauthToken,
+    },
 };
 use crate::error::ClientError;
 use crate::io::{Reader, Writer};
@@ -48,9 +47,9 @@ use crate::mqtt_proto::{
     ProtocolVersion,
 };
 use crate::packet::{
-    Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectOptions,
-    ConnectProperties, Disconnect, DisconnectProperties, KeepAlive, PacketIdentifier, Publish,
-    PublishProperties, QoS, RetainHandling, SubscribeProperties, UnsubscribeProperties,
+    Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
+    DisconnectProperties, KeepAlive, PacketIdentifier, Publish, PublishProperties, QoS,
+    RetainHandling, SubscribeProperties, UnsubscribeProperties, Will,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -370,19 +369,31 @@ pub struct ConnectHandle {
 }
 
 impl ConnectHandle {
+    #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect_enhanced_auth(
         mut self,
         connection_transport: ConnectionTransportConfig,
         clean_start: bool,
         keep_alive: KeepAlive,
-        options: ConnectOptions,
+        will: Option<Will>,
+        username: Option<String>,
+        password: Option<Bytes>,
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
+        timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResponse {
         // TODO: Even with enhanced auth, we may need skip the intermediate auth step if we get a connack
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
-        self.mqtt_connect(&mut writer, clean_start, keep_alive, options, properties)
-            .await;
+        self.mqtt_connect(
+            &mut writer,
+            clean_start,
+            keep_alive,
+            will,
+            username,
+            password,
+            properties,
+        )
+        .await;
 
         match self.mqtt_receive(&mut reader).await {
             Packet::ConnAck(connack) => {
@@ -427,18 +438,29 @@ impl ConnectHandle {
         }
     }
 
-    // TODO: Return something like Result<(Connection, ConnAck, DisconnectHandle), (ConnectHandle, ConnAck)>
+    #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect(
         mut self,
         connection_transport: ConnectionTransportConfig,
         clean_start: bool,
         keep_alive: KeepAlive,
-        options: ConnectOptions,
+        will: Option<Will>,
+        username: Option<String>,
+        password: Option<Bytes>,
         properties: ConnectProperties,
+        timeout: Option<Duration>,
     ) -> ConnectResponse {
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
-        self.mqtt_connect(&mut writer, clean_start, keep_alive, options, properties)
-            .await;
+        self.mqtt_connect(
+            &mut writer,
+            clean_start,
+            keep_alive,
+            will,
+            username,
+            password,
+            properties,
+        )
+        .await;
         let Packet::ConnAck(connack) = self.mqtt_receive(&mut reader).await else {
             panic!("TODO: error handling");
         };
@@ -497,20 +519,23 @@ impl ConnectHandle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn mqtt_connect(
         &self,
         writer: &mut Writer<BufferPoolImpl>,
         clean_start: bool,
         keep_alive: KeepAlive,
-        options: ConnectOptions,
+        will: Option<Will>,
+        username: Option<String>,
+        password: Option<Bytes>,
         properties: ConnectProperties,
     ) {
         // Transport has been established. Send CONNECT and wait for CONNACK.
         // TODO: Get values from options
         let connect = Packet::Connect(Connect {
-            username: None, // TODO from options
-            password: None, // TODO from options
-            will: None,
+            username: None,  // TODO
+            password: None,  // TODO
+            will: None,      // TODO
             client_id: None, // TODO from client-wide config
             clean_start,
             keep_alive,

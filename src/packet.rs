@@ -158,16 +158,6 @@ pub struct Will {
     pub properties: PublishProperties,
 }
 
-#[derive(Default, Clone)]
-pub struct ConnectOptions {
-    /// Will message for the connection
-    pub will: Option<Will>,
-    /// Username for authentication of the connection
-    pub username: Option<String>,
-    /// Password for authentication of the connection
-    pub password: Option<String>,
-}
-
 //////////////////// Packets ////////////////////
 
 /// CONNACK packet

@@ -6,8 +6,8 @@ use azure_mqtt::client::{
     ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
-    ConnectOptions, ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties,
-    PubRecProperties, PublishProperties, QoS, RetainHandling, SubscribeProperties,
+    ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties, PubRecProperties,
+    PublishProperties, QoS, RetainHandling, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -33,8 +33,11 @@ async fn main() {
             },
             false,
             KeepAlive::Infinite,
-            ConnectOptions::default(),
+            None,
+            None,
+            None,
             ConnectProperties::default(),
+            None,
         )
         .await
     {

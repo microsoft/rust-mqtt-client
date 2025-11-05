@@ -13,6 +13,8 @@ use crate::packet::{
     PubAckProperties, PubCompProperties, PubRecProperties, PubRejectReason, PubRelProperties,
 };
 
+// TODO: Arguably, perhaps these should have their own error type instead of using ClientError
+
 #[derive(Debug)]
 pub struct PubAckToken(pub(crate) buffered::PubAckToken<SharedImpl>);
 

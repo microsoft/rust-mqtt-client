@@ -6,8 +6,7 @@ use azure_mqtt::client::{
     new_client,
 };
 use azure_mqtt::packet::{
-    ConnectOptions, ConnectProperties, DeliveryQoS, KeepAlive, QoS, RetainHandling,
-    SubscribeProperties,
+    ConnectProperties, DeliveryQoS, KeepAlive, QoS, RetainHandling, SubscribeProperties,
 };
 use azure_mqtt::topic::TopicFilter;
 
@@ -58,8 +57,11 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                 },
                 false,
                 KeepAlive::Infinite,
-                ConnectOptions::default(),
+                None,
+                None,
+                None,
                 ConnectProperties::default(),
+                None,
             )
             .await
         {
