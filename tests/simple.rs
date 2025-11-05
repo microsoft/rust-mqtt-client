@@ -32,7 +32,7 @@ async fn connect_connack_success() {
         }))
         .unwrap();
 
-    let (connection, connack, _disconnect_handle) = match connect_handle
+    let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
             ConnectionTransportConfig::Test {
                 incoming_packets: incoming_packets_rx,
@@ -47,11 +47,8 @@ async fn connect_connack_success() {
             None,
         )
         .await
-    {
-        ConnectResult::Success(connection, connack, disconnect_handle) => {
-            (connection, connack, disconnect_handle)
-        }
-        _ => panic!("Expected successful connection"),
+    else {
+        panic!("expected successful connect")
     };
     let server_connect = outgoing_packets_rx.recv().await.unwrap();
     assert_matches!(server_connect, Packet::Connect(mqtt_proto::Connect { .. }));
