@@ -9,3 +9,4 @@
 
 pub(crate) mod acknowledgement;
 pub(crate) mod completion;
+pub(crate) mod reauth;

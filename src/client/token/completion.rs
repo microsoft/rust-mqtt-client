@@ -6,13 +6,100 @@
 // TODO: Remove when possible.
 #![allow(dead_code)]
 
+use crate::buffer_pool::SharedImpl;
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum CompletionError {
     Detatched,
     Cancelled,
 }
 
+// TODO: can we make this only available in the crate?
+macro_rules! make_completion_token_ty {
+    ($vis:vis struct $token_ty:ident $( < $($ty_param_name:ident : $ty_param_bound:path ),* > )? (CompletionToken< $element_ty:ty >)) => {
+        #[derive(Debug)]
+        $vis struct $token_ty $(< $($ty_param_name : $ty_param_bound),* >)? (pub(crate) crate::client::token::completion::buffered::CompletionToken<$element_ty>);
 
+        impl $(< $($ty_param_name : $ty_param_bound),* >)? std::future::Future for $token_ty $(< $($ty_param_name ),* >)? {
+            type Output = Result<$element_ty, $crate::client::token::completion::CompletionError>;
+
+            fn poll(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Self::Output> {
+                std::pin::Pin::new(&mut self.0).poll(cx)
+            }
+        }
+    };
+
+    ($vis:vis struct $token_ty:ident (CompletionToken< $original_element_ty:ty > -> $element_ty:ty $map_fn:block )) => {
+        #[derive(Debug)]
+        $vis struct $token_ty(pub(crate) buffered::CompletionToken<$original_element_ty>);
+
+        impl std::future::Future for $token_ty {
+            type Output = Result<$element_ty, $crate::client::token::completion::CompletionError>;
+
+            fn poll(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Self::Output> {
+                match std::pin::Pin::new(&mut self.0).poll(cx) {
+                    std::task::Poll::Ready(Ok(value)) => {
+                        std::task::Poll::Ready(Ok(($map_fn)(value)))
+                    }
+                    std::task::Poll::Ready(Err(_)) => {
+                        std::task::Poll::Ready(Err($crate::client::token::completion::CompletionError::Detatched))
+                    }
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                }
+            }
+        }
+    };
+}
+
+make_completion_token_ty!(pub struct PublishQoS0CompletionToken(CompletionToken<()>));
+
+make_completion_token_ty!(pub struct PublishQoS1CompletionToken(CompletionToken<crate::mqtt_proto::PubAck<SharedImpl>> -> crate::packet::PubAck { Into::into }));
+
+make_completion_token_ty!(pub struct PublishQoS2CompletionToken(
+    CompletionToken<(
+        crate::mqtt_proto::PubRec<SharedImpl>,
+        Option<crate::client::token::acknowledgement::buffered::PubRelToken<SharedImpl>>,
+    )> -> (
+        crate::packet::PubRec,
+        Option<crate::client::token::acknowledgement::PubRelToken>,
+    ) {
+        |(pubrec, token): (_, Option<_>)| (crate::packet::PubRec::from(pubrec), token.map(crate::client::token::acknowledgement::PubRelToken))
+    }
+));
+
+make_completion_token_ty!(pub struct PubRecAcceptCompletionToken(
+    CompletionToken<(
+        crate::mqtt_proto::PubRel<SharedImpl>,
+        crate::client::token::acknowledgement::buffered::PubCompToken<SharedImpl>,
+    )> -> (
+        crate::packet::PubRel,
+        crate::client::token::acknowledgement::PubCompToken,
+    ) {
+        |(pubrel, pubcomp_token)| (crate::packet::PubRel::from(pubrel), crate::client::token::acknowledgement::PubCompToken(pubcomp_token))
+    }
+));
+
+make_completion_token_ty!(pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<SharedImpl>> -> crate::packet::PubComp { Into::into }));
+
+make_completion_token_ty!(pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<SharedImpl>> -> crate::packet::SubAck { Into::into }));
+
+make_completion_token_ty!(pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<SharedImpl>> -> crate::packet::UnsubAck { Into::into }));
+
+make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<crate::client::channel_data::ReauthResponse<SharedImpl>> -> crate::client::ReauthResponse { Into::into }));
+
+make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>));
+
+make_completion_token_ty!(pub struct PubRecRejectCompletionToken(CompletionToken<()>));
+
+make_completion_token_ty!(pub struct PubCompConfirmCompletionToken(CompletionToken<()>));
+
+// TODO: fix the inconsistency in Response type locations for Auth and Reauth
 
 pub(crate) mod buffered {
     use std::future::Future;
@@ -22,10 +109,11 @@ pub(crate) mod buffered {
     use tokio::sync::oneshot;
 
     use super::CompletionError;
-    use crate::mqtt_proto::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck};
+    use crate::buffer_pool::Shared;
+    use crate::client::AuthResponse; // TODO
+    use crate::client::channel_data::ReauthResponse;
     use crate::client::token::acknowledgement::buffered::{PubCompToken, PubRelToken};
-    use crate::client::AuthResponse;    // TODO
-    use crate::client::channel_data::ReauthResponse;    // TODO
+    use crate::mqtt_proto::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck}; // TODO
 
     /// Create a new completion pair, consisting of a [`CompletionNotifier`] and a [`CompletionToken`].
     pub fn completion_pair<T>() -> (CompletionNotifier<T>, CompletionToken<T>) {
@@ -36,6 +124,14 @@ pub(crate) mod buffered {
     }
 
     // TODO: Aliases for token types for consistency.
+
+    pub use super::{
+        PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecRejectCompletionToken,
+    };
+
+    make_completion_token_ty!(pub struct ReauthCompletionToken<S: Shared>(CompletionToken<ReauthResponse<S>>));
+    make_completion_token_ty!(pub struct PubRecAcceptCompletionToken<S: Shared>(CompletionToken<(PubRel<S>, PubCompToken<S>)>));
+    make_completion_token_ty!(pub struct PubRelConfirmCompletionToken<S: Shared>(CompletionToken<PubComp<S>>));
 
     // Aliases for completion notifier types.
     // For internal use where we'd prefer to avoid the mix of user-facing and internal packet types.
@@ -52,8 +148,7 @@ pub(crate) mod buffered {
     pub(crate) type PubRelCompletionNotifier<S> = CompletionNotifier<PubComp<S>>;
     pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
     pub(crate) type AuthCompletionNotifier = CompletionNotifier<AuthResponse>;
-    pub type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResponse<S>>;
-
+    pub(crate) type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResponse<S>>;
 
     #[derive(Debug)]
     pub struct CompletionToken<T>(oneshot::Receiver<Result<T, CompletionError>>);
@@ -75,7 +170,7 @@ pub(crate) mod buffered {
 
     /// Notifier half of a completion pair
     #[derive(Debug)]
-    pub (crate) struct CompletionNotifier<T>(oneshot::Sender<Result<T, CompletionError>>);
+    pub(crate) struct CompletionNotifier<T>(oneshot::Sender<Result<T, CompletionError>>);
 
     impl<T> CompletionNotifier<T> {
         /// Complete the associated token(s) with the given value.
@@ -106,9 +201,7 @@ pub(crate) mod buffered {
         // - qos exceeded?
         // - connect while connected i.e. state error
     }
-
 }
-
 
 #[cfg(test)]
 mod test {
