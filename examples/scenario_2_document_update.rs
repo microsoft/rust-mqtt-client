@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use azure_mqtt::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResponse, ConnectionTransportConfig,
+    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
     ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
@@ -95,7 +95,7 @@ async fn mqtt_run(
             )
             .await
         {
-            ConnectResponse::Success(connected, _, _) => {
+            ConnectResult::Success(connected, _, _) => {
                 println!("Connected to MQTT broker");
                 connect_handle = tokio::select! {
                     (connect_handle, _) = connected.run_until_disconnect() => {
@@ -117,12 +117,12 @@ async fn mqtt_run(
                 };
                 connect_handle
             }
-            ConnectResponse::Failure(connect_handle, _) => {
+            ConnectResult::Failure(connect_handle, _) => {
                 println!("Failed to connect to MQTT broker, retrying in 5 seconds...");
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 connect_handle
             }
-            ConnectResponse::Timeout(connect_handle) => {
+            ConnectResult::Timeout(connect_handle) => {
                 println!("Connection attempt timed out, retrying in 5 seconds...");
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 connect_handle

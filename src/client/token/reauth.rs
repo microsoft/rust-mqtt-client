@@ -12,6 +12,7 @@ use crate::packet::AuthProperties;
 
 // TODO: Arguably, perhaps these should have their own error type instead of using ClientError
 
+#[derive(Debug)]
 pub struct ReauthToken(pub(crate) buffered::ReauthToken<SharedImpl>);
 
 impl ReauthToken {

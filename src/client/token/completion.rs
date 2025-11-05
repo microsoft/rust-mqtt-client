@@ -90,7 +90,7 @@ make_completion_token_ty!(pub struct SubscribeCompletionToken(CompletionToken<cr
 
 make_completion_token_ty!(pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<SharedImpl>> -> crate::packet::UnsubAck { Into::into }));
 
-make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<crate::client::channel_data::ReauthResponse<SharedImpl>> -> crate::client::ReauthResponse { Into::into }));
+make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<crate::client::buffered::ReauthResult<SharedImpl>> -> crate::client::ReauthResult { Into::into }));
 
 make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>));
 
@@ -107,7 +107,7 @@ pub(crate) mod buffered {
 
     use super::CompletionError;
     use crate::buffer_pool::Shared;
-    use crate::client::channel_data::ReauthResponse;
+    use crate::client::buffered::ReauthResult;
     use crate::client::token::acknowledgement::buffered::{PubCompToken, PubRelToken};
     use crate::mqtt_proto::{PubAck, PubComp, PubRec, PubRel, SubAck, UnsubAck}; // TODO
 
@@ -125,7 +125,7 @@ pub(crate) mod buffered {
         PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecRejectCompletionToken,
     };
 
-    make_completion_token_ty!(pub struct ReauthCompletionToken<S: Shared>(CompletionToken<ReauthResponse<S>>));
+    make_completion_token_ty!(pub struct ReauthCompletionToken<S: Shared>(CompletionToken<ReauthResult<S>>));
     make_completion_token_ty!(pub struct PubRecAcceptCompletionToken<S: Shared>(CompletionToken<(PubRel<S>, PubCompToken<S>)>));
     make_completion_token_ty!(pub struct PubRelConfirmCompletionToken<S: Shared>(CompletionToken<PubComp<S>>));
 
@@ -143,7 +143,7 @@ pub(crate) mod buffered {
     pub(crate) type PubRecRejectCompletionNotifier = CompletionNotifier<()>;
     pub(crate) type PubRelCompletionNotifier<S> = CompletionNotifier<PubComp<S>>;
     pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
-    pub(crate) type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResponse<S>>;
+    pub(crate) type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResult<S>>;
 
     #[derive(Debug)]
     pub struct CompletionToken<T>(oneshot::Receiver<Result<T, CompletionError>>);

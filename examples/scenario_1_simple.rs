@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use azure_mqtt::client::{
-    Client, ClientOptions, ConnectResponse, Connection, ConnectionTransportConfig,
+    Client, ClientOptions, ConnectResult, Connection, ConnectionTransportConfig,
     ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
@@ -25,7 +25,7 @@ async fn main() {
     let (client, connect_handle, receiver) = new_client(options);
 
     // Connect to the MQTT broker and wait for the connection to complete
-    if let ConnectResponse::Success(connected, _, _) = connect_handle
+    if let ConnectResult::Success(connected, _, _) = connect_handle
         .connect(
             ConnectionTransportConfig::Tcp {
                 hostname: HOSTNAME.to_string(),

@@ -12,7 +12,6 @@ use crate::client::token::{
         PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, ReauthCompletionNotifier,
         SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
     },
-    reauth::buffered::ReauthToken,
 };
 
 use crate::mqtt_proto::{
@@ -93,20 +92,10 @@ where
     PubComp(PubCompCompletionNotifier, PubComp<S>),
 }
 
-/// Request to send an AUTH packet
+/// Request to send an AUTH packet (reauth flow)
 pub struct ReauthRequest<S>(pub(crate) ReauthCompletionNotifier<S>, pub Auth<S>)
 where
     S: Shared;
-
-#[derive(Debug)]
-pub enum ReauthResponse<S>
-where
-    S: Shared,
-{
-    Continue(Auth<S>, ReauthToken<S>),
-    Success(Auth<S>),
-    Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
-}
 
 /// Incoming Publish + Acknowledgement infrastructure
 pub enum IncomingPublishAndToken<S>

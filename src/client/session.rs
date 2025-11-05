@@ -14,9 +14,10 @@ use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
+    buffered::ReauthResult,
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequest,
-        ReauthRequest, ReauthResponse, SubscriptionRequest,
+        ReauthRequest, SubscriptionRequest,
     },
     session::pkid::PkidPool,
     session::timer::Timer,
@@ -549,7 +550,7 @@ where
             // TODO: Validate authentication method from CONNACK
             AuthenticateReasonCode::Success => {
                 let notifier = self.inflight.auth.take().expect("TODO: error handling");
-                _ = notifier.complete(ReauthResponse::Success(auth));
+                _ = notifier.complete(ReauthResult::Success(auth));
             }
             AuthenticateReasonCode::ContinueAuthentication => {
                 //pass on, do not stop tracking
@@ -563,7 +564,7 @@ where
                         .clone(),
                     tx: self.ch.auth_tx.clone(),
                 };
-                _ = notifier.complete(ReauthResponse::Continue(auth, token));
+                _ = notifier.complete(ReauthResult::Continue(auth, token));
             }
             AuthenticateReasonCode::ReAuthenticate => unreachable!(
                 "AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server"

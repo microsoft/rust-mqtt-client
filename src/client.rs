@@ -381,7 +381,7 @@ impl ConnectHandle {
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
         timeout: Option<Duration>,
-    ) -> ConnectEnhancedAuthResponse {
+    ) -> ConnectEnhancedAuthResult {
         // TODO: Even with enhanced auth, we may need skip the intermediate auth step if we get a connack
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
         self.mqtt_connect(
@@ -410,7 +410,7 @@ impl ConnectHandle {
                         reader,
                         writer,
                     };
-                    ConnectEnhancedAuthResponse::Success(
+                    ConnectEnhancedAuthResult::Success(
                         connection,
                         connack.into(),
                         ReauthHandle {
@@ -420,7 +420,7 @@ impl ConnectHandle {
                         DisconnectHandle(disconnect_tx),
                     )
                 } else {
-                    ConnectEnhancedAuthResponse::Failure(self, Some(connack.into()))
+                    ConnectEnhancedAuthResult::Failure(self, Some(connack.into()))
                 }
             }
             Packet::Auth(auth) => {
@@ -432,7 +432,7 @@ impl ConnectHandle {
                     writer,
                     auth_method: authentication_info.method,
                 };
-                ConnectEnhancedAuthResponse::Continue(auth.into(), auth_handle)
+                ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
             }
             _ => panic!("TODO: error handling"),
         }
@@ -449,7 +449,7 @@ impl ConnectHandle {
         password: Option<Bytes>,
         properties: ConnectProperties,
         timeout: Option<Duration>,
-    ) -> ConnectResponse {
+    ) -> ConnectResult {
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
         self.mqtt_connect(
             &mut writer,
@@ -470,7 +470,7 @@ impl ConnectHandle {
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
 
         self.session.ch.disconnect_rx = Some(disconnect_rx);
-        ConnectResponse::Success(
+        ConnectResult::Success(
             Connection {
                 session: self.session,
                 reader_pool: self.reader_pool,
@@ -574,7 +574,7 @@ impl EnhancedAuthHandle {
         mut self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> ConnectEnhancedAuthResponse {
+    ) -> ConnectEnhancedAuthResult {
         // Send auth
         let auth = Packet::Auth(
             Auth {
@@ -617,7 +617,7 @@ impl EnhancedAuthHandle {
                         reader: self.reader,
                         writer: self.writer,
                     };
-                    ConnectEnhancedAuthResponse::Success(
+                    ConnectEnhancedAuthResult::Success(
                         connection,
                         connack.into(),
                         ReauthHandle {
@@ -632,10 +632,10 @@ impl EnhancedAuthHandle {
                         reader_pool: self.reader_pool,
                         writer_pool: self.writer_pool,
                     };
-                    ConnectEnhancedAuthResponse::Failure(connect_handle, Some(connack.into()))
+                    ConnectEnhancedAuthResult::Failure(connect_handle, Some(connack.into()))
                 }
             }
-            Packet::Auth(auth) => ConnectEnhancedAuthResponse::Continue(auth.into(), self),
+            Packet::Auth(auth) => ConnectEnhancedAuthResult::Continue(auth.into(), self),
             _ => panic!("TODO: error handling"),
         }
     }
@@ -821,39 +821,37 @@ impl ReauthHandle {
     }
 }
 
-pub enum ConnectEnhancedAuthResponse {
+/// Indicates the result of an MQTT CONNECT.
+pub enum ConnectResult {
+    Success(Connection, ConnAck, DisconnectHandle),
+    Failure(ConnectHandle, Option<ConnAck>),
+    Timeout(ConnectHandle),
+}
+
+/// Indicates the result of an MQTT CONNECT with enhanced authentication.
+pub enum ConnectEnhancedAuthResult {
     Continue(Auth, EnhancedAuthHandle),
     Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
     Failure(ConnectHandle, Option<ConnAck>),
     Timeout(ConnectHandle),
 }
 
-pub enum ConnectResponse {
-    Success(Connection, ConnAck, DisconnectHandle),
-    Failure(ConnectHandle, Option<ConnAck>),
-    Timeout(ConnectHandle),
-}
-
-// NOTE: There is an asymmetry in definition location for `ReauthResponse` (defined here and its
-// inner buffered variant (currently defined in `channel_data`). This is due to it being used as the channel
-// enum, as well as the non-buffered version being part of the public API. Particularly odd since it is
-// returned by the `ReauthCompletionToken` from the `token` module, a consequence of strongly typed
-// Completion Tokens. Consider refactoring in the future.
-
-pub enum ReauthResponse {
+/// Indicates the result of an MQTT AUTH operation on an existing connection.
+#[derive(Debug)]
+pub enum ReauthResult {
     Continue(Auth, ReauthToken),
     Success(Auth),
     Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
 }
 
-impl From<channel_data::ReauthResponse<SharedImpl>> for ReauthResponse {
-    fn from(token: channel_data::ReauthResponse<SharedImpl>) -> Self {
-        match token {
-            channel_data::ReauthResponse::Continue(auth, token) => {
+impl From<buffered::ReauthResult<SharedImpl>> for ReauthResult {
+    fn from(value: buffered::ReauthResult<SharedImpl>) -> Self {
+        match value {
+            buffered::ReauthResult::Continue(auth, token) => {
                 Self::Continue(auth.into(), ReauthToken(token))
             }
-            channel_data::ReauthResponse::Success(auth) => Self::Success(auth.into()),
-            channel_data::ReauthResponse::Failure => Self::Failure,
+            buffered::ReauthResult::Success(auth) => Self::Success(auth.into()),
+            buffered::ReauthResult::Failure => Self::Failure,
         }
     }
 }
@@ -886,5 +884,22 @@ impl From<channel_data::IncomingPublishAndToken<SharedImpl>> for (Publish, Manua
                 ManualAcknowledgement::QoS2(PubRecToken(token)),
             ),
         }
+    }
+}
+
+mod buffered {
+    use crate::buffer_pool::Shared;
+    use crate::client::token::reauth::buffered::ReauthToken;
+    use crate::mqtt_proto::Auth;
+
+    /// Indicates the result of an MQTT AUTH operation on an existing connection.
+    #[derive(Debug)]
+    pub enum ReauthResult<S>
+    where
+        S: Shared,
+    {
+        Continue(Auth<S>, ReauthToken<S>),
+        Success(Auth<S>),
+        Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
     }
 }

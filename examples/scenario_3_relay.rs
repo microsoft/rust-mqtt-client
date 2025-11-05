@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use azure_mqtt::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResponse, ConnectionTransportConfig, Receiver,
+    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig, Receiver,
     new_client,
 };
 use azure_mqtt::packet::{
@@ -65,7 +65,7 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
             )
             .await
         {
-            ConnectResponse::Success(connected, _, _) => {
+            ConnectResult::Success(connected, _, _) => {
                 println!("Connected to MQTT broker");
                 connect_handle = connected.run_until_disconnect().await.0;
                 println!("Disconnected from MQTT broker");
@@ -73,8 +73,7 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 connect_handle
             }
-            ConnectResponse::Failure(connect_handle, _)
-            | ConnectResponse::Timeout(connect_handle) => {
+            ConnectResult::Failure(connect_handle, _) | ConnectResult::Timeout(connect_handle) => {
                 println!("Failed to connect to MQTT broker, retrying in 5 seconds...");
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 connect_handle
