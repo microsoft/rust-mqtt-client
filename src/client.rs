@@ -21,7 +21,11 @@ use openssl::{
 };
 
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
-use crate::client::token::completion::buffered::{CompletionToken, completion_pair};
+use crate::client::token::{
+    completion::buffered::{CompletionToken, completion_pair},
+    acknowledgement::buffered::{PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecRejectCompletionToken},
+
+};
 use crate::client::{
     channel_data::{
         DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest, SubscriptionRequest,
@@ -100,7 +104,6 @@ mod channel_data;
 mod session;
 
 pub mod token;
-use token::{PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecRejectCompletionToken};
 
 /// Creates the three components needed to run the MQTT client
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented

@@ -52,7 +52,7 @@ pub(crate) mod buffered {
     pub(crate) type PubRelCompletionNotifier<S> = CompletionNotifier<PubComp<S>>;
     pub(crate) type PubCompCompletionNotifier = CompletionNotifier<()>;
     pub(crate) type AuthCompletionNotifier = CompletionNotifier<AuthResponse>;
-    pub(crate) type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResponse<S>>;
+    pub type ReauthCompletionNotifier<S> = CompletionNotifier<ReauthResponse<S>>;
 
 
     #[derive(Debug)]

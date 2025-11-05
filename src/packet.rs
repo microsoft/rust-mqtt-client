@@ -142,6 +142,7 @@ where
 
 /// Represents a Will Message that will be stored on the server and published after the MQTT
 /// session ends, or after the delay interval elapses after a disconnect
+#[derive(Clone)]
 pub struct Will {
     /// Number of seconds after a disconnect before the Will message is published
     pub delay_interval: u32,
@@ -157,7 +158,7 @@ pub struct Will {
     pub properties: PublishProperties,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ConnectOptions {
     /// Will message for the connection
     pub will: Option<Will>,
