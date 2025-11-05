@@ -22,7 +22,7 @@ impl std::fmt::Debug for Error {
 /// A source of buffers.
 ///
 /// Dropped buffers will automatically return to this pool.
-pub trait BufferPool: Clone + Send + Sync + std::fmt::Debug + Unpin {
+pub trait BufferPool: Clone + Send + Sync + std::fmt::Debug + Unpin + 'static {
     type Shared: Shared;
     type Owned: Owned<Shared = Self::Shared>;
 

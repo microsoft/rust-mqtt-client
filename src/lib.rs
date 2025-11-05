@@ -7,7 +7,7 @@
 // TODO: Revisit the exposed API of these modules, and remove the linting suppressions as necessary
 pub(crate) mod buffer_pool;
 pub(crate) mod io;
-pub(crate) mod mqtt_proto;
+pub mod mqtt_proto;
 mod opensslext;
 
 // High-level modules

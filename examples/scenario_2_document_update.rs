@@ -79,7 +79,7 @@ async fn mqtt_run(
     // Loop so that if we disconnect, we can reconnect.
     loop {
         println!("Attempting to connect to MQTT broker...");
-        let (connected, _, _) = connect_handle
+        let (connection, _, _) = connect_handle
             .connect(
                 ConnectionTransportConfig::Tcp {
                     hostname: HOSTNAME.to_string(),
@@ -94,7 +94,7 @@ async fn mqtt_run(
         println!("Connected to MQTT broker");
 
         tokio::select! {
-            (connect_handle_, _) = connected.run_until_disconnect() => {
+            (connect_handle_, _) = connection.run_until_disconnect() => {
                 // Drain the updates channel since we no longer want any of them
                 // and we will be reconnecting with clean start true.
                 // This will implicitly ack the messages, but again, we are discarding the session.

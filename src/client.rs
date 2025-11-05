@@ -166,6 +166,11 @@ pub enum ConnectionTransportConfig {
         request: async_tungstenite::tungstenite::handshake::client::Request,
         tls_config: ConnectionTransportTlsConfig,
     },
+    #[cfg(feature = "__integration")]
+    Test {
+        incoming_packets: tokio::sync::mpsc::UnboundedReceiver<Packet<SharedImpl>>,
+        outgoing_packets: tokio::sync::mpsc::UnboundedSender<Packet<SharedImpl>>,
+    },
 }
 
 /// Parameters for establishing a TLS connection.
@@ -556,6 +561,17 @@ impl ConnectHandle {
             } => crate::io::tokio_ws::connect(request, tls_config, &self.reader_pool)
                 .await
                 .expect("TODO: error handling"),
+
+            #[cfg(feature = "__integration")]
+            ConnectionTransportConfig::Test {
+                incoming_packets,
+                outgoing_packets,
+            } => crate::io::test::connect(
+                incoming_packets,
+                outgoing_packets,
+                &self.reader_pool,
+                &self.writer_pool,
+            ),
         }
     }
 
@@ -908,6 +924,7 @@ impl ReauthToken {
 }
 
 /// Details about a client disconnect
+#[derive(Debug)]
 pub enum DisconnectedEvent {
     Transport,
     UserRequested,
