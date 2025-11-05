@@ -3,440 +3,444 @@
 
 //! Synchronization for portable triggering of acknowledgement flows
 
-use futures_executor::block_on;
-use tokio::sync::mpsc::Sender;
+pub(crate) mod buffered {
 
-use crate::buffer_pool::Shared;
-use crate::client::channel_data::AcknowledgementRequest;
-use crate::client::token::{CompletionToken, completion_pair};
-use crate::error::ClientError;
-use crate::mqtt_proto::{
-    PacketIdentifier, PubAck, PubAckOtherProperties, PubAckReasonCode, PubComp,
-    PubCompOtherProperties, PubRecOtherProperties, PubRecReasonCode, PubRel, PubRelOtherProperties,
-};
+    use futures_executor::block_on;
+    use tokio::sync::mpsc::Sender;
 
-/// Token that allows the user to acknowledge a received PUBLISH on QoS 1 with a PUBACK.
-#[derive(Debug)]
-pub struct PubAckToken<S>
-where
-    S: Shared,
-{
-    pkid: PacketIdentifier,
-    epoch: u64,
-    tx: Sender<AcknowledgementRequest<S>>,
-    triggered: bool,
-}
+    use crate::buffer_pool::Shared;
+    use crate::client::channel_data::AcknowledgementRequest;
+    use crate::client::token::completion::buffered::{CompletionToken, completion_pair};
+    use crate::error::ClientError;
+    use crate::mqtt_proto::{
+        PacketIdentifier, PubAck, PubAckOtherProperties, PubAckReasonCode, PubComp,
+        PubCompOtherProperties, PubRecOtherProperties, PubRecReasonCode, PubRel, PubRelOtherProperties,
+    };
 
-impl<S> PubAckToken<S>
-where
-    S: Shared,
-{
-    pub(crate) fn new(
+
+    /// Token that allows the user to acknowledge a received PUBLISH on QoS 1 with a PUBACK.
+    #[derive(Debug)]
+    pub struct PubAckToken<S>
+    where
+        S: Shared,
+    {
         pkid: PacketIdentifier,
         epoch: u64,
         tx: Sender<AcknowledgementRequest<S>>,
-    ) -> Self {
-        Self {
-            pkid,
-            epoch,
-            tx,
-            triggered: false,
+        triggered: bool,
+    }
+
+    impl<S> PubAckToken<S>
+    where
+        S: Shared,
+    {
+        pub(crate) fn new(
+            pkid: PacketIdentifier,
+            epoch: u64,
+            tx: Sender<AcknowledgementRequest<S>>,
+        ) -> Self {
+            Self {
+                pkid,
+                epoch,
+                tx,
+                triggered: false,
+            }
+        }
+
+        // NOTE: Even though the return values are the same for these two methods (unlike in PubRecToken),
+        // we keep the methods separate for
+        // 1) consistency with PubRecToken
+        // 2) preventing the illegal 0x10 reason code
+
+        /// Accept the received PUBLISH by issuing a PUBACK indicating success.
+        ///
+        /// Consumes itself on call, so it cannot be used again.
+        ///
+        /// Returns once the PUBACK has been accepted into the MQTT session.
+        /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
+        ///
+        /// Can only be successfully used during the same connection epoch on which it was received.
+        pub async fn accept(
+            self,
+            properties: PubAckOtherProperties<S>,
+        ) -> Result<PubAckCompletionToken, ClientError> {
+            self.send(properties, PubAckReasonCode::Success).await
+        }
+
+        /// Reject the received PUBLISH by issuing a PUBACK with an error reason code.
+        ///
+        /// Consumes itself on call so it cannot be used again.
+        ///
+        /// Returns once the PUBACK has been accepted into the MQTT session.
+        /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
+        pub async fn reject(
+            self,
+            reason: PubAckReasonCode,
+            properties: PubAckOtherProperties<S>,
+        ) -> Result<PubAckCompletionToken, ClientError> {
+            self.send(properties, reason).await
+        }
+
+        /// Internal helper to send the acknowledgement request.
+        async fn send(
+            mut self,
+            properties: PubAckOtherProperties<S>,
+            reason: PubAckReasonCode,
+        ) -> Result<PubAckCompletionToken, ClientError> {
+            self.triggered = true;
+            PubAckToken::inner_send(&self.tx, self.pkid, properties, reason, self.epoch).await
+        }
+
+        /// Internal helper to send the acknowledgement request.
+        /// Does not operate on self in order to allow for use in drop efficiently.
+        async fn inner_send(
+            tx: &Sender<AcknowledgementRequest<S>>,
+            packet_identifier: PacketIdentifier,
+            other_properties: PubAckOtherProperties<S>,
+            reason_code: PubAckReasonCode,
+            epoch: u64,
+        ) -> Result<PubAckCompletionToken, ClientError> {
+            let (notifier, token) = completion_pair();
+            let puback = PubAck {
+                packet_identifier,
+                reason_code,
+                other_properties,
+            };
+            tx.send(AcknowledgementRequest::PubAck(notifier, puback, epoch))
+                .await
+                .map_err(|_| ClientError::DetachedClient)?;
+            Ok(PubAckCompletionToken(token))
         }
     }
 
-    // NOTE: Even though the return values are the same for these two methods (unlike in PubRecToken),
-    // we keep the methods separate for
-    // 1) consistency with PubRecToken
-    // 2) preventing the illegal 0x10 reason code
-
-    /// Accept the received PUBLISH by issuing a PUBACK indicating success.
-    ///
-    /// Consumes itself on call, so it cannot be used again.
-    ///
-    /// Returns once the PUBACK has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same connection epoch on which it was received.
-    pub async fn accept(
-        self,
-        properties: PubAckOtherProperties<S>,
-    ) -> Result<PubAckCompletionToken, ClientError> {
-        self.send(properties, PubAckReasonCode::Success).await
-    }
-
-    /// Reject the received PUBLISH by issuing a PUBACK with an error reason code.
-    ///
-    /// Consumes itself on call so it cannot be used again.
-    ///
-    /// Returns once the PUBACK has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
-    pub async fn reject(
-        self,
-        reason: PubAckReasonCode,
-        properties: PubAckOtherProperties<S>,
-    ) -> Result<PubAckCompletionToken, ClientError> {
-        self.send(properties, reason).await
-    }
-
-    /// Internal helper to send the acknowledgement request.
-    async fn send(
-        mut self,
-        properties: PubAckOtherProperties<S>,
-        reason: PubAckReasonCode,
-    ) -> Result<PubAckCompletionToken, ClientError> {
-        self.triggered = true;
-        PubAckToken::inner_send(&self.tx, self.pkid, properties, reason, self.epoch).await
-    }
-
-    /// Internal helper to send the acknowledgement request.
-    /// Does not operate on self in order to allow for use in drop efficiently.
-    async fn inner_send(
-        tx: &Sender<AcknowledgementRequest<S>>,
-        packet_identifier: PacketIdentifier,
-        other_properties: PubAckOtherProperties<S>,
-        reason_code: PubAckReasonCode,
-        epoch: u64,
-    ) -> Result<PubAckCompletionToken, ClientError> {
-        let (notifier, token) = completion_pair();
-        let puback = PubAck {
-            packet_identifier,
-            reason_code,
-            other_properties,
-        };
-        tx.send(AcknowledgementRequest::PubAck(notifier, puback, epoch))
-            .await
-            .map_err(|_| ClientError::DetachedClient)?;
-        Ok(PubAckCompletionToken(token))
-    }
-}
-
-impl<S> Drop for PubAckToken<S>
-where
-    S: Shared,
-{
-    fn drop(&mut self) {
-        // Must acknowledge if the token was not used in order to prevent locking the
-        // ack ordering flow.
-        if !self.triggered {
-            // TODO: Consider using Option to avoid cloning for better performance
-            let tx = self.tx.clone();
-            let pkid = self.pkid;
-            let epoch = self.epoch;
-            std::thread::spawn(move || {
-                block_on(async move {
-                    let _ = PubAckToken::inner_send(
-                        &tx,
-                        pkid,
-                        Default::default(),
-                        PubAckReasonCode::Success,
-                        epoch,
-                    )
-                    .await;
+    impl<S> Drop for PubAckToken<S>
+    where
+        S: Shared,
+    {
+        fn drop(&mut self) {
+            // Must acknowledge if the token was not used in order to prevent locking the
+            // ack ordering flow.
+            if !self.triggered {
+                // TODO: Consider using Option to avoid cloning for better performance
+                let tx = self.tx.clone();
+                let pkid = self.pkid;
+                let epoch = self.epoch;
+                std::thread::spawn(move || {
+                    block_on(async move {
+                        let _ = PubAckToken::inner_send(
+                            &tx,
+                            pkid,
+                            Default::default(),
+                            PubAckReasonCode::Success,
+                            epoch,
+                        )
+                        .await;
+                    });
                 });
-            });
-        }
-    }
-}
-
-make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>));
-
-/// Token that allows the user to acknowledge a received PUBLISH on QoS 2 with a PUBREC.
-#[derive(Debug)]
-pub struct PubRecToken<S>
-where
-    S: Shared,
-{
-    pkid: PacketIdentifier,
-    tx: Sender<AcknowledgementRequest<S>>,
-    triggered: bool,
-}
-
-impl<S> PubRecToken<S>
-where
-    S: Shared,
-{
-    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest<S>>) -> Self {
-        Self {
-            pkid,
-            tx,
-            triggered: false,
+            }
         }
     }
 
-    /// Accept the received PUBLISH by issuing a PUBREC indicating success.
-    ///
-    /// Consumes itself on call, so it cannot be used again.
-    ///
-    /// Returns once the PUBREC has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same session epoch on which it was received.
-    pub async fn accept(
-        self,
-        properties: PubRecOtherProperties<S>,
-    ) -> Result<PubRecAcceptCompletionToken<S>, ClientError> {
-        unimplemented!()
+    make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>));
+
+    /// Token that allows the user to acknowledge a received PUBLISH on QoS 2 with a PUBREC.
+    #[derive(Debug)]
+    pub struct PubRecToken<S>
+    where
+        S: Shared,
+    {
+        pkid: PacketIdentifier,
+        tx: Sender<AcknowledgementRequest<S>>,
+        triggered: bool,
     }
 
-    /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
-    ///
-    /// Consumes itself on call so it cannot be used again.
-    ///
-    /// Returns once the PUBREC has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same session epoch on which it was received.
-    pub async fn reject(
-        self,
-        reason: PubRecReasonCode,
-        properties: PubRecOtherProperties<S>,
-    ) -> Result<PubRecRejectCompletionToken, ClientError> {
-        unimplemented!()
-    }
-}
+    impl<S> PubRecToken<S>
+    where
+        S: Shared,
+    {
+        pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest<S>>) -> Self {
+            Self {
+                pkid,
+                tx,
+                triggered: false,
+            }
+        }
 
-impl<S> Drop for PubRecToken<S>
-where
-    S: Shared,
-{
-    fn drop(&mut self) {
-        // Must accept
-        unimplemented!()
-    }
-}
+        /// Accept the received PUBLISH by issuing a PUBREC indicating success.
+        ///
+        /// Consumes itself on call, so it cannot be used again.
+        ///
+        /// Returns once the PUBREC has been accepted into the MQTT session.
+        /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
+        ///
+        /// Can only be successfully used during the same session epoch on which it was received.
+        pub async fn accept(
+            self,
+            properties: PubRecOtherProperties<S>,
+        ) -> Result<PubRecAcceptCompletionToken<S>, ClientError> {
+            unimplemented!()
+        }
 
-make_completion_token_ty!(pub struct PubRecAcceptCompletionToken<S: Shared>(CompletionToken<(PubRel<S>, PubCompToken<S>)>));
-
-make_completion_token_ty!(pub struct PubRecRejectCompletionToken(CompletionToken<()>));
-
-/// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
-#[derive(Debug)]
-pub struct PubRelToken<S>
-where
-    S: Shared,
-{
-    pkid: PacketIdentifier,
-    tx: Sender<AcknowledgementRequest<S>>,
-    triggered: bool,
-}
-
-impl<S> PubRelToken<S>
-where
-    S: Shared,
-{
-    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest<S>>) -> Self {
-        Self {
-            pkid,
-            tx,
-            triggered: false,
+        /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
+        ///
+        /// Consumes itself on call so it cannot be used again.
+        ///
+        /// Returns once the PUBREC has been accepted into the MQTT session.
+        /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
+        ///
+        /// Can only be successfully used during the same session epoch on which it was received.
+        pub async fn reject(
+            self,
+            reason: PubRecReasonCode,
+            properties: PubRecOtherProperties<S>,
+        ) -> Result<PubRecRejectCompletionToken, ClientError> {
+            unimplemented!()
         }
     }
 
-    /// Confirm the PUBREC was received by issuing a PUBREL.
-    ///
-    /// Consumes itself on call so it cannot be used again.
-    ///
-    /// Returns once the PUBREL has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREL is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same session epoch on which it was received.
-    pub async fn confirm(
-        self,
-        properties: PubRelOtherProperties<S>,
-    ) -> Result<PubRelConfirmCompletionToken<S>, ClientError> {
-        unimplemented!()
-    }
-}
-
-impl<S> Drop for PubRelToken<S>
-where
-    S: Shared,
-{
-    fn drop(&mut self) {
-        // Must confirm
-        unimplemented!()
-    }
-}
-make_completion_token_ty!(pub struct PubRelConfirmCompletionToken<S: Shared>(CompletionToken<PubComp<S>>));
-
-/// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
-#[derive(Debug)]
-pub struct PubCompToken<S>
-where
-    S: Shared,
-{
-    pkid: PacketIdentifier,
-    tx: Sender<AcknowledgementRequest<S>>,
-    triggered: bool,
-}
-
-impl<S> PubCompToken<S>
-where
-    S: Shared,
-{
-    pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest<S>>) -> Self {
-        Self {
-            pkid,
-            tx,
-            triggered: false,
+    impl<S> Drop for PubRecToken<S>
+    where
+        S: Shared,
+    {
+        fn drop(&mut self) {
+            // Must accept
+            unimplemented!()
         }
     }
 
-    /// Confirm the PUBREL was received by issuing a PUBCOMP.
-    ///
-    /// Consumes itself on call so it cannot be used again.
-    ///
-    /// Returns once the PUBCOMP has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBCOMP is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same session epoch on which it was received.
-    pub async fn confirm(
-        self,
-        properties: PubCompOtherProperties<S>,
-    ) -> Result<PubCompConfirmCompletionToken, ClientError> {
-        unimplemented!()
+    make_completion_token_ty!(pub struct PubRecAcceptCompletionToken<S: Shared>(CompletionToken<(PubRel<S>, PubCompToken<S>)>));
+
+    make_completion_token_ty!(pub struct PubRecRejectCompletionToken(CompletionToken<()>));
+
+    /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
+    #[derive(Debug)]
+    pub struct PubRelToken<S>
+    where
+        S: Shared,
+    {
+        pkid: PacketIdentifier,
+        tx: Sender<AcknowledgementRequest<S>>,
+        triggered: bool,
     }
-}
 
-impl<S> Drop for PubCompToken<S>
-where
-    S: Shared,
-{
-    fn drop(&mut self) {
-        // Must confirm
-        unimplemented!()
-    }
-}
+    impl<S> PubRelToken<S>
+    where
+        S: Shared,
+    {
+        pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest<S>>) -> Self {
+            Self {
+                pkid,
+                tx,
+                triggered: false,
+            }
+        }
 
-make_completion_token_ty!(pub struct PubCompConfirmCompletionToken(CompletionToken<()>));
-
-// TODO: where should this live?
-pub enum AckHandle<S>
-where
-    S: Shared,
-{
-    QoS0,
-    QoS1(PubAckToken<S>),
-    QoS2(PubRecToken<S>),
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::buffer_pool::tests::SharedImpl;
-    use crate::mqtt_proto::byte_str;
-
-    #[tokio::test]
-    async fn puback_token_accept() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let pkid = PacketIdentifier::new(1).unwrap();
-        let epoch = 3;
-        let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Success")),
-            user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
-            ],
-        };
-        let token = PubAckToken::new(pkid, epoch, tx);
-        let completion_token = token.accept(properties.clone()).await.unwrap();
-        if let Some(AcknowledgementRequest::PubAck(notifier, puback, req_epoch)) = rx.recv().await {
-            // The correct data was sent in the acknowledgement request
-            assert_eq!(req_epoch, epoch);
-            assert_eq!(puback.packet_identifier, pkid);
-            assert_eq!(puback.reason_code, PubAckReasonCode::Success);
-            assert_eq!(puback.other_properties, properties);
-            // Using the acknowledgement request notifier completes the completion token that was returned
-            let completion_value = ();
-            notifier.complete(completion_value).unwrap();
-            assert_eq!(completion_token.await, Ok(completion_value));
-        } else {
-            panic!("Did not receive PubAck acknowledgement request");
+        /// Confirm the PUBREC was received by issuing a PUBREL.
+        ///
+        /// Consumes itself on call so it cannot be used again.
+        ///
+        /// Returns once the PUBREL has been accepted into the MQTT session.
+        /// The returned `CompletionToken` resolves once the PUBREL is sent (*after* any ordering necessary).
+        ///
+        /// Can only be successfully used during the same session epoch on which it was received.
+        pub async fn confirm(
+            self,
+            properties: PubRelOtherProperties<S>,
+        ) -> Result<PubRelConfirmCompletionToken<S>, ClientError> {
+            unimplemented!()
         }
     }
 
-    #[tokio::test]
-    async fn puback_token_reject() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let pkid = PacketIdentifier::new(1).unwrap();
-        let epoch = 3;
-        let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Reject")),
-            user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
-            ],
-        };
-        let token = PubAckToken::new(pkid, epoch, tx);
-        let completion_token = token
-            .reject(PubAckReasonCode::NotAuthorized, properties.clone())
-            .await
-            .unwrap();
-        if let Some(AcknowledgementRequest::PubAck(notifier, puback, req_epoch)) = rx.recv().await {
-            assert_eq!(req_epoch, epoch);
-            assert_eq!(puback.packet_identifier, pkid);
-            assert_eq!(puback.reason_code, PubAckReasonCode::NotAuthorized);
-            assert_eq!(puback.other_properties, properties);
-            // Using the acknowledgement request notifier completes the completion token that was returned
-            let completion_value = ();
-            notifier.complete(completion_value).unwrap();
-            assert_eq!(completion_token.await, Ok(completion_value));
-        } else {
-            panic!("Did not receive PubAck acknowledgement request");
+    impl<S> Drop for PubRelToken<S>
+    where
+        S: Shared,
+    {
+        fn drop(&mut self) {
+            // Must confirm
+            unimplemented!()
+        }
+    }
+    make_completion_token_ty!(pub struct PubRelConfirmCompletionToken<S: Shared>(CompletionToken<PubComp<S>>));
+
+    /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
+    #[derive(Debug)]
+    pub struct PubCompToken<S>
+    where
+        S: Shared,
+    {
+        pkid: PacketIdentifier,
+        tx: Sender<AcknowledgementRequest<S>>,
+        triggered: bool,
+    }
+
+    impl<S> PubCompToken<S>
+    where
+        S: Shared,
+    {
+        pub(crate) fn new(pkid: PacketIdentifier, tx: Sender<AcknowledgementRequest<S>>) -> Self {
+            Self {
+                pkid,
+                tx,
+                triggered: false,
+            }
+        }
+
+        /// Confirm the PUBREL was received by issuing a PUBCOMP.
+        ///
+        /// Consumes itself on call so it cannot be used again.
+        ///
+        /// Returns once the PUBCOMP has been accepted into the MQTT session.
+        /// The returned `CompletionToken` resolves once the PUBCOMP is sent (*after* any ordering necessary).
+        ///
+        /// Can only be successfully used during the same session epoch on which it was received.
+        pub async fn confirm(
+            self,
+            properties: PubCompOtherProperties<S>,
+        ) -> Result<PubCompConfirmCompletionToken, ClientError> {
+            unimplemented!()
         }
     }
 
-    #[tokio::test]
-    async fn puback_token_drop_before_use() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let pkid = PacketIdentifier::new(1).unwrap();
-        let epoch = 3;
-        let token = PubAckToken::<SharedImpl>::new(pkid, epoch, tx);
-        // Drop the token without accepting or rejecting it
-        drop(token);
-        // It was accepted automatically with default properties
-        if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
-            assert_eq!(req_epoch, epoch);
-            assert_eq!(puback.packet_identifier, pkid);
-            assert_eq!(puback.reason_code, PubAckReasonCode::Success);
-            assert_eq!(puback.other_properties, Default::default());
-        } else {
-            panic!("Did not receive PubAck acknowledgement request");
+    impl<S> Drop for PubCompToken<S>
+    where
+        S: Shared,
+    {
+        fn drop(&mut self) {
+            // Must confirm
+            unimplemented!()
         }
-        // There are no additional items in the channel (i.e. was only accepted once)
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        assert_eq!(rx.len(), 0);
     }
 
-    #[tokio::test]
-    async fn puback_token_drop_after_use() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let pkid = PacketIdentifier::new(1).unwrap();
-        let epoch = 3;
-        let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Success")),
-            user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
-            ],
-        };
-        let token = PubAckToken::new(pkid, epoch, tx);
-        // Use the token to send an acceptance
-        let completion_token = token.accept(properties.clone()).await.unwrap();
-        if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
-            assert_eq!(req_epoch, epoch);
-            assert_eq!(puback.packet_identifier, pkid);
-            assert_eq!(puback.reason_code, PubAckReasonCode::Success);
-            assert_eq!(puback.other_properties, properties);
-        } else {
-            panic!("Did not receive PubAck acknowledgement request");
-        }
-        // There are currently no other items in the channel
-        assert_eq!(rx.len(), 0);
-        // Now drop the token
-        drop(completion_token);
-        // There should still be no additional items in the channel (i.e. was only accepted once)
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        assert_eq!(rx.len(), 0);
+    make_completion_token_ty!(pub struct PubCompConfirmCompletionToken(CompletionToken<()>));
+
+    // TODO: where should this live?
+    pub enum AckHandle<S>
+    where
+        S: Shared,
+    {
+        QoS0,
+        QoS1(PubAckToken<S>),
+        QoS2(PubRecToken<S>),
     }
 }
+
+// #[cfg(test)]
+// mod test {
+//     use super::buffered::*;
+//     use crate::buffer_pool::tests::SharedImpl;
+//     use crate::mqtt_proto::byte_str;
+
+//     #[tokio::test]
+//     async fn puback_token_accept() {
+//         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+//         let pkid = PacketIdentifier::new(1).unwrap();
+//         let epoch = 3;
+//         let properties = PubAckOtherProperties {
+//             reason_string: Some(byte_str("Test Success")),
+//             user_properties: vec![
+//                 (byte_str("key1"), byte_str("value1")),
+//                 (byte_str("key2"), byte_str("value2")),
+//             ],
+//         };
+//         let token = PubAckToken::new(pkid, epoch, tx);
+//         let completion_token = token.accept(properties.clone()).await.unwrap();
+//         if let Some(AcknowledgementRequest::PubAck(notifier, puback, req_epoch)) = rx.recv().await {
+//             // The correct data was sent in the acknowledgement request
+//             assert_eq!(req_epoch, epoch);
+//             assert_eq!(puback.packet_identifier, pkid);
+//             assert_eq!(puback.reason_code, PubAckReasonCode::Success);
+//             assert_eq!(puback.other_properties, properties);
+//             // Using the acknowledgement request notifier completes the completion token that was returned
+//             let completion_value = ();
+//             notifier.complete(completion_value).unwrap();
+//             assert_eq!(completion_token.await, Ok(completion_value));
+//         } else {
+//             panic!("Did not receive PubAck acknowledgement request");
+//         }
+//     }
+
+//     #[tokio::test]
+//     async fn puback_token_reject() {
+//         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+//         let pkid = PacketIdentifier::new(1).unwrap();
+//         let epoch = 3;
+//         let properties = PubAckOtherProperties {
+//             reason_string: Some(byte_str("Test Reject")),
+//             user_properties: vec![
+//                 (byte_str("key1"), byte_str("value1")),
+//                 (byte_str("key2"), byte_str("value2")),
+//             ],
+//         };
+//         let token = PubAckToken::new(pkid, epoch, tx);
+//         let completion_token = token
+//             .reject(PubAckReasonCode::NotAuthorized, properties.clone())
+//             .await
+//             .unwrap();
+//         if let Some(AcknowledgementRequest::PubAck(notifier, puback, req_epoch)) = rx.recv().await {
+//             assert_eq!(req_epoch, epoch);
+//             assert_eq!(puback.packet_identifier, pkid);
+//             assert_eq!(puback.reason_code, PubAckReasonCode::NotAuthorized);
+//             assert_eq!(puback.other_properties, properties);
+//             // Using the acknowledgement request notifier completes the completion token that was returned
+//             let completion_value = ();
+//             notifier.complete(completion_value).unwrap();
+//             assert_eq!(completion_token.await, Ok(completion_value));
+//         } else {
+//             panic!("Did not receive PubAck acknowledgement request");
+//         }
+//     }
+
+//     #[tokio::test]
+//     async fn puback_token_drop_before_use() {
+//         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+//         let pkid = PacketIdentifier::new(1).unwrap();
+//         let epoch = 3;
+//         let token = PubAckToken::<SharedImpl>::new(pkid, epoch, tx);
+//         // Drop the token without accepting or rejecting it
+//         drop(token);
+//         // It was accepted automatically with default properties
+//         if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
+//             assert_eq!(req_epoch, epoch);
+//             assert_eq!(puback.packet_identifier, pkid);
+//             assert_eq!(puback.reason_code, PubAckReasonCode::Success);
+//             assert_eq!(puback.other_properties, Default::default());
+//         } else {
+//             panic!("Did not receive PubAck acknowledgement request");
+//         }
+//         // There are no additional items in the channel (i.e. was only accepted once)
+//         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+//         assert_eq!(rx.len(), 0);
+//     }
+
+//     #[tokio::test]
+//     async fn puback_token_drop_after_use() {
+//         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+//         let pkid = PacketIdentifier::new(1).unwrap();
+//         let epoch = 3;
+//         let properties = PubAckOtherProperties {
+//             reason_string: Some(byte_str("Test Success")),
+//             user_properties: vec![
+//                 (byte_str("key1"), byte_str("value1")),
+//                 (byte_str("key2"), byte_str("value2")),
+//             ],
+//         };
+//         let token = PubAckToken::new(pkid, epoch, tx);
+//         // Use the token to send an acceptance
+//         let completion_token = token.accept(properties.clone()).await.unwrap();
+//         if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
+//             assert_eq!(req_epoch, epoch);
+//             assert_eq!(puback.packet_identifier, pkid);
+//             assert_eq!(puback.reason_code, PubAckReasonCode::Success);
+//             assert_eq!(puback.other_properties, properties);
+//         } else {
+//             panic!("Did not receive PubAck acknowledgement request");
+//         }
+//         // There are currently no other items in the channel
+//         assert_eq!(rx.len(), 0);
+//         // Now drop the token
+//         drop(completion_token);
+//         // There should still be no additional items in the channel (i.e. was only accepted once)
+//         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+//         assert_eq!(rx.len(), 0);
+//     }
+// }

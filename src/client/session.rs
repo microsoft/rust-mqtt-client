@@ -13,7 +13,6 @@ use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
-use crate::client::token::ReauthCompletionNotifier;
 use crate::client::{
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest,
@@ -21,11 +20,14 @@ use crate::client::{
     },
     session::pkid::PkidPool,
     session::timer::Timer,
-    token::{
-        AckHandle, CompletionNotifier, PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier,
-        PubRelCompletionNotifier, PubRelToken, PublishQoS0CompletionNotifier,
+    token::acknowledgement::buffered::{
+        PubAckToken, PubCompToken, PubRelToken, AckHandle,
+    },
+    token::completion::buffered::{
+        CompletionNotifier, PubRecAcceptCompletionNotifier,
+        PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
         PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
-        UnsubscribeCompletionNotifier,
+        UnsubscribeCompletionNotifier, ReauthCompletionNotifier,
     },
 };
 use crate::mqtt_proto::{

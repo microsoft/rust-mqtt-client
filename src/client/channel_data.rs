@@ -5,12 +5,17 @@
 
 use crate::buffer_pool::Shared;
 use crate::client::token::{
-    AckHandle, CompletionToken, PubAckCompletionNotifier, PubCompCompletionNotifier,
-    PubRecAcceptCompletionNotifier, PubRecRejectCompletionNotifier, PubRelCompletionNotifier,
-    PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
-    ReauthCompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
-    completion_pair,
+    completion::buffered::{
+        PubAckCompletionNotifier, PubCompCompletionNotifier,
+        PubRecAcceptCompletionNotifier, PubRecRejectCompletionNotifier, PubRelCompletionNotifier,
+        PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
+       ReauthCompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+    },
+    acknowledgement::buffered::AckHandle,
 };
+
+
+use crate::client::token::completion::buffered::{CompletionToken, completion_pair};
 use crate::error::ClientError;
 use crate::mqtt_proto::{
     Auth, AuthenticateReasonCode, Authentication, BinaryData, ByteStr, Disconnect, Filter, PubAck,

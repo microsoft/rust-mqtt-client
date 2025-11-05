@@ -21,7 +21,7 @@ use openssl::{
 };
 
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
-use crate::client::token::{CompletionToken, completion_pair};
+use crate::client::token::completion::buffered::{CompletionToken, completion_pair};
 use crate::client::{
     channel_data::{
         DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest, SubscriptionRequest,
@@ -59,7 +59,7 @@ macro_rules! make_completion_token_ty {
         $vis struct $token_ty $(< $($ty_param_name : $ty_param_bound),* >)? (pub(crate) CompletionToken<$element_ty>);
 
         impl $(< $($ty_param_name : $ty_param_bound),* >)? std::future::Future for $token_ty $(< $($ty_param_name ),* >)? {
-            type Output = Result<$element_ty, $crate::client::token::CompletionError>;
+            type Output = Result<$element_ty, $crate::client::token::completion::CompletionError>;
 
             fn poll(
                 mut self: std::pin::Pin<&mut Self>,
@@ -75,7 +75,7 @@ macro_rules! make_completion_token_ty {
         $vis struct $token_ty(pub(crate) CompletionToken<$original_element_ty>);
 
         impl std::future::Future for $token_ty {
-            type Output = Result<$element_ty, $crate::client::token::CompletionError>;
+            type Output = Result<$element_ty, $crate::client::token::completion::CompletionError>;
 
             fn poll(
                 mut self: std::pin::Pin<&mut Self>,
@@ -86,7 +86,7 @@ macro_rules! make_completion_token_ty {
                         std::task::Poll::Ready(Ok(($map_fn)(value)))
                     }
                     std::task::Poll::Ready(Err(_)) => {
-                        std::task::Poll::Ready(Err($crate::client::token::CompletionError::Detatched))
+                        std::task::Poll::Ready(Err($crate::client::token::completion::CompletionError::Detatched))
                     }
                     std::task::Poll::Pending => std::task::Poll::Pending,
                 }
