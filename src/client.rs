@@ -8,9 +8,7 @@
 #![allow(dead_code)]
 #![allow(clippy::unused_async)]
 
-use std::future::Future;
-use std::io;
-use std::pin::pin;
+use std::{io, pin::pin, time::Duration};
 
 use bytes::Bytes;
 use futures_util::future::{self, FutureExt as _};
@@ -21,12 +19,21 @@ use openssl::{
 };
 
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
-use crate::client::token::{CompletionToken, completion_pair};
 use crate::client::{
     channel_data::{
-        DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest, SubscriptionRequest,
+        DisconnectRequest, IncomingPublishAndToken, PublishRequest, ReauthRequest,
+        SubscriptionRequest,
     },
     session::{CompletedOperation, Session},
+    token::{
+        acknowledgement::{PubAckToken, PubRecToken},
+        completion::buffered::completion_pair,
+        completion::{
+            PublishQoS0CompletionToken, PublishQoS1CompletionToken, PublishQoS2CompletionToken,
+            ReauthCompletionToken, SubscribeCompletionToken, UnsubscribeCompletionToken,
+        },
+        reauth::ReauthToken,
+    },
 };
 use crate::error::ClientError;
 use crate::io::{Reader, Writer};
@@ -40,11 +47,9 @@ use crate::mqtt_proto::{
     ProtocolVersion,
 };
 use crate::packet::{
-    Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectOptions,
-    ConnectProperties, Disconnect, DisconnectProperties, KeepAlive, PacketIdentifier, PubAck,
-    PubAckProperties, PubComp, PubCompProperties, PubRec, PubRecProperties, PubRejectReason,
-    PubRel, PubRelProperties, Publish, PublishProperties, QoS, RetainHandling, SubAck,
-    SubscribeProperties, UnsubAck, UnsubscribeProperties,
+    Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
+    DisconnectProperties, KeepAlive, PacketIdentifier, Publish, PublishProperties, QoS,
+    RetainHandling, SubscribeProperties, UnsubscribeProperties, Will,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -53,54 +58,9 @@ use crate::topic::{TopicFilter, TopicName};
 // Should it be MqttSender or something? Or are we fine with the duplicate semantic?
 // Alternatively, maybe we break up connect/disconnect/auth into a separate fourth component?
 
-macro_rules! make_completion_token_ty {
-    ($vis:vis struct $token_ty:ident $( < $($ty_param_name:ident : $ty_param_bound:path ),* > )? (CompletionToken< $element_ty:ty >)) => {
-        #[derive(Debug)]
-        $vis struct $token_ty $(< $($ty_param_name : $ty_param_bound),* >)? (pub(crate) CompletionToken<$element_ty>);
-
-        impl $(< $($ty_param_name : $ty_param_bound),* >)? std::future::Future for $token_ty $(< $($ty_param_name ),* >)? {
-            type Output = Result<$element_ty, $crate::client::token::CompletionError>;
-
-            fn poll(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Self::Output> {
-                std::pin::Pin::new(&mut self.0).poll(cx)
-            }
-        }
-    };
-
-    ($vis:vis struct $token_ty:ident (CompletionToken< $original_element_ty:ty > -> $element_ty:ty $map_fn:block )) => {
-        #[derive(Debug)]
-        $vis struct $token_ty(pub(crate) CompletionToken<$original_element_ty>);
-
-        impl std::future::Future for $token_ty {
-            type Output = Result<$element_ty, $crate::client::token::CompletionError>;
-
-            fn poll(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Self::Output> {
-                match std::pin::Pin::new(&mut self.0).poll(cx) {
-                    std::task::Poll::Ready(Ok(value)) => {
-                        std::task::Poll::Ready(Ok(($map_fn)(value)))
-                    }
-                    std::task::Poll::Ready(Err(_)) => {
-                        std::task::Poll::Ready(Err($crate::client::token::CompletionError::Detatched))
-                    }
-                    std::task::Poll::Pending => std::task::Poll::Pending,
-                }
-            }
-        }
-    };
-}
-
 mod channel_data;
-
 mod session;
-
 pub mod token;
-use token::{PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecRejectCompletionToken};
 
 /// Creates the three components needed to run the MQTT client
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
@@ -389,30 +349,10 @@ impl Client {
     }
 }
 
-make_completion_token_ty!(pub struct PublishQoS0CompletionToken(CompletionToken<()>));
-
-make_completion_token_ty!(pub struct PublishQoS1CompletionToken(CompletionToken<crate::mqtt_proto::PubAck<SharedImpl>> -> PubAck { Into::into }));
-
-make_completion_token_ty!(pub struct PublishQoS2CompletionToken(
-    CompletionToken<(
-        crate::mqtt_proto::PubRec<SharedImpl>,
-        Option<token::PubRelToken<SharedImpl>>,
-    )> -> (
-        PubRec,
-        Option<PubRelToken>,
-    ) {
-        |(pubrec, token): (_, Option<_>)| (PubRec::from(pubrec), token.map(PubRelToken))
-    }
-));
-
-make_completion_token_ty!(pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<SharedImpl>> -> SubAck { Into::into }));
-
-make_completion_token_ty!(pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<SharedImpl>> -> UnsubAck { Into::into }));
-
 /// Receives incoming Application Messages as `Publish`es.
 pub struct Receiver {
     /// Channel for receiving incoming PUBLISH packets
-    rx: tokio::sync::mpsc::UnboundedReceiver<IncomingPublish<SharedImpl>>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<IncomingPublishAndToken<SharedImpl>>,
 }
 
 impl Receiver {
@@ -421,11 +361,8 @@ impl Receiver {
     /// `AckToken` will only be present if the Publish has a QoS of 1 or 2.
     ///
     /// Receiving None indicates that the client has been dropped, and no more messages will be received.
-    pub async fn recv(&mut self) -> Option<(Publish, AckHandle)> {
-        self.rx
-            .recv()
-            .await
-            .map(|(publish, ack_handle)| (publish.into(), ack_handle.into()))
+    pub async fn recv(&mut self) -> Option<(Publish, ManualAcknowledgement)> {
+        self.rx.recv().await.map(Into::into)
     }
 }
 
@@ -437,19 +374,31 @@ pub struct ConnectHandle {
 }
 
 impl ConnectHandle {
+    #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect_enhanced_auth(
         mut self,
         connection_transport: ConnectionTransportConfig,
         clean_start: bool,
         keep_alive: KeepAlive,
-        options: ConnectOptions,
+        will: Option<Will>,
+        username: Option<String>,
+        password: Option<Bytes>,
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
-    ) -> AuthResponse {
+        timeout: Option<Duration>,
+    ) -> ConnectEnhancedAuthResult {
         // TODO: Even with enhanced auth, we may need skip the intermediate auth step if we get a connack
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
-        self.mqtt_connect(&mut writer, clean_start, keep_alive, options, properties)
-            .await;
+        self.mqtt_connect(
+            &mut writer,
+            clean_start,
+            keep_alive,
+            will,
+            username,
+            password,
+            properties,
+        )
+        .await;
 
         match self.mqtt_receive(&mut reader).await {
             Packet::ConnAck(connack) => {
@@ -466,7 +415,7 @@ impl ConnectHandle {
                         reader,
                         writer,
                     };
-                    AuthResponse::Success(
+                    ConnectEnhancedAuthResult::Success(
                         connection,
                         connack.into(),
                         ReauthHandle {
@@ -476,11 +425,11 @@ impl ConnectHandle {
                         DisconnectHandle(disconnect_tx),
                     )
                 } else {
-                    AuthResponse::Failure(self, Some(connack.into()))
+                    ConnectEnhancedAuthResult::Failure(self, Some(connack.into()))
                 }
             }
             Packet::Auth(auth) => {
-                let auth_handle = AuthHandle {
+                let auth_handle = EnhancedAuthHandle {
                     session: self.session,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
@@ -488,24 +437,35 @@ impl ConnectHandle {
                     writer,
                     auth_method: authentication_info.method,
                 };
-                AuthResponse::Continue(auth.into(), auth_handle)
+                ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
             }
             _ => panic!("TODO: error handling"),
         }
     }
 
-    // TODO: Return something like Result<(Connection, ConnAck, DisconnectHandle), (ConnectHandle, ConnAck)>
+    #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect(
         mut self,
         connection_transport: ConnectionTransportConfig,
         clean_start: bool,
         keep_alive: KeepAlive,
-        options: ConnectOptions,
+        will: Option<Will>,
+        username: Option<String>,
+        password: Option<Bytes>,
         properties: ConnectProperties,
-    ) -> (Connection, ConnAck, DisconnectHandle) {
+        timeout: Option<Duration>,
+    ) -> ConnectResult {
         let (mut reader, mut writer) = self.transport_connect(connection_transport).await;
-        self.mqtt_connect(&mut writer, clean_start, keep_alive, options, properties)
-            .await;
+        self.mqtt_connect(
+            &mut writer,
+            clean_start,
+            keep_alive,
+            will,
+            username,
+            password,
+            properties,
+        )
+        .await;
         let Packet::ConnAck(connack) = self.mqtt_receive(&mut reader).await else {
             panic!("TODO: error handling");
         };
@@ -515,7 +475,7 @@ impl ConnectHandle {
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
 
         self.session.ch.disconnect_rx = Some(disconnect_rx);
-        (
+        ConnectResult::Success(
             Connection {
                 session: self.session,
                 reader_pool: self.reader_pool,
@@ -575,20 +535,23 @@ impl ConnectHandle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn mqtt_connect(
         &self,
         writer: &mut Writer<BufferPoolImpl>,
         clean_start: bool,
         keep_alive: KeepAlive,
-        options: ConnectOptions,
+        will: Option<Will>,
+        username: Option<String>,
+        password: Option<Bytes>,
         properties: ConnectProperties,
     ) {
         // Transport has been established. Send CONNECT and wait for CONNACK.
         // TODO: Get values from options
         let connect = Packet::Connect(Connect {
-            username: None, // TODO from options
-            password: None, // TODO from options
-            will: None,
+            username: None,  // TODO
+            password: None,  // TODO
+            will: None,      // TODO
             client_id: None, // TODO from client-wide config
             clean_start,
             keep_alive,
@@ -613,7 +576,7 @@ impl ConnectHandle {
 }
 
 /// Handle for the intermediate step of an MQTT CONNECT with enhanced authentication.
-pub struct AuthHandle {
+pub struct EnhancedAuthHandle {
     session: Session<OwnedImpl>,
     reader_pool: BufferPoolImpl,
     writer_pool: BufferPoolImpl,
@@ -622,12 +585,12 @@ pub struct AuthHandle {
     auth_method: String,
 }
 
-impl AuthHandle {
+impl EnhancedAuthHandle {
     pub async fn continue_auth(
         mut self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> AuthResponse {
+    ) -> ConnectEnhancedAuthResult {
         // Send auth
         let auth = Packet::Auth(
             Auth {
@@ -670,7 +633,7 @@ impl AuthHandle {
                         reader: self.reader,
                         writer: self.writer,
                     };
-                    AuthResponse::Success(
+                    ConnectEnhancedAuthResult::Success(
                         connection,
                         connack.into(),
                         ReauthHandle {
@@ -685,10 +648,10 @@ impl AuthHandle {
                         reader_pool: self.reader_pool,
                         writer_pool: self.writer_pool,
                     };
-                    AuthResponse::Failure(connect_handle, Some(connack.into()))
+                    ConnectEnhancedAuthResult::Failure(connect_handle, Some(connack.into()))
                 }
             }
-            Packet::Auth(auth) => AuthResponse::Continue(auth.into(), self),
+            Packet::Auth(auth) => ConnectEnhancedAuthResult::Continue(auth.into(), self),
             _ => panic!("TODO: error handling"),
         }
     }
@@ -874,52 +837,38 @@ impl ReauthHandle {
     }
 }
 
-make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<channel_data::ReauthResponse<SharedImpl>> -> ReauthResponse { Into::into }));
-
-// ConnectEnahncedAuthResult? implement unwrap?
-pub enum AuthResponse {
-    Continue(Auth, AuthHandle),
-    Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
+/// Indicates the result of an MQTT CONNECT.
+pub enum ConnectResult {
+    Success(Connection, ConnAck, DisconnectHandle),
     Failure(ConnectHandle, Option<ConnAck>),
+    Timeout(ConnectHandle),
 }
 
-pub enum ReauthResponse {
-    // TODO: should this be in channel data and merely re-exported?
+/// Indicates the result of an MQTT CONNECT with enhanced authentication.
+pub enum ConnectEnhancedAuthResult {
+    Continue(Auth, EnhancedAuthHandle),
+    Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
+    Failure(ConnectHandle, Option<ConnAck>),
+    Timeout(ConnectHandle),
+}
+
+/// Indicates the result of an MQTT AUTH operation on an existing connection.
+#[derive(Debug)]
+pub enum ReauthResult {
     Continue(Auth, ReauthToken),
     Success(Auth),
     Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
 }
 
-impl From<channel_data::ReauthResponse<SharedImpl>> for ReauthResponse {
-    fn from(token: channel_data::ReauthResponse<SharedImpl>) -> Self {
-        match token {
-            channel_data::ReauthResponse::Continue(auth, token) => {
+impl From<buffered::ReauthResult<SharedImpl>> for ReauthResult {
+    fn from(value: buffered::ReauthResult<SharedImpl>) -> Self {
+        match value {
+            buffered::ReauthResult::Continue(auth, token) => {
                 Self::Continue(auth.into(), ReauthToken(token))
             }
-            channel_data::ReauthResponse::Success(auth) => Self::Success(auth.into()),
-            channel_data::ReauthResponse::Failure => Self::Failure,
+            buffered::ReauthResult::Success(auth) => Self::Success(auth.into()),
+            buffered::ReauthResult::Failure => Self::Failure,
         }
-    }
-}
-
-// TODO: Should this live in token module? Probably, but is the module even a good idea at this point?
-pub struct ReauthToken(channel_data::ReauthToken<SharedImpl>);
-
-impl ReauthToken {
-    pub async fn continue_reauth(
-        self,
-        authentication_data: Option<Bytes>,
-        properties: AuthProperties,
-    ) -> Result<ReauthCompletionToken, ClientError> {
-        let token = self
-            .0
-            .continue_reauth(
-                authentication_data.as_deref().map(Into::into),
-                properties.reason_string.as_deref().map(Into::into),
-                crate::packet::map_user_properties_to_bytestr(properties.user_properties),
-            )
-            .await?;
-        Ok(ReauthCompletionToken(token.0))
     }
 }
 
@@ -931,150 +880,43 @@ pub enum DisconnectedEvent {
     ServerRequested(Disconnect),
 }
 
-pub enum AckHandle {
+pub enum ManualAcknowledgement {
     QoS0,
     QoS1(PubAckToken),
     QoS2(PubRecToken),
 }
 
-impl From<token::AckHandle<SharedImpl>> for AckHandle {
-    fn from(inner: token::AckHandle<SharedImpl>) -> Self {
+impl From<channel_data::IncomingPublishAndToken<SharedImpl>> for (Publish, ManualAcknowledgement) {
+    fn from(inner: channel_data::IncomingPublishAndToken<SharedImpl>) -> Self {
         match inner {
-            token::AckHandle::QoS0 => Self::QoS0,
-            token::AckHandle::QoS1(token) => Self::QoS1(PubAckToken(token)),
-            token::AckHandle::QoS2(token) => Self::QoS2(PubRecToken(token)),
+            channel_data::IncomingPublishAndToken::QoS0(publish) => {
+                (publish.into(), ManualAcknowledgement::QoS0)
+            }
+            channel_data::IncomingPublishAndToken::QoS1(publish, token) => (
+                publish.into(),
+                ManualAcknowledgement::QoS1(PubAckToken(token)),
+            ),
+            channel_data::IncomingPublishAndToken::QoS2(publish, token) => (
+                publish.into(),
+                ManualAcknowledgement::QoS2(PubRecToken(token)),
+            ),
         }
     }
 }
 
-#[derive(Debug)]
-pub struct PubAckToken(token::PubAckToken<SharedImpl>);
+mod buffered {
+    use crate::buffer_pool::Shared;
+    use crate::client::token::reauth::buffered::ReauthToken;
+    use crate::mqtt_proto::Auth;
 
-impl PubAckToken {
-    /// Accept the received PUBLISH by issuing a PUBACK indicating success.
-    ///
-    /// Consumes itself on call, so it cannot be used again.
-    ///
-    /// Returns once the PUBACK has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same connection epoch on which it was received.
-    pub fn accept(
-        self,
-        properties: PubAckProperties,
-    ) -> impl Future<Output = Result<PubAckCompletionToken, ClientError>> {
-        self.0.accept(properties.into())
-    }
-
-    /// Reject the received PUBLISH by issuing a PUBACK with an error reason code.
-    ///
-    /// Consumes itself on call so it cannot be used again.
-    ///
-    /// Returns once the PUBACK has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
-    pub fn reject(
-        self,
-        reason: PubRejectReason,
-        properties: PubAckProperties,
-    ) -> impl Future<Output = Result<PubAckCompletionToken, ClientError>> {
-        self.0.reject(reason.into(), properties.into())
-    }
-}
-
-#[derive(Debug)]
-pub struct PubRecToken(token::PubRecToken<SharedImpl>);
-
-impl PubRecToken {
-    /// Accept the received PUBLISH by issuing a PUBREC indicating success.
-    ///
-    /// Consumes itself on call, so it cannot be used again.
-    ///
-    /// Returns once the PUBREC has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same session epoch on which it was received.
-    pub async fn accept(
-        self,
-        properties: PubRecProperties,
-    ) -> Result<PubRecAcceptCompletionToken, ClientError> {
-        self.0
-            .accept(properties.into())
-            .await
-            .map(|token| PubRecAcceptCompletionToken(token.0))
-    }
-
-    /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
-    ///
-    /// Consumes itself on call so it cannot be used again.
-    ///
-    /// Returns once the PUBREC has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same session epoch on which it was received.
-    pub fn reject(
-        self,
-        reason: PubRejectReason,
-        properties: PubRecProperties,
-    ) -> impl Future<Output = Result<PubRecRejectCompletionToken, ClientError>> {
-        self.0.reject(reason.into(), properties.into())
-    }
-}
-
-make_completion_token_ty!(pub struct PubRecAcceptCompletionToken(
-    CompletionToken<(
-        crate::mqtt_proto::PubRel<SharedImpl>,
-        token::PubCompToken<SharedImpl>,
-    )> -> (
-        PubRel,
-        PubCompToken,
-    ) {
-        |(pubrel, pubcomp_token)| (PubRel::from(pubrel), PubCompToken(pubcomp_token))
-    }
-));
-
-/// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
-#[derive(Debug)]
-pub struct PubRelToken(token::PubRelToken<SharedImpl>);
-
-impl PubRelToken {
-    /// Confirm the PUBREC was received by issuing a PUBREL.
-    ///
-    /// Consumes itself on call so it cannot be used again.
-    ///
-    /// Returns once the PUBREL has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREL is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same session epoch on which it was received.
-    pub async fn confirm(
-        self,
-        properties: PubRelProperties,
-    ) -> Result<PubRelCompletionToken, ClientError> {
-        self.0
-            .confirm(properties.into())
-            .await
-            .map(|token| PubRelCompletionToken(token.0))
-    }
-}
-
-make_completion_token_ty!(pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<SharedImpl>> -> PubComp { Into::into }));
-
-/// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
-#[derive(Debug)]
-pub struct PubCompToken(token::PubCompToken<SharedImpl>);
-
-impl PubCompToken {
-    /// Confirm the PUBREL was received by issuing a PUBCOMP.
-    ///
-    /// Consumes itself on call so it cannot be used again.
-    ///
-    /// Returns once the PUBCOMP has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBCOMP is sent (*after* any ordering necessary).
-    ///
-    /// Can only be successfully used during the same session epoch on which it was received.
-    pub fn confirm(
-        self,
-        properties: PubCompProperties,
-    ) -> impl Future<Output = Result<PubCompConfirmCompletionToken, ClientError>> {
-        self.0.confirm(properties.into())
+    /// Indicates the result of an MQTT AUTH operation on an existing connection.
+    #[derive(Debug)]
+    pub enum ReauthResult<S>
+    where
+        S: Shared,
+    {
+        Continue(Auth<S>, ReauthToken<S>),
+        Success(Auth<S>),
+        Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
     }
 }

@@ -26,13 +26,6 @@ pub enum ClientError {
     TooLarge, // This could happen even without payload due to large user properties, of, say, a subscribe
 }
 
-/// Indicates a failure to complete the MQTT exchange for an operation
-/// i.e. cancelled due to disconnect on QoS 1
-/// i.e. session ended for QoS 1 or QoS 2
-/// TODO: enum? Does the cause matter?
-#[derive(Debug)]
-pub struct CompletionError {}
-
 /// Indicates that the MQTT operation did not complete successfully
 /// NOTE: Does NOT contain the reason code as an enum, as it must be agnostic to the operation type.
 #[derive(Debug)]

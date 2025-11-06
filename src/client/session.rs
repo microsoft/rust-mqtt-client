@@ -13,20 +13,22 @@ use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
 use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
-use crate::client::token::ReauthCompletionNotifier;
 use crate::client::{
+    buffered::ReauthResult,
     channel_data::{
-        AcknowledgementRequest, DisconnectRequest, IncomingPublish, PublishRequest, ReauthRequest,
-        ReauthResponse, ReauthToken, SubscriptionRequest,
+        AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequest,
+        ReauthRequest, SubscriptionRequest,
     },
     session::pkid::PkidPool,
     session::timer::Timer,
-    token::{
-        AckHandle, CompletionNotifier, PubAckToken, PubCompToken, PubRecAcceptCompletionNotifier,
-        PubRelCompletionNotifier, PubRelToken, PublishQoS0CompletionNotifier,
-        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, SubscribeCompletionNotifier,
+    token::acknowledgement::buffered::{PubAckToken, PubCompToken, PubRelToken},
+    token::completion::buffered::{
+        CompletionNotifier, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
+        PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
+        PublishQoS2CompletionNotifier, ReauthCompletionNotifier, SubscribeCompletionNotifier,
         UnsubscribeCompletionNotifier,
     },
+    token::reauth::buffered::ReauthToken,
 };
 use crate::mqtt_proto::{
     Auth, AuthenticateReasonCode, ByteStr, ConnAck, ConnectReasonCode, Disconnect, Packet,
@@ -73,7 +75,7 @@ where
         o_pub_rx: Receiver<PublishRequest<O::Shared>>,
         ack_rx: Receiver<AcknowledgementRequest<O::Shared>>,
         auth_rx: Receiver<ReauthRequest<O::Shared>>,
-        i_pub_tx: UnboundedSender<IncomingPublish<O::Shared>>,
+        i_pub_tx: UnboundedSender<IncomingPublishAndToken<O::Shared>>,
         ack_tx: Sender<AcknowledgementRequest<O::Shared>>,
         auth_tx: Sender<ReauthRequest<O::Shared>>,
         max_pkid: PacketIdentifier,
@@ -480,8 +482,6 @@ where
     }
 
     /// Trigger a disconnect and adjust state based on the information in the incoming `Disconnect` packet
-    #[allow(clippy::needless_pass_by_value)] //TODO: Remove
-    #[allow(clippy::unused_self)]
     pub fn server_disconnect(&mut self, disconnect: &Disconnect<O::Shared>) {
         log::error!("client disconnected due to server {disconnect:?}");
 
@@ -507,8 +507,8 @@ where
 
     /// An incoming PUBLISH packet has been received from the server
     pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
-        let ack_handle = match publish.packet_identifier_dup_qos {
-            PacketIdentifierDupQoS::AtMostOnce => AckHandle::QoS0,
+        let incoming = match publish.packet_identifier_dup_qos {
+            PacketIdentifierDupQoS::AtMostOnce => IncomingPublishAndToken::QoS0(publish),
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
                 let r = self
                     .in_application
@@ -520,11 +520,14 @@ where
                     r.is_none(),
                     "TODO: Handle the case where pkid already exists"
                 );
-                AckHandle::QoS1(PubAckToken::new(
-                    packet_identifier,
-                    self.connection_epoch,
-                    self.ch.ack_tx.clone(),
-                ))
+                IncomingPublishAndToken::QoS1(
+                    publish,
+                    PubAckToken::new(
+                        packet_identifier,
+                        self.connection_epoch,
+                        self.ch.ack_tx.clone(),
+                    ),
+                )
             }
             PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
                 self.in_application
@@ -533,10 +536,11 @@ where
                 todo!()
             }
         };
+
         // TODO: Register ack tracking if QoS 1 or 2
         self.ch
             .i_pub_tx
-            .send((publish, ack_handle))
+            .send(incoming)
             .expect("TODO: error handling");
     }
 
@@ -546,7 +550,7 @@ where
             // TODO: Validate authentication method from CONNACK
             AuthenticateReasonCode::Success => {
                 let notifier = self.inflight.auth.take().expect("TODO: error handling");
-                _ = notifier.complete(ReauthResponse::Success(auth));
+                _ = notifier.complete(ReauthResult::Success(auth));
             }
             AuthenticateReasonCode::ContinueAuthentication => {
                 //pass on, do not stop tracking
@@ -560,7 +564,7 @@ where
                         .clone(),
                     tx: self.ch.auth_tx.clone(),
                 };
-                _ = notifier.complete(ReauthResponse::Continue(auth, token));
+                _ = notifier.complete(ReauthResult::Continue(auth, token));
             }
             AuthenticateReasonCode::ReAuthenticate => unreachable!(
                 "AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server"
@@ -703,8 +707,8 @@ where
     ack_rx: Receiver<AcknowledgementRequest<S>>,
     /// Channel for receiving outgoing AUTH requests
     auth_rx: Receiver<ReauthRequest<S>>,
-    /// Channel for sending incoming PUBLISH requests
-    i_pub_tx: UnboundedSender<IncomingPublish<S>>,
+    /// Channel for sending incoming PUBLISHes and associated acknowledgement tokens
+    i_pub_tx: UnboundedSender<IncomingPublishAndToken<S>>,
 
     // --- Channels stored here to be cloned, and should not be used directly ---
     // TODO: Is this really the correct place for these?

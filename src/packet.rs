@@ -94,10 +94,10 @@ impl From<DeliveryQoS> for mqtt_proto::PacketIdentifierDupQoS {
 }
 
 /// Information about a delivery of a PUBLISH packet with QoS 1 or 2
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct DeliveryInfo {
-    dup: bool,
-    packet_identifier: PacketIdentifier,
+    pub dup: bool,
+    pub packet_identifier: PacketIdentifier,
 }
 
 /// Indicates whether the payload is UTF-8 encoded or not
@@ -142,6 +142,7 @@ where
 
 /// Represents a Will Message that will be stored on the server and published after the MQTT
 /// session ends, or after the delay interval elapses after a disconnect
+#[derive(Clone)]
 pub struct Will {
     /// Number of seconds after a disconnect before the Will message is published
     pub delay_interval: u32,
@@ -155,16 +156,6 @@ pub struct Will {
     pub payload: Bytes,
     /// Properties for the Will message
     pub properties: PublishProperties,
-}
-
-#[derive(Default)]
-pub struct ConnectOptions {
-    /// Will message for the connection
-    pub will: Option<Will>,
-    /// Username for authentication of the connection
-    pub username: Option<String>,
-    /// Password for authentication of the connection
-    pub password: Option<String>,
 }
 
 //////////////////// Packets ////////////////////

@@ -5,17 +5,19 @@
 
 use crate::buffer_pool::Shared;
 use crate::client::token::{
-    AckHandle, CompletionToken, PubAckCompletionNotifier, PubCompCompletionNotifier,
-    PubRecAcceptCompletionNotifier, PubRecRejectCompletionNotifier, PubRelCompletionNotifier,
-    PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier,
-    ReauthCompletionNotifier, SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
-    completion_pair,
+    acknowledgement::buffered::{PubAckToken, PubRecToken},
+    completion::buffered::{
+        PubAckCompletionNotifier, PubCompCompletionNotifier, PubRecAcceptCompletionNotifier,
+        PubRecRejectCompletionNotifier, PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
+        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, ReauthCompletionNotifier,
+        SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+    },
 };
-use crate::error::ClientError;
+
 use crate::mqtt_proto::{
-    Auth, AuthenticateReasonCode, Authentication, BinaryData, ByteStr, Disconnect, Filter, PubAck,
-    PubComp, PubRec, PubRel, Publish, PublishOtherProperties, SubscribeOptions,
-    SubscribeOtherProperties, Topic, UnsubscribeOtherProperties, UserProperties,
+    Auth, ByteStr, Disconnect, Filter, PubAck, PubComp, PubRec, PubRel, Publish,
+    PublishOtherProperties, SubscribeOptions, SubscribeOtherProperties, Topic,
+    UnsubscribeOtherProperties,
 };
 
 // TODO: I don't love the "Request" naming, because it implies a "Response" structure which doens't exist.
@@ -90,63 +92,17 @@ where
     PubComp(PubCompCompletionNotifier, PubComp<S>),
 }
 
-/// Request to send an AUTH packet
-pub struct ReauthRequest<S>(pub ReauthCompletionNotifier<S>, pub Auth<S>)
+/// Request to send an AUTH packet (reauth flow)
+pub struct ReauthRequest<S>(pub(crate) ReauthCompletionNotifier<S>, pub Auth<S>)
 where
     S: Shared;
 
 /// Incoming Publish + Acknowledgement infrastructure
-pub type IncomingPublish<S> = (Publish<S>, AckHandle<S>);
-
-// TODO: Move these to a more appropriate place
-
-#[derive(Debug)]
-pub enum ReauthResponse<S>
+pub enum IncomingPublishAndToken<S>
 where
     S: Shared,
 {
-    // TODO: should this be in channel data and merely re-exported?
-    Continue(Auth<S>, ReauthToken<S>),
-    Success(Auth<S>),
-    Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
+    QoS0(Publish<S>),
+    QoS1(Publish<S>, PubAckToken<S>),
+    QoS2(Publish<S>, PubRecToken<S>),
 }
-
-// TODO: Should this live in token module? Probably, but is the module even a good idea at this point?
-#[derive(Debug)]
-pub struct ReauthToken<S>
-where
-    S: Shared,
-{
-    pub method: ByteStr<S>,
-    pub tx: tokio::sync::mpsc::Sender<ReauthRequest<S>>,
-}
-
-impl<S> ReauthToken<S>
-where
-    S: Shared,
-{
-    pub async fn continue_reauth(
-        self,
-        authentication_data: Option<BinaryData<S>>,
-        reason_string: Option<ByteStr<S>>,
-        user_properties: UserProperties<S>,
-    ) -> Result<ReauthCompletionToken<S>, ClientError> {
-        let (notifier, token) = completion_pair();
-        let auth = Auth {
-            reason_code: AuthenticateReasonCode::ContinueAuthentication,
-            authentication: Some(Authentication {
-                method: self.method,
-                data: authentication_data,
-            }),
-            reason_string,
-            user_properties,
-        };
-        self.tx
-            .send(ReauthRequest(notifier, auth))
-            .await
-            .map_err(|_| ClientError::DetachedClient)?;
-        Ok(ReauthCompletionToken(token))
-    }
-}
-
-make_completion_token_ty!(pub struct ReauthCompletionToken<S: Shared>(CompletionToken<ReauthResponse<S>>));

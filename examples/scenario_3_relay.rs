@@ -2,11 +2,11 @@
 // Licensed under the MIT License.
 
 use azure_mqtt::client::{
-    Client, ClientOptions, ConnectHandle, ConnectionTransportConfig, Receiver, new_client,
+    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig, Receiver,
+    new_client,
 };
 use azure_mqtt::packet::{
-    ConnectOptions, ConnectProperties, DeliveryQoS, KeepAlive, QoS, RetainHandling,
-    SubscribeProperties,
+    ConnectProperties, DeliveryQoS, KeepAlive, QoS, RetainHandling, SubscribeProperties,
 };
 use azure_mqtt::topic::TopicFilter;
 
@@ -48,7 +48,8 @@ async fn main() {
 
 async fn mqtt_run(mut connect_handle: ConnectHandle) {
     loop {
-        let (connection, _, _) = connect_handle
+        println!("Attempting to connect to MQTT broker...");
+        connect_handle = match connect_handle
             .connect(
                 ConnectionTransportConfig::Tcp {
                     hostname: HOSTNAME.to_string(),
@@ -56,15 +57,28 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                 },
                 false,
                 KeepAlive::Infinite,
-                ConnectOptions::default(),
+                None,
+                None,
+                None,
                 ConnectProperties::default(),
+                None,
             )
-            .await;
-        println!("Connected to MQTT broker");
-        (connect_handle, _) = connection.run_until_disconnect().await;
-        println!("Disconnected from MQTT broker");
-        println!("Connection lost, will reconnect in 5 seconds...");
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            .await
+        {
+            ConnectResult::Success(connection, _, _) => {
+                println!("Connected to MQTT broker");
+                connect_handle = connection.run_until_disconnect().await.0;
+                println!("Disconnected from MQTT broker");
+                println!("Connection lost, will reconnect in 5 seconds...");
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                connect_handle
+            }
+            ConnectResult::Failure(connect_handle, _) | ConnectResult::Timeout(connect_handle) => {
+                println!("Failed to connect to MQTT broker, retrying in 5 seconds...");
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                connect_handle
+            }
+        }
     }
 }
 

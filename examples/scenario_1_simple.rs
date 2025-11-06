@@ -2,11 +2,12 @@
 // Licensed under the MIT License.
 
 use azure_mqtt::client::{
-    AckHandle, Client, ClientOptions, Connection, ConnectionTransportConfig, Receiver, new_client,
+    Client, ClientOptions, ConnectResult, Connection, ConnectionTransportConfig,
+    ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
-    ConnectOptions, ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties,
-    PubRecProperties, PublishProperties, QoS, RetainHandling, SubscribeProperties,
+    ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties, PubRecProperties,
+    PublishProperties, QoS, RetainHandling, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -24,7 +25,7 @@ async fn main() {
     let (client, connect_handle, receiver) = new_client(options);
 
     // Connect to the MQTT broker and wait for the connection to complete
-    let (connection, _, _) = connect_handle
+    if let ConnectResult::Success(connection, _, _) = connect_handle
         .connect(
             ConnectionTransportConfig::Tcp {
                 hostname: HOSTNAME.to_string(),
@@ -32,22 +33,29 @@ async fn main() {
             },
             false,
             KeepAlive::Infinite,
-            ConnectOptions::default(),
+            None,
+            None,
+            None,
             ConnectProperties::default(),
+            None,
         )
-        .await;
-    println!("Connected to MQTT broker");
+        .await
+    {
+        println!("Connected to MQTT broker");
 
-    tokio::select! {
-        () = connection_runner(connection) => {
-            // Connection runner finished
+        tokio::select! {
+            () = connection_runner(connection) => {
+                // Connection runner finished
+            }
+            () = receive(receiver) => {
+                // Receiver finished
+            }
+            () = program(client) => {
+                // Program finished
+            }
         }
-        () = receive(receiver) => {
-            // Receiver finished
-        }
-        () = program(client) => {
-            // Program finished
-        }
+    } else {
+        println!("Failed to connect to MQTT broker");
     }
 }
 
@@ -95,19 +103,19 @@ async fn connection_runner(connection: Connection) {
 
 async fn receive(mut receiver: Receiver) {
     loop {
-        while let Some((publish, ack_handle)) = receiver.recv().await {
-            // NOTE: If you don't want manual ack, simply ignore the ack_token by using a _, and it
+        while let Some((publish, ack)) = receiver.recv().await {
+            // NOTE: If you don't want manual ack, simply ignore it by using a _, and it
             // will be acked automatically on drop.
             // No need for "manual ack" setting on the client.
 
             // NOTE: Delegate any of this to another task if you like.
 
-            match ack_handle {
-                AckHandle::QoS0 => {
+            match ack {
+                ManualAcknowledgement::QoS0 => {
                     println!("Received publish on QoS 0");
                     println!("Publish does not require acknowledgment (QoS 0)");
                 }
-                AckHandle::QoS1(puback_token) => {
+                ManualAcknowledgement::QoS1(puback_token) => {
                     println!("Received publish on QoS 1");
                     let ct = puback_token
                         .accept(PubAckProperties::default())
@@ -116,7 +124,7 @@ async fn receive(mut receiver: Receiver) {
                     ct.await.unwrap();
                     println!("Publish acknowledged! (QoS 1)");
                 }
-                AckHandle::QoS2(pubrec_token) => {
+                ManualAcknowledgement::QoS2(pubrec_token) => {
                     println!("Received publish on QoS 2");
                     let ct = pubrec_token
                         .accept(PubRecProperties::default())
