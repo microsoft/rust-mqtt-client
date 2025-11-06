@@ -20,7 +20,7 @@ async fn main() {
     // This would be a builder pattern in a real implementation.
     let options = ClientOptions {
         client_id: Some(CLIENT_ID.to_string()),
-        queue_size: 10,
+        ..Default::default()
     };
     let (client, connect_handle, receiver) = new_client(options);
 

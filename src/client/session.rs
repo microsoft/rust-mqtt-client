@@ -16,8 +16,8 @@ use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
     buffered::ReauthResult,
     channel_data::{
-        AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequest,
-        ReauthRequest, SubscriptionRequest,
+        AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0,
+        PublishRequestQoS1QoS2, ReauthRequest, SubscriptionRequest,
     },
     session::pkid::PkidPool,
     session::timer::Timer,
@@ -72,7 +72,8 @@ where
     #[allow(clippy::too_many_arguments)] // TODO: Honestly, probably should address this
     pub fn new(
         sub_rx: Receiver<SubscriptionRequest<O::Shared>>,
-        o_pub_rx: Receiver<PublishRequest<O::Shared>>,
+        o_pub_q0_rx: Receiver<PublishRequestQoS0<O::Shared>>,
+        o_pub_q12_rx: Receiver<PublishRequestQoS1QoS2<O::Shared>>,
         ack_rx: Receiver<AcknowledgementRequest<O::Shared>>,
         auth_rx: Receiver<ReauthRequest<O::Shared>>,
         i_pub_tx: UnboundedSender<IncomingPublishAndToken<O::Shared>>,
@@ -83,7 +84,8 @@ where
     ) -> Self {
         let ch = Channels {
             disconnect_rx: None,
-            o_pub_rx: ReceiverStream(o_pub_rx).peekable(),
+            o_pub_q0_rx,
+            o_pub_q12_rx: ReceiverStream(o_pub_q12_rx).peekable(),
             sub_rx: ReceiverStream(sub_rx).peekable(),
             ack_rx,
             auth_rx,
@@ -699,8 +701,10 @@ where
     // --- Channels used to receive in the Session ---
     /// Channel for receiving outgoing CONNECT and DISCONNECT requests
     pub(crate) disconnect_rx: Option<tokio::sync::oneshot::Receiver<DisconnectRequest<S>>>,
-    /// Channel for receiving outgoing PUBLISH requests
-    o_pub_rx: Peekable<ReceiverStream<PublishRequest<S>>>,
+    /// Channel for receiving outgoing PUBLISH requests (QoS 0)
+    o_pub_q0_rx: Receiver<PublishRequestQoS0<S>>,
+    /// Channel for receiving outgoing PUBLISH requests (QoS 1, 2)
+    o_pub_q12_rx: Peekable<ReceiverStream<PublishRequestQoS1QoS2<S>>>,
     /// Channel for receiving outgoing SUBSCRIBE and UNSUBSCRIBE requests
     sub_rx: Peekable<ReceiverStream<SubscriptionRequest<S>>>,
     /// Channel for receving outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
@@ -784,17 +788,18 @@ where
             // ... else: User dropped the disconnect_tx, so there's nothing more to do.
         }
 
-        // TODO: Add support for ordered acking ready notification here
-
+        // Next priority are acknowledgements, as they can free up packet ids
         if let Poll::Ready(Some(ack_req)) = ch.ack_rx.poll_recv(cx) {
             return Poll::Ready(OutgoingPacketRequest::AcknowledgementRequest(ack_req));
         }
 
+        // Next priority are auth requests as they are important for maintaining connection
         // TODO: Ideally, no polling for reauth if one is already in progress
         if let Poll::Ready(Some(auth_req)) = ch.auth_rx.poll_recv(cx) {
             return Poll::Ready(OutgoingPacketRequest::ReauthRequest(auth_req));
         }
 
+        // Next priority are subscription requests
         if let Poll::Ready(Some(_)) = Pin::new(&mut ch.sub_rx).peek().poll_unpin(cx)
             && let Some(pkid) = pkid_pool.lease_next_pkid()
         {
@@ -804,43 +809,44 @@ where
             return Poll::Ready(OutgoingPacketRequest::SubscriptionRequest(sub_req, pkid));
         }
 
-        if let Poll::Ready(Some(publish)) = Pin::new(&mut ch.o_pub_rx).peek().poll_unpin(cx) {
-            if matches!(publish, PublishRequest::PublishQoS0(..)) {
-                let Poll::Ready(Some(PublishRequest::PublishQoS0(
+        // Next priority are QoS 0 publishes (which do not need packet ids)
+        if let Poll::Ready(Some(pub_req)) = ch.o_pub_q0_rx.poll_recv(cx) {
+            let PublishRequestQoS0(notifier, topic, payload, retain, properties) = pub_req;
+            return Poll::Ready(OutgoingPacketRequest::PublishRequest(
+                PublishRequestWithPkid::PublishQoS0(notifier, topic, payload, retain, properties),
+            ));
+        }
+
+        // Next priority are QoS 1 and QoS 2 publishes (which do need packet ids)
+        if let Poll::Ready(Some(publish)) = Pin::new(&mut ch.o_pub_q12_rx).peek().poll_unpin(cx)
+            && let Some(pkid) = pkid_pool.lease_next_pkid()
+        {
+            let Poll::Ready(Some(publish)) = ch.o_pub_q12_rx.poll_next_unpin(cx) else {
+                unreachable!("peek() confirmed the stream has an element");
+            };
+            return Poll::Ready(OutgoingPacketRequest::PublishRequest(match publish {
+                PublishRequestQoS1QoS2::PublishQoS1(
                     notifier,
                     topic,
                     payload,
                     retain,
                     properties,
-                ))) = ch.o_pub_rx.poll_next_unpin(cx)
-                else {
-                    unreachable!("peek() confirmed the stream has an element");
-                };
-                return Poll::Ready(OutgoingPacketRequest::PublishRequest(
-                    PublishRequestWithPkid::PublishQoS0(
-                        notifier, topic, payload, retain, properties,
-                    ),
-                ));
-            } else if let Some(pkid) = pkid_pool.lease_next_pkid() {
-                let Poll::Ready(Some(publish)) = ch.o_pub_rx.poll_next_unpin(cx) else {
-                    unreachable!("peek() confirmed the stream has an element");
-                };
-                return Poll::Ready(OutgoingPacketRequest::PublishRequest(match publish {
-                    PublishRequest::PublishQoS0(..) => unreachable!("handled above"),
-                    PublishRequest::PublishQoS1(notifier, topic, payload, retain, properties) => {
-                        PublishRequestWithPkid::PublishQoS1(
-                            notifier, topic, payload, retain, properties, pkid,
-                        )
-                    }
-                    PublishRequest::PublishQoS2(notifier, topic, payload, retain, properties) => {
-                        PublishRequestWithPkid::PublishQoS2(
-                            notifier, topic, payload, retain, properties, pkid,
-                        )
-                    }
-                }));
-            }
+                ) => PublishRequestWithPkid::PublishQoS1(
+                    notifier, topic, payload, retain, properties, pkid,
+                ),
+                PublishRequestQoS1QoS2::PublishQoS2(
+                    notifier,
+                    topic,
+                    payload,
+                    retain,
+                    properties,
+                ) => PublishRequestWithPkid::PublishQoS2(
+                    notifier, topic, payload, retain, properties, pkid,
+                ),
+            }));
         }
 
+        // Finally, if no other packets are ready to send, check if enought time has elapsed for a ping
         if let Some(ref mut pingreq_timer) = pingreq_timer
             && let Poll::Ready(()) = Pin::new(&mut *pingreq_timer).poll(cx)
         {

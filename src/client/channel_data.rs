@@ -28,19 +28,20 @@ pub struct DisconnectRequest<S>(pub Disconnect<S>)
 where
     S: Shared;
 
-/// Request to send a PUBLISH packet.
-#[allow(clippy::redundant_field_names)]
-pub enum PublishRequest<S>
+pub struct PublishRequestQoS0<S>(
+    pub PublishQoS0CompletionNotifier,
+    pub Topic<ByteStr<S>>,
+    pub S,
+    pub bool,
+    pub PublishOtherProperties<S>,
+)
+where
+    S: Shared;
+
+pub enum PublishRequestQoS1QoS2<S>
 where
     S: Shared,
 {
-    PublishQoS0(
-        PublishQoS0CompletionNotifier,
-        Topic<ByteStr<S>>,
-        S,
-        bool,
-        PublishOtherProperties<S>,
-    ),
     PublishQoS1(
         PublishQoS1CompletionNotifier<S>,
         Topic<ByteStr<S>>,
