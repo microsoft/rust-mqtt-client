@@ -66,7 +66,7 @@ pub mod token;
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
 pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let (o_pub_q12_tx, o_pub_q12_rx) =
-        tokio::sync::mpsc::channel(options.publish_qos1_qos1_queue_size);
+        tokio::sync::mpsc::channel(options.publish_qos1_qos2_queue_size);
     let (o_pub_q0_tx, o_pub_q0_rx) = tokio::sync::mpsc::channel(options.publish_qos0_queue_size);
     // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
     // owned by the internal session state. If this becomes a performance bottleneck, revisit.
@@ -114,7 +114,7 @@ pub struct ClientOptions {
     /// Maximum size of the outgoing queue for QoS 0 PUBLISH packets.
     pub publish_qos0_queue_size: usize,
     /// Maximum size of the outgoing queue for QoS 1 and 2 PUBLISH packets.
-    pub publish_qos1_qos1_queue_size: usize,
+    pub publish_qos1_qos2_queue_size: usize,
     // TODO: Consider using a Builder pattern?
 }
 
@@ -124,7 +124,7 @@ impl Default for ClientOptions {
             client_id: None,
             max_packet_identifier: PacketIdentifier::MAX,
             publish_qos0_queue_size: 100,
-            publish_qos1_qos1_queue_size: 100,
+            publish_qos1_qos2_queue_size: 100,
         }
     }
 }
