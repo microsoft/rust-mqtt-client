@@ -22,14 +22,14 @@ async fn main() {
     // Downstream client
     let options = ClientOptions {
         client_id: Some(DOWNSTREAM_CLIENT_ID.to_string()),
-        queue_size: 10,
+        ..Default::default()
     };
     let (ds_client, ds_connect_handle, ds_receiver) = new_client(options);
 
     // Upstream client
     let options = ClientOptions {
         client_id: Some(UPSTREAM_CLIENT_ID.to_string()),
-        queue_size: 10,
+        ..Default::default()
     };
     let (us_client, us_connect_handle, _) = new_client(options);
 

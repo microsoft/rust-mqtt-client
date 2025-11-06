@@ -67,7 +67,7 @@ pub mod token;
 pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
     // owned by the internal session state. If this becomes a performance bottleneck, revisit.
-    let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(1);
+    let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(options.publish_queue_size);
     let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
     let (ack_tx, ack_rx) = tokio::sync::mpsc::channel(1);
     let (auth_tx, auth_rx) = tokio::sync::mpsc::channel(1);
@@ -89,7 +89,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         i_pub_tx,
         ack_tx,
         auth_tx,
-        PacketIdentifier::new(100).expect("100 is always okay"), // TODO: customizable
+        options.max_packet_identifier,
         owned,
     );
     let connect_handle = ConnectHandle {
@@ -105,10 +105,21 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
 pub struct ClientOptions {
     /// MQTT Client Identifier. If None, the MQTT server will assign one.
     pub client_id: Option<String>,
-    /// Maximum size of the outgoing message queue
-    pub queue_size: usize,
-    // Any other options can be added here, but there really ought not be many.
-    // TODO: Use a builder pattern?
+    /// Maximum packet identifier
+    pub max_packet_identifier: PacketIdentifier,
+    /// Maximum size of the outgoing queue for PUBLISH packets.
+    pub publish_queue_size: usize,
+    // TODO: Consider using a Builder pattern?
+}
+
+impl Default for ClientOptions {
+    fn default() -> Self {
+        Self {
+            client_id: None,
+            max_packet_identifier: PacketIdentifier::MAX,
+            publish_queue_size: 100,
+        }
+    }
 }
 
 /// Parameters for establishing a new connection.

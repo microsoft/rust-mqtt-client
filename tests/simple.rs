@@ -16,7 +16,7 @@ use tokio::sync::mpsc::unbounded_channel;
 async fn connect_connack_success() {
     let options = ClientOptions {
         client_id: Some("foo".to_string()),
-        queue_size: 10,
+        ..Default::default()
     };
     let (_client, connect_handle, _receiver) = new_client(options);
 
