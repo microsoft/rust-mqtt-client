@@ -65,11 +65,11 @@ pub mod token;
 /// Creates the three components needed to run the MQTT client
 #[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
 pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
-    // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
-    // owned by the internal session state. If this becomes a performance bottleneck, revisit.
     let (o_pub_q12_tx, o_pub_q12_rx) =
         tokio::sync::mpsc::channel(options.publish_qos1_qos1_queue_size);
     let (o_pub_q0_tx, o_pub_q0_rx) = tokio::sync::mpsc::channel(options.publish_qos0_queue_size);
+    // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
+    // owned by the internal session state. If this becomes a performance bottleneck, revisit.
     let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
     let (ack_tx, ack_rx) = tokio::sync::mpsc::channel(1);
     let (auth_tx, auth_rx) = tokio::sync::mpsc::channel(1);
