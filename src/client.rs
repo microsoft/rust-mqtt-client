@@ -21,8 +21,8 @@ use openssl::{
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
 use crate::client::{
     channel_data::{
-        DisconnectRequest, IncomingPublishAndToken, PublishRequest, ReauthRequest,
-        SubscriptionRequest,
+        DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0, PublishRequestQoS1QoS2,
+        ReauthRequest, SubscriptionRequest,
     },
     session::{CompletedOperation, Session},
     token::{
@@ -67,7 +67,9 @@ pub mod token;
 pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     // NOTE: We use size 1 channels for outgoing data to avoid buffering packets that are not yet
     // owned by the internal session state. If this becomes a performance bottleneck, revisit.
-    let (o_pub_tx, o_pub_rx) = tokio::sync::mpsc::channel(options.publish_queue_size);
+    let (o_pub_q12_tx, o_pub_q12_rx) =
+        tokio::sync::mpsc::channel(options.publish_qos1_qos1_queue_size);
+    let (o_pub_q0_tx, o_pub_q0_rx) = tokio::sync::mpsc::channel(options.publish_qos0_queue_size);
     let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
     let (ack_tx, ack_rx) = tokio::sync::mpsc::channel(1);
     let (auth_tx, auth_rx) = tokio::sync::mpsc::channel(1);
@@ -75,7 +77,8 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     // somewhere.
     let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::unbounded_channel();
     let client = Client {
-        pub_tx: o_pub_tx,
+        pub_qos0_tx: o_pub_q0_tx,
+        pub_qos12_tx: o_pub_q12_tx,
         sub_tx,
     };
     let reader_pool = BufferPoolImpl;
@@ -83,7 +86,8 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let owned = writer_pool.take_empty_owned();
     let session = Session::new(
         sub_rx,
-        o_pub_rx,
+        o_pub_q0_rx,
+        o_pub_q12_rx,
         ack_rx,
         auth_rx,
         i_pub_tx,
@@ -107,8 +111,10 @@ pub struct ClientOptions {
     pub client_id: Option<String>,
     /// Maximum packet identifier
     pub max_packet_identifier: PacketIdentifier,
-    /// Maximum size of the outgoing queue for PUBLISH packets.
-    pub publish_queue_size: usize,
+    /// Maximum size of the outgoing queue for QoS 0 PUBLISH packets.
+    pub publish_qos0_queue_size: usize,
+    /// Maximum size of the outgoing queue for QoS 1 and 2 PUBLISH packets.
+    pub publish_qos1_qos1_queue_size: usize,
     // TODO: Consider using a Builder pattern?
 }
 
@@ -117,7 +123,8 @@ impl Default for ClientOptions {
         Self {
             client_id: None,
             max_packet_identifier: PacketIdentifier::MAX,
-            publish_queue_size: 100,
+            publish_qos0_queue_size: 100,
+            publish_qos1_qos1_queue_size: 100,
         }
     }
 }
@@ -224,8 +231,10 @@ impl From<SslConnectorBuilder> for ConnectionTransportTlsConfig {
 pub struct Client {
     // NOTE: We use different channels for publishes vs. control packets to allow for
     // prioritization of operations by the receiver.
-    /// Channel that transmits outgoing PUBLISH requests
-    pub_tx: tokio::sync::mpsc::Sender<PublishRequest<SharedImpl>>,
+    /// Channel that transmits outgoing PUBLISH requests at QoS 0
+    pub_qos0_tx: tokio::sync::mpsc::Sender<PublishRequestQoS0<SharedImpl>>,
+    /// Channel that transmits outgoing PUBLISH requests as QoS 1 or 2
+    pub_qos12_tx: tokio::sync::mpsc::Sender<PublishRequestQoS1QoS2<SharedImpl>>,
     /// Channel that transmits outgoing SUBSCRIBE/UNSUBSCRIBE requests
     sub_tx: tokio::sync::mpsc::Sender<SubscriptionRequest<SharedImpl>>,
 }
@@ -242,8 +251,8 @@ impl Client {
         properties: PublishProperties,
     ) -> Result<PublishQoS0CompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
-        self.pub_tx
-            .send(PublishRequest::PublishQoS0(
+        self.pub_qos0_tx
+            .send(PublishRequestQoS0(
                 notifier,
                 topic_name.into_inner().into(),
                 payload.into(),
@@ -266,8 +275,8 @@ impl Client {
         properties: PublishProperties,
     ) -> Result<PublishQoS1CompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
-        self.pub_tx
-            .send(PublishRequest::PublishQoS1(
+        self.pub_qos12_tx
+            .send(PublishRequestQoS1QoS2::PublishQoS1(
                 notifier,
                 topic_name.into_inner().into(),
                 payload.into(),
@@ -291,8 +300,8 @@ impl Client {
         properties: PublishProperties,
     ) -> Result<PublishQoS2CompletionToken, ClientError> {
         let (notifier, token) = completion_pair();
-        self.pub_tx
-            .send(PublishRequest::PublishQoS2(
+        self.pub_qos12_tx
+            .send(PublishRequestQoS1QoS2::PublishQoS2(
                 notifier,
                 topic_name.into_inner().into(),
                 payload.into(),

@@ -57,6 +57,36 @@ where
     ),
 }
 
+pub struct PublishRequestQoS0<S>(
+    pub PublishQoS0CompletionNotifier,
+    pub Topic<ByteStr<S>>,
+    pub S,
+    pub bool,
+    pub PublishOtherProperties<S>,
+)
+where
+    S: Shared;
+
+pub enum PublishRequestQoS1QoS2<S>
+where
+    S: Shared,
+{
+    PublishQoS1(
+        PublishQoS1CompletionNotifier<S>,
+        Topic<ByteStr<S>>,
+        S,
+        bool,
+        PublishOtherProperties<S>,
+    ),
+    PublishQoS2(
+        PublishQoS2CompletionNotifier<S>,
+        Topic<ByteStr<S>>,
+        S,
+        bool,
+        PublishOtherProperties<S>,
+    ),
+}
+
 /// Request to send a subscription-related packet
 pub enum SubscriptionRequest<S>
 where
