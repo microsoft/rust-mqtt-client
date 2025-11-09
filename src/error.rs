@@ -3,6 +3,8 @@
 
 //! Error types for the MQTT client library.
 
+use thiserror::Error;
+
 // TODO: It may make more sense for these to be exported from elsewhere and just exposed here.
 
 // DISCUSS: Is too large worth preventing? Technically, you're allowed to send 256mb, even though the broker will tell you it
@@ -20,15 +22,18 @@
 // packet type, so you get back the packet data on failure? e.g. ClientError<Publish>? where error.packet() -> Publish?
 
 /// Indicates a failure in the MQTT client before any operation takes place.
-#[derive(Debug)]
+#[derive(Debug, Clone, Error)]
 pub enum ClientError {
+    #[error("Communication channels with the client have been closed")]
     DetachedClient,
+    #[error("The packet is too large to be sent according to the server's maximum packet size")]
     TooLarge, // This could happen even without payload due to large user properties, of, say, a subscribe
+              // TODO: are we getting rid of TooLarge?
 }
 
 /// Indicates that the MQTT operation did not complete successfully
 /// NOTE: Does NOT contain the reason code as an enum, as it must be agnostic to the operation type.
-#[derive(Debug)]
+#[derive(Debug, Clone, Error)]
 pub struct OperationFailure {
     pub reason: String,
 }
@@ -36,5 +41,11 @@ pub struct OperationFailure {
 impl From<String> for OperationFailure {
     fn from(value: String) -> Self {
         OperationFailure { reason: value }
+    }
+}
+
+impl std::fmt::Display for OperationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Operation failed: {}", self.reason)
     }
 }

@@ -893,7 +893,7 @@ impl From<buffered::ReauthResult<SharedImpl>> for ReauthResult {
 }
 
 /// Details about a client disconnect
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum DisconnectedEvent {
     Transport,
     UserRequested,
