@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
-    ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, MULTI_LEVEL_MATCH, SEPARATOR,
+    ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, Topic, MULTI_LEVEL_MATCH, SEPARATOR,
     SHARED_SUBSCRIPTION_PREFIX, SINGLE_LEVEL_MATCH,
 };
 
@@ -198,6 +198,10 @@ where
             kind: self.kind,
         }
     }
+
+    // pub fn matches_topic(&self, topic: &Topic<S>) {
+    //     let s = self.inner.as_ref();
+    // }
 }
 
 impl<S> Filter<ByteStr<S>>
