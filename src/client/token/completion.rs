@@ -4,10 +4,13 @@
 //! Synchronization for portable reporting of remote operations
 
 use crate::buffer_pool::SharedImpl;
+use thiserror::Error;
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Error)]
 pub enum CompletionError {
+    #[error("Communication channels with the client have been closed")]
     Detatched,
+    #[error("The operation was cancelled")]
     Cancelled,
 }
 
