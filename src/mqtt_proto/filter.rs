@@ -2,11 +2,12 @@
 // Licensed under the MIT License.
 
 use std::fmt::{Display, Formatter};
+use std::iter::zip;
 
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
-    ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, MULTI_LEVEL_MATCH, SEPARATOR,
-    SHARED_SUBSCRIPTION_PREFIX, SINGLE_LEVEL_MATCH,
+    ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, MULTI_LEVEL_MATCH, MULTI_LEVEL_MATCH_STR,
+    SEPARATOR, SHARED_SUBSCRIPTION_PREFIX, SINGLE_LEVEL_MATCH, SINGLE_LEVEL_MATCH_STR, Topic,
 };
 
 #[derive(Debug)]
@@ -198,6 +199,18 @@ where
             kind: self.kind,
         }
     }
+
+    /// Returns true if the given `Topic` matches this `Filter`.
+    pub fn matches_topic(&self, topic: &Topic<S>) -> bool {
+        match self.classify() {
+            ClassifiedFilter::Dollar(_) | ClassifiedFilter::Regular(_) => {
+                match_levels(self.into_iter(), topic.into_iter())
+            }
+            ClassifiedFilter::Shared { filter, .. } => {
+                match_levels(filter.into_iter(), topic.into_iter())
+            }
+        }
+    }
 }
 
 impl<S> Filter<ByteStr<S>>
@@ -344,6 +357,46 @@ where
     }
 }
 
+fn match_levels<'a, I, J>(mut filter_iter: I, mut topic_iter: J) -> bool
+where
+    I: Iterator<Item = &'a str>,
+    J: Iterator<Item = &'a str>,
+{
+    // Validate that all levels match according to MQTT rules
+    // NOTE: We *cannot* use iter::zip() here because if the first iterator yields more
+    // values than the second, we need to be able to detect that, and zip cannot support that
+    // scenario.
+    loop {
+        match (filter_iter.next(), topic_iter.next()) {
+            // Both iterators have more elements to process
+            (Some(filter_level), Some(topic_level)) => {
+                // First check for wildcard matches (unless using $, which cannot use wildcards)
+                if !topic_level.starts_with('$') {
+                    match filter_level {
+                        MULTI_LEVEL_MATCH_STR => {
+                            return true;
+                        }
+                        SINGLE_LEVEL_MATCH_STR => {
+                            continue;
+                        }
+                        _ => {
+                            // This case will no-op and be handled below
+                        }
+                    }
+                }
+                // Check for regular matches
+                if filter_level != topic_level {
+                    return false;
+                }
+            }
+            // Both iterators are exhausted (i.e. a match)
+            (None, None) => return true,
+            // One of the iterators has more elements than the other (i.e. not a match)
+            _ => return false,
+        }
+    }
+}
+
 #[cfg(test)]
 pub fn filter(
     s: impl AsRef<str>,
@@ -369,6 +422,7 @@ where
 mod tests {
     use test_case::test_case;
 
+    use super::super::topic::topic_str;
     use super::{ClassifiedFilter, DecodeError, Filter, FilterKind, filter, filter_str};
 
     #[test_case("", DecodeError::EmptyFilter ; "empty")]
@@ -448,5 +502,55 @@ mod tests {
         let filter = filter_str(filter);
 
         assert_eq!(&filter.kind, kind);
+    }
+
+    #[test_case("sport", &["sport"]; "Single-level filter, no wildcards")]
+    #[test_case("+", &["sport", "finance"]; "Single-level filter, single-level wildcard")]
+    #[test_case("#", &["sport", "sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking", "sport/", "sport/", "/sport/", "/", "//"]; "Single-level filter, multi-level wildcard")]
+    #[test_case("$share/consumer1/sport", &["sport"]; "Single-level filter with shared subscription, no wildcards")]
+    #[test_case("$share/consumer1/+", &["sport", "finance"]; "Single-level filter with shared subscription, single-level wildcard")]
+    #[test_case("$share/consumer1/#", &["sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking", "finance/bonds/banker1", "/", "//"]; "Single-level filter with shared subscription, multi-level wildcard")]
+    #[test_case("$SYS", &["$SYS"]; "Single-level system filter")]
+    #[test_case("sport/tennis/player1", &["sport/tennis/player1"]; "Multi-level filter, no wildcards")]
+    #[test_case("sport/tennis/+", &["sport/tennis/player1", "sport/tennis/player2", "sport/tennis/"]; "Multi-level filter, one single-level wildcard")]
+    #[test_case("sport/+/+", &["sport/tennis/player1", "sport/tennis/player2", "sport/badminton/player1", "sport/badminton/player2", "sport//player1"]; "Multi-level filter, multiple single-level wildcards")]
+    #[test_case("sport/tennis/#", &["sport/tennis/player1", "sport/tennis/player1/ranking", "sport/tennis/player2", "sport/tennis/player2/ranking"]; "Multi-level filter, multi-level wildcard")]
+    #[test_case("sport/+/#", &["sport/tennis/player1", "sport/tennis/player1/ranking", "sport/tennis/player2", "sport/tennis/player2/ranking", "sport/badminton/player1", "sport/badminton/player1/ranking", "sport/badminton/player2", "sport/badminton/player2/ranking", "sport/tennis/", "sport//"]; "Multi-level filter, single-level and multi-level wildcards")]
+    #[test_case("+/+", &["sport/tennis", "/sport", "sport/", "/"]; "Multi-level filter, single-level wildcards only")]
+    #[test_case("+/#", &["sport/tennis", "sport/tennis/player1", "finance/banking", "finance/banking/banker1", "/", "//"]; "Multi-level filter, single-level and multi-level wildcards only")]
+    #[test_case("/finance", &["/finance"]; "Multi-level filter, zero-length level")]
+    #[test_case("$share/consumer1/sport/tennis/player1", &["sport/tennis/player1"]; "Multi-level filter with shared subscription, no wildcards")]
+    #[test_case("$share/consumer1/sport/+/player1", &["sport/tennis/player1", "sport/badminton/player1", "sport//player1"]; "Multi-level filter with shared subscription, one single-level wildcard")]
+    #[test_case("$share/consumer1/sport/#", &["sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking", "sport/badminton", "sport/", "sport//"]; "Multi-level filter with shared subscription, multi-level wildcard")]
+    #[test_case("$share/consumer1//finance", &["/finance"]; "Multi-level filter with shared subscription, zero-length level")]
+    #[test_case("$SYS/monitor/Clients", &["$SYS/monitor/Clients"]; "Multi-level system filter, no wildcards")]
+    #[test_case("$SYS/monitor/+", &["$SYS/monitor/Clients", "$SYS/monitor/Connections"]; "Multi-level system filter, single-level wildcard")]
+    #[test_case("$SYS/#", &["$SYS/monitor/Clients", "$SYS/monitor/Connections", "$SYS/broker/log"]; "Multi-level system filter, multi-level wildcard")]
+    #[test_case("$SYS//Clients", &["$SYS//Clients"]; "Multi-level system filter, zero-length level")]
+    fn filter_match(filter: &str, topics: &[&str]) {
+        let filter = filter_str(filter);
+        for topic in topics.iter().map(|t| topic_str(*t)) {
+            assert!(filter.matches_topic(&topic));
+        }
+    }
+
+    #[test_case("sport", &["finance", "sport/tennis"]; "Single-level filter, no wildcards")]
+    #[test_case("+", &["/sport", "sport/", "/sport/", "/", "//", "$SYS"]; "Single-level filter, single-level wildcard")]
+    #[test_case("#", &["$SYS", "$SYS/monitor/Clients"]; "Single-level filter, multi-level wildcard")]
+    #[test_case("$share/consumer1/sport", &["finance/banking/banker1", "sport/tennis/player1"]; "Single-level filter with shared subscription, no wildcards")]
+    #[test_case("sport/tennis/player1", &["sport/tennis/player2", "sport/tennis", "sport/tennis/player1/ranking"]; "Multi-level filter, no wildcards")]
+    #[test_case("+/tennis/player1", &["sport/badminton/player1", "$SYS/tennis/player1", "sport/two/tennis/player1"]; "Multi-level filter, one single-level wildcard at beginning")]
+    #[test_case("sport/tennis/+", &["sport/tennis/player1/ranking", "sport/badminton/player1", "sport/tennis"]; "Multi-level filter, one single-level wildcard at end")]
+    #[test_case("sport/+/+", &["sport/tennis/player1/ranking", "finance/banking/banker1", "sport"]; "Single-level filter, multiple single-level wildcards")]
+    #[test_case("sport/tennis/#", &["sport/tennis", "sport/badminton", "finance/banking/banker1"]; "Multi-level filter, multi-level wildcard")]
+    #[test_case("sport/+/#", &["sport/tennis", "sport/badminton", "finance/banking/banker1"]; "Multi-level filter, single-level and multi-level wildcards")]
+    #[test_case("+/+", &["/sport/tennis", "sport/tennis/", "/tennis/", "//", "$SYS/monitor"]; "Multi-level filter, single-level wildcards only")]
+    #[test_case("+/#", &["sport", "$SYS/monitor", "$SYS/monitor/Clients"]; "Multi-level filter, single-level and multi-level wildcards only")]
+    #[test_case("$share/consumer1/sport", &["finance/banking/banker1", "sport/tennis/player1"]; "Multi-level filter with shared subscription")]
+    fn filter_mismatch(filter: &str, topics: &[&str]) {
+        let filter = filter_str(filter);
+        for topic in topics.iter().map(|t| topic_str(*t)) {
+            assert!(!filter.matches_topic(&topic));
+        }
     }
 }

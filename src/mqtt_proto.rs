@@ -1098,7 +1098,9 @@ where
 pub const DOLLAR_SIGN: char = '$';
 pub const SEPARATOR: char = '/';
 pub const SINGLE_LEVEL_MATCH: char = '+';
+pub const SINGLE_LEVEL_MATCH_STR: &str = "+";
 pub const MULTI_LEVEL_MATCH: char = '#';
+pub const MULTI_LEVEL_MATCH_STR: &str = "#";
 pub const SHARED_SUBSCRIPTION_PREFIX: &str = "$share/";
 
 #[cfg(test)]

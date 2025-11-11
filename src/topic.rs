@@ -42,10 +42,9 @@ impl TopicName {
         self.0.as_str()
     }
 
-    /// Returns true if the topic name matches the given topic filter.
-    #[allow(unused_variables)]
+    /// Returns true if the given `TopicFilter` matches this `TopicName`.
     pub fn matches_topic_filter(&self, filter: &TopicFilter) -> bool {
-        todo!("Implement topic filter matching at mqtt_proto level")
+        filter.0.matches_topic(&self.0)
     }
 
     /// Returns the inner `mqtt_proto::Topic<String>`.
@@ -90,10 +89,9 @@ impl TopicFilter {
         self.0.as_str()
     }
 
-    /// Returns true if the topic filter matches the given topic name.
-    #[allow(unused_variables)]
+    /// Returns true if the given `TopicName` matches this `TopicFilter`.
     pub fn matches_topic_name(&self, topic: &TopicName) -> bool {
-        todo!("Implement topic filter matching at mqtt_proto level")
+        self.0.matches_topic(&topic.0)
     }
 
     /// Returns the inner `mqtt_proto::Filter<String>`.
