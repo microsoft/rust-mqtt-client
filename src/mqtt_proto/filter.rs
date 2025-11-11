@@ -507,53 +507,53 @@ mod tests {
         assert_eq!(&filter.kind, kind);
     }
 
-    #[test_case("sport", vec!["sport"]; "Exact match (single level topic)")]
-    #[test_case("sport/tennis/player1", vec!["sport/tennis/player1"]; "Exact match (multi-level topic)")]
-    #[test_case("sport/tennis/+", vec!["sport/tennis/player1", "sport/tennis/player2"]; "Single-level wildcard match (single wildcard)")]
-    #[test_case("sport/+/+", vec!["sport/tennis/player1", "sport/tennis/player2", "sport/badminton/player1", "sport/badminton/player2"]; "Single-level wildcard match (multiple wildcards)")]
-    #[test_case("sport/tennis/#", vec!["sport/tennis/player1", "sport/tennis/player1/ranking", "sport/tennis/player2", "sport/tennis/player2/ranking"]; "Multi-level wildcard match")]
-    #[test_case("sport/+/#", vec!["sport/tennis/player1", "sport/tennis/player1/ranking", "sport/tennis/player2", "sport/tennis/player2/ranking", "sport/badminton/player1", "sport/badminton/player1/ranking", "sport/badminton/player2", "sport/badminton/player2/ranking"]; "Single-level and multi-level wildcard match")]
-    #[test_case("$share/consumer1/sport/tennis/player1", vec!["sport/tennis/player1"]; "Shared subscription match")]
-    #[test_case("$share/consumer1/#", vec!["sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking"]; "Shared subscription multi-level wildcard match")]
-    #[test_case("$share/consumer1/+/+/+", vec!["sport/tennis/player1", "finance/bonds/banker1"]; "Shared subscription single-level wildcard match")]
-    fn normative_topic_match(filter: &str, topics: Vec<&str>) {
-        let filter = filter_str(filter);
-        for topic in topics.iter().map(|t| topic_str(*t)) {
-            assert!(filter.matches_topic(&topic))
-        }
-    }
-
-    #[test_case("sport", vec!["finance", "sport/tennis"]; "Exact match (single-level filter)")]
-    #[test_case("sport/tennis/player1", vec!["sport/tennis/player2", "sport/tennis", "sport/tennis/player1/ranking"]; "Exact match (multi-level filter)")]
-    #[test_case("sport/tennis/+", vec!["sport/tennis/player1/ranking", "sport/badminton/player1", "sport/tennis"]; "Single-level wildcard mismatch (single wildcard)")]
-    #[test_case("sport/+/+", vec!["sport/tennis/player1/ranking", "finance/banking/banker1", "sport"]; "Single-level wildcard mismatch (multiple wildcards)")]
-    #[test_case("sport/tennis/#", vec!["sport/tennis", "sport/badminton", "finance/banking/banker1"]; "Multi-level wildcard mismatch")]
-    #[test_case("sport/+/#", vec!["sport/tennis", "sport/badminton", "finance/banking/banker1"]; "Single-level and multi-level wildcard mismatch")]
-    #[test_case("$share/consumer1/sport", vec!["finance/banking/banker1", "sport/tennis/player1"]; "Shared subscription mismatch")]
-    fn normative_topic_mismatch(filter: &str, topics: Vec<&str>) {
-        let filter = filter_str(filter);
-        for topic in topics.iter().map(|t| topic_str(*t)) {
-            assert!(!filter.matches_topic(&topic));
-        }
-    }
-
-    #[test_case("+", vec!["sport", "finance"]; "Single-level wildcard match (single wildcard)")]
-    #[test_case("+/+", vec!["sport/tennis", "/sport", "sport/", "/"]; "Single-level wildcard match (multiple wildcards)")]
-    #[test_case("#", vec!["sport", "sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking", "sport/", "sport/", "/sport/", "/", "//"]; "Multi-level wildcard match")]
-    #[test_case("+/#", vec!["sport/tennis", "sport/tennis/player1", "finance/banking", "finance/banking/banker1", "/", "//"]; "Single-level and multi-level wildcard match")]
-    #[test_case("$share/consumer1//finance", vec!["/finance"]; "Shared subscription match with zero-length level")]
-    fn non_normative_topic_match(filter: &str, topics: Vec<&str>) {
+    #[test_case("sport", &["sport"]; "Exact match (single level topic)")]
+    #[test_case("sport/tennis/player1", &["sport/tennis/player1"]; "Exact match (multi-level topic)")]
+    #[test_case("sport/tennis/+", &["sport/tennis/player1", "sport/tennis/player2"]; "Single-level wildcard match (single wildcard)")]
+    #[test_case("sport/+/+", &["sport/tennis/player1", "sport/tennis/player2", "sport/badminton/player1", "sport/badminton/player2"]; "Single-level wildcard match (multiple wildcards)")]
+    #[test_case("sport/tennis/#", &["sport/tennis/player1", "sport/tennis/player1/ranking", "sport/tennis/player2", "sport/tennis/player2/ranking"]; "Multi-level wildcard match")]
+    #[test_case("sport/+/#", &["sport/tennis/player1", "sport/tennis/player1/ranking", "sport/tennis/player2", "sport/tennis/player2/ranking", "sport/badminton/player1", "sport/badminton/player1/ranking", "sport/badminton/player2", "sport/badminton/player2/ranking"]; "Single-level and multi-level wildcard match")]
+    #[test_case("$share/consumer1/sport/tennis/player1", &["sport/tennis/player1"]; "Shared subscription match")]
+    #[test_case("$share/consumer1/#", &["sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking"]; "Shared subscription multi-level wildcard match")]
+    #[test_case("$share/consumer1/+/+/+", &["sport/tennis/player1", "finance/bonds/banker1"]; "Shared subscription single-level wildcard match")]
+    fn normative_topic_match(filter: &str, topics: &[&str]) {
         let filter = filter_str(filter);
         for topic in topics.iter().map(|t| topic_str(*t)) {
             assert!(filter.matches_topic(&topic));
         }
     }
 
-    #[test_case("+", vec!["/sport", "sport/", "/sport/", "/", "//"]; "Single-level wildcard mismatch (single wildcard)")]
-    #[test_case("+/+", vec!["/sport/tennis", "sport/tennis/", "/tennis/", "//"]; "Single-level wildcard mismatch (multiple wildcards)")]
-    #[test_case("+/#", vec!["sport"]; "Single-level and multi-level wildcard mismatch")]
+    #[test_case("sport", &["finance", "sport/tennis"]; "Exact match (single-level filter)")]
+    #[test_case("sport/tennis/player1", &["sport/tennis/player2", "sport/tennis", "sport/tennis/player1/ranking"]; "Exact match (multi-level filter)")]
+    #[test_case("sport/tennis/+", &["sport/tennis/player1/ranking", "sport/badminton/player1", "sport/tennis"]; "Single-level wildcard mismatch (single wildcard)")]
+    #[test_case("sport/+/+", &["sport/tennis/player1/ranking", "finance/banking/banker1", "sport"]; "Single-level wildcard mismatch (multiple wildcards)")]
+    #[test_case("sport/tennis/#", &["sport/tennis", "sport/badminton", "finance/banking/banker1"]; "Multi-level wildcard mismatch")]
+    #[test_case("sport/+/#", &["sport/tennis", "sport/badminton", "finance/banking/banker1"]; "Single-level and multi-level wildcard mismatch")]
+    #[test_case("$share/consumer1/sport", &["finance/banking/banker1", "sport/tennis/player1"]; "Shared subscription mismatch")]
+    fn normative_topic_mismatch(filter: &str, topics: &[&str]) {
+        let filter = filter_str(filter);
+        for topic in topics.iter().map(|t| topic_str(*t)) {
+            assert!(!filter.matches_topic(&topic));
+        }
+    }
+
+    #[test_case("+", &["sport", "finance"]; "Single-level wildcard match (single wildcard)")]
+    #[test_case("+/+", &["sport/tennis", "/sport", "sport/", "/"]; "Single-level wildcard match (multiple wildcards)")]
+    #[test_case("#", &["sport", "sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking", "sport/", "sport/", "/sport/", "/", "//"]; "Multi-level wildcard match")]
+    #[test_case("+/#", &["sport/tennis", "sport/tennis/player1", "finance/banking", "finance/banking/banker1", "/", "//"]; "Single-level and multi-level wildcard match")]
+    #[test_case("$share/consumer1//finance", &["/finance"]; "Shared subscription match with zero-length level")]
+    fn non_normative_topic_match(filter: &str, topics: &[&str]) {
+        let filter = filter_str(filter);
+        for topic in topics.iter().map(|t| topic_str(*t)) {
+            assert!(filter.matches_topic(&topic));
+        }
+    }
+
+    #[test_case("+", &["/sport", "sport/", "/sport/", "/", "//"]; "Single-level wildcard mismatch (single wildcard)")]
+    #[test_case("+/+", &["/sport/tennis", "sport/tennis/", "/tennis/", "//"]; "Single-level wildcard mismatch (multiple wildcards)")]
+    #[test_case("+/#", &["sport"]; "Single-level and multi-level wildcard mismatch")]
     // NOTE: There are no valid topics that do not match a single multi-level wildcard, so there are no test cases for this scenario
-    fn non_normative_topic_mismatch(filter: &str, topics: Vec<&str>) {
+    fn non_normative_topic_mismatch(filter: &str, topics: &[&str]) {
         let filter = filter_str(filter);
         for topic in topics.iter().map(|t| topic_str(*t)) {
             assert!(!filter.matches_topic(&topic));
