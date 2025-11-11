@@ -6,8 +6,8 @@ use std::iter::zip;
 
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
-    ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, MULTI_LEVEL_MATCH, SEPARATOR,
-    SHARED_SUBSCRIPTION_PREFIX, SINGLE_LEVEL_MATCH, Topic,
+    ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, MULTI_LEVEL_MATCH, MULTI_LEVEL_MATCH_STR,
+    SEPARATOR, SHARED_SUBSCRIPTION_PREFIX, SINGLE_LEVEL_MATCH, SINGLE_LEVEL_MATCH_STR, Topic,
 };
 
 #[derive(Debug)]
@@ -371,18 +371,17 @@ where
             // Both iterators have more elements to process
             (Some(filter_level), Some(topic_level)) => {
                 // First check for wildcard matches (unless using $, which cannot use wildcards)
-                if filter_level.len() == 1 && !topic_level.starts_with('$') {
-                    match filter_level.chars().next() {
-                        Some(MULTI_LEVEL_MATCH) => {
+                if !topic_level.starts_with('$') {
+                    match filter_level {
+                        MULTI_LEVEL_MATCH_STR => {
                             return true;
                         }
-                        Some(SINGLE_LEVEL_MATCH) => {
+                        SINGLE_LEVEL_MATCH_STR => {
                             continue;
                         }
-                        Some(_) => {
+                        _ => {
                             // This case will no-op and be handled below
                         }
-                        None => unreachable!("Prior validation ensures non-empty levels"),
                     }
                 }
                 // Check for regular matches
