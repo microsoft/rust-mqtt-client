@@ -73,7 +73,7 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 connect_handle
             }
-            ConnectResult::Failure(connect_handle, _) | ConnectResult::Timeout(connect_handle) => {
+            ConnectResult::Failure(connect_handle, _) => {
                 println!("Failed to connect to MQTT broker, retrying in 5 seconds...");
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 connect_handle

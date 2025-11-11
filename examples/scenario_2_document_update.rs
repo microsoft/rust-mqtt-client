@@ -122,11 +122,6 @@ async fn mqtt_run(
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 connect_handle
             }
-            ConnectResult::Timeout(connect_handle) => {
-                println!("Connection attempt timed out, retrying in 5 seconds...");
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                connect_handle
-            }
         };
     }
 }
