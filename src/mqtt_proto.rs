@@ -1101,13 +1101,6 @@ pub const SINGLE_LEVEL_MATCH: char = '+';
 pub const MULTI_LEVEL_MATCH: char = '#';
 pub const SHARED_SUBSCRIPTION_PREFIX: &str = "$share/";
 
-fn filter_matches_topic<S>(filter: &Filter<S>, topic: &Topic<S>) -> bool
-where S:Shared
-{
-    let s = filter.inner.as_ref();
-    unimplemented!()
-}
-
 #[cfg(test)]
 mod tests {
     use std::{io::IoSlice, slice};

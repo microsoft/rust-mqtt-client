@@ -2,11 +2,12 @@
 // Licensed under the MIT License.
 
 use std::fmt::{Display, Formatter};
+use std::iter::zip;
 
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
-    ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, Topic, MULTI_LEVEL_MATCH, SEPARATOR,
-    SHARED_SUBSCRIPTION_PREFIX, SINGLE_LEVEL_MATCH,
+    ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, MULTI_LEVEL_MATCH, SEPARATOR,
+    SHARED_SUBSCRIPTION_PREFIX, SINGLE_LEVEL_MATCH, Topic,
 };
 
 #[derive(Debug)]
@@ -199,9 +200,16 @@ where
         }
     }
 
-    // pub fn matches_topic(&self, topic: &Topic<S>) {
-    //     let s = self.inner.as_ref();
-    // }
+    pub fn matches_topic(&self, topic: &Topic<S>) -> bool {
+        match self.classify() {
+            ClassifiedFilter::Dollar(_) | ClassifiedFilter::Regular(_) => {
+                match_levels(self.into_iter(), topic.into_iter())
+            }
+            ClassifiedFilter::Shared { filter, .. } => {
+                match_levels(filter.into_iter(), topic.into_iter())
+            }
+        }
+    }
 }
 
 impl<S> Filter<ByteStr<S>>
@@ -348,6 +356,50 @@ where
     }
 }
 
+fn match_levels<'a, I, J>(mut filter_iter: I, mut topic_iter: J) -> bool
+where
+    I: Iterator<Item = &'a str>,
+    J: Iterator<Item = &'a str>,
+{
+    use crate::mqtt_proto::{MULTI_LEVEL_MATCH, SINGLE_LEVEL_MATCH};
+    use std::iter::zip;
+
+    // Validate that all levels match according to MQTT rules
+    // NOTE: We *cannot* use iter::zip() here because if the first iterator yields more
+    // values than the second, we need to be able to detect that, and zip cannot support that
+    // scenario.
+    loop {
+        match (filter_iter.next(), topic_iter.next()) {
+            // Both iterators have more elements to process
+            (Some(filter_level), Some(topic_level)) => {
+                // First check for wildcard matches
+                if filter_level.len() == 1 {
+                    match filter_level.chars().next() {
+                        Some(MULTI_LEVEL_MATCH) => {
+                            return true;
+                        }
+                        Some(SINGLE_LEVEL_MATCH) => {
+                            continue;
+                        }
+                        Some(_) => {
+                            // This case will no-op and be handled below
+                        }
+                        None => unreachable!("Prior validation ensures non-empty levels"),
+                    }
+                }
+                // Check for regular matches
+                if filter_level != topic_level {
+                    return false;
+                }
+            }
+            // Both iterators are exhausted (i.e. a match)
+            (None, None) => return true,
+            // One of the iterators has more elements than the other (i.e. not a match)
+            _ => return false,
+        }
+    }
+}
+
 #[cfg(test)]
 pub fn filter(
     s: impl AsRef<str>,
@@ -373,6 +425,7 @@ where
 mod tests {
     use test_case::test_case;
 
+    use super::super::topic::topic_str;
     use super::{ClassifiedFilter, DecodeError, Filter, FilterKind, filter, filter_str};
 
     #[test_case("", DecodeError::EmptyFilter ; "empty")]
@@ -452,5 +505,58 @@ mod tests {
         let filter = filter_str(filter);
 
         assert_eq!(&filter.kind, kind);
+    }
+
+    #[test_case("sport", vec!["sport"]; "Exact match (single level topic)")]
+    #[test_case("sport/tennis/player1", vec!["sport/tennis/player1"]; "Exact match (multi-level topic)")]
+    #[test_case("sport/tennis/+", vec!["sport/tennis/player1", "sport/tennis/player2"]; "Single-level wildcard match (single wildcard)")]
+    #[test_case("sport/+/+", vec!["sport/tennis/player1", "sport/tennis/player2", "sport/badminton/player1", "sport/badminton/player2"]; "Single-level wildcard match (multiple wildcards)")]
+    #[test_case("sport/tennis/#", vec!["sport/tennis/player1", "sport/tennis/player1/ranking", "sport/tennis/player2", "sport/tennis/player2/ranking"]; "Multi-level wildcard match")]
+    #[test_case("sport/+/#", vec!["sport/tennis/player1", "sport/tennis/player1/ranking", "sport/tennis/player2", "sport/tennis/player2/ranking", "sport/badminton/player1", "sport/badminton/player1/ranking", "sport/badminton/player2", "sport/badminton/player2/ranking"]; "Single-level and multi-level wildcard match")]
+    #[test_case("$share/consumer1/sport/tennis/player1", vec!["sport/tennis/player1"]; "Shared subscription match")]
+    #[test_case("$share/consumer1/#", vec!["sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking"]; "Shared subscription multi-level wildcard match")]
+    #[test_case("$share/consumer1/+/+/+", vec!["sport/tennis/player1", "finance/bonds/banker1"]; "Shared subscription single-level wildcard match")]
+    fn normative_topic_match(filter: &str, topics: Vec<&str>) {
+        let filter = filter_str(filter);
+        for topic in topics.iter().map(|t| topic_str(*t)) {
+            assert!(filter.matches_topic(&topic))
+        }
+    }
+
+    #[test_case("sport", vec!["finance", "sport/tennis"]; "Exact match (single-level filter)")]
+    #[test_case("sport/tennis/player1", vec!["sport/tennis/player2", "sport/tennis", "sport/tennis/player1/ranking"]; "Exact match (multi-level filter)")]
+    #[test_case("sport/tennis/+", vec!["sport/tennis/player1/ranking", "sport/badminton/player1", "sport/tennis"]; "Single-level wildcard mismatch (single wildcard)")]
+    #[test_case("sport/+/+", vec!["sport/tennis/player1/ranking", "finance/banking/banker1", "sport"]; "Single-level wildcard mismatch (multiple wildcards)")]
+    #[test_case("sport/tennis/#", vec!["sport/tennis", "sport/badminton", "finance/banking/banker1"]; "Multi-level wildcard mismatch")]
+    #[test_case("sport/+/#", vec!["sport/tennis", "sport/badminton", "finance/banking/banker1"]; "Single-level and multi-level wildcard mismatch")]
+    #[test_case("$share/consumer1/sport", vec!["finance/banking/banker1", "sport/tennis/player1"]; "Shared subscription mismatch")]
+    fn normative_topic_mismatch(filter: &str, topics: Vec<&str>) {
+        let filter = filter_str(filter);
+        for topic in topics.iter().map(|t| topic_str(*t)) {
+            assert!(!filter.matches_topic(&topic));
+        }
+    }
+
+    #[test_case("+", vec!["sport", "finance"]; "Single-level wildcard match (single wildcard)")]
+    #[test_case("+/+", vec!["sport/tennis", "/sport", "sport/", "/"]; "Single-level wildcard match (multiple wildcards)")]
+    #[test_case("#", vec!["sport", "sport/tennis", "sport/tennis/player1", "sport/tennis/player1/ranking", "sport/", "sport/", "/sport/", "/", "//"]; "Multi-level wildcard match")]
+    #[test_case("+/#", vec!["sport/tennis", "sport/tennis/player1", "finance/banking", "finance/banking/banker1", "/", "//"]; "Single-level and multi-level wildcard match")]
+    #[test_case("$share/consumer1//finance", vec!["/finance"]; "Shared subscription match with zero-length level")]
+    fn non_normative_topic_match(filter: &str, topics: Vec<&str>) {
+        let filter = filter_str(filter);
+        for topic in topics.iter().map(|t| topic_str(*t)) {
+            assert!(filter.matches_topic(&topic));
+        }
+    }
+
+    #[test_case("+", vec!["/sport", "sport/", "/sport/", "/", "//"]; "Single-level wildcard mismatch (single wildcard)")]
+    #[test_case("+/+", vec!["/sport/tennis", "sport/tennis/", "/tennis/", "//"]; "Single-level wildcard mismatch (multiple wildcards)")]
+    #[test_case("+/#", vec!["sport"]; "Single-level and multi-level wildcard mismatch")]
+    // NOTE: There are no valid topics that do not match a single multi-level wildcard, so there are no test cases for this scenario
+    fn non_normative_topic_mismatch(filter: &str, topics: Vec<&str>) {
+        let filter = filter_str(filter);
+        for topic in topics.iter().map(|t| topic_str(*t)) {
+            assert!(!filter.matches_topic(&topic));
+        }
     }
 }
