@@ -200,7 +200,7 @@ where
         }
     }
 
-    /// Returns true if the given `Topic` matches this `Filter`
+    /// Returns true if the given `Topic` matches this `Filter`.
     pub fn matches_topic(&self, topic: &Topic<S>) -> bool {
         match self.classify() {
             ClassifiedFilter::Dollar(_) | ClassifiedFilter::Regular(_) => {
@@ -362,9 +362,6 @@ where
     I: Iterator<Item = &'a str>,
     J: Iterator<Item = &'a str>,
 {
-    use crate::mqtt_proto::{MULTI_LEVEL_MATCH, SINGLE_LEVEL_MATCH};
-    use std::iter::zip;
-
     // Validate that all levels match according to MQTT rules
     // NOTE: We *cannot* use iter::zip() here because if the first iterator yields more
     // values than the second, we need to be able to detect that, and zip cannot support that
