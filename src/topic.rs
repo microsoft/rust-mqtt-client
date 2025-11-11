@@ -42,7 +42,7 @@ impl TopicName {
         self.0.as_str()
     }
 
-    /// Returns true if the topic name matches the given topic filter.
+    /// Returns true if the given `TopicFilter` matches this `TopicName`.
     pub fn matches_topic_filter(&self, filter: &TopicFilter) -> bool {
         filter.0.matches_topic(&self.0)
     }
@@ -89,7 +89,7 @@ impl TopicFilter {
         self.0.as_str()
     }
 
-    /// Returns true if the topic filter matches the given topic name.
+    /// Returns true if the given `TopicName` matches this `TopicFilter`.
     pub fn matches_topic_name(&self, topic: &TopicName) -> bool {
         self.0.matches_topic(&topic.0)
     }
