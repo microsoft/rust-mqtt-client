@@ -200,6 +200,7 @@ where
         }
     }
 
+    /// Returns true if the given `Topic` matches this filter.
     pub fn matches_topic(&self, topic: &Topic<S>) -> bool {
         match self.classify() {
             ClassifiedFilter::Dollar(_) | ClassifiedFilter::Regular(_) => {
