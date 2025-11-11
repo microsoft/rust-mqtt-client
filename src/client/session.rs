@@ -14,6 +14,7 @@ use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
+    ConnectionError,
     buffered::ReauthResult,
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0,
@@ -355,7 +356,7 @@ where
                         .in_application
                         .publishes
                         .get_mut(&pkid)
-                        .expect("TODO: error handling");
+                        .expect("application forged an AcknowledgementRequest for a PUBLISH that we didn't give it");
                     *pending = PendingAcknowledgement::Ready(ack_req);
                 }
                 // For all other request types, return them as-is
@@ -369,33 +370,39 @@ where
     // TODO: semantic fix - incoming_acknowledgement?
     /// Complete an in-flight operation with a received acknowledgement.
     /// Adjusts state as appropriate.
-    pub fn complete_inflight(&mut self, operation: CompletedOperation<O::Shared>) {
+    pub fn complete_inflight(
+        &mut self,
+        operation: CompletedOperation<O::Shared>,
+    ) -> Result<(), ConnectionError> {
         match operation {
             CompletedOperation::Subscribe(suback) => {
                 self.pkid_pool.release_pkid(suback.packet_identifier);
-                let notifier = self
-                    .inflight
-                    .subscribe
-                    .remove(&suback.packet_identifier)
-                    .expect("TODO: error handling");
+                let Some(notifier) = self.inflight.subscribe.remove(&suback.packet_identifier)
+                else {
+                    return Err(ConnectionError::UnexpectedPacket);
+                };
                 _ = notifier.complete(suback);
             }
             CompletedOperation::Unsubscribe(unsuback) => {
                 self.pkid_pool.release_pkid(unsuback.packet_identifier);
-                let notifier = self
+                let Some(notifier) = self
                     .inflight
                     .unsubscribe
                     .remove(&unsuback.packet_identifier)
-                    .expect("TODO: error handling");
+                else {
+                    return Err(ConnectionError::UnexpectedPacket);
+                };
                 _ = notifier.complete(unsuback);
             }
             CompletedOperation::PublishQoS1(puback) => {
                 self.pkid_pool.release_pkid(puback.packet_identifier);
-                let (_, notifier) = self
+                let Some((_, notifier)) = self
                     .inflight
                     .publish_qos1
                     .shift_remove(&puback.packet_identifier)
-                    .expect("TODO: error handling");
+                else {
+                    return Err(ConnectionError::UnexpectedPacket);
+                };
                 _ = notifier.complete(puback);
             }
             CompletedOperation::PublishQoS2(pubrec) => {
@@ -411,33 +418,37 @@ where
                     // No token
                     None
                 };
-                let (_, notifier) = self
+                let Some((_, notifier)) = self
                     .inflight
                     .publish_qos2
                     .shift_remove(&pubrec.packet_identifier)
-                    .expect("TODO: error handling");
+                else {
+                    return Err(ConnectionError::UnexpectedPacket);
+                };
 
                 _ = notifier.complete((pubrec, token));
             }
             CompletedOperation::PubRec(pubrel) => {
-                let (_, notifier) = self
-                    .inflight
-                    .pubrec
-                    .remove(&pubrel.packet_identifier)
-                    .expect("TODO: error handling");
+                let Some((_, notifier)) = self.inflight.pubrec.remove(&pubrel.packet_identifier)
+                else {
+                    return Err(ConnectionError::UnexpectedPacket);
+                };
                 let token = PubCompToken::new(pubrel.packet_identifier, self.ch.ack_tx.clone());
                 _ = notifier.complete((pubrel, token));
             }
             CompletedOperation::PubRel(pubcomp) => {
                 self.pkid_pool.release_pkid(pubcomp.packet_identifier);
-                let (_, notifier) = self
+                let Some((_, notifier)) = self
                     .inflight
                     .pubrel
                     .shift_remove(&pubcomp.packet_identifier)
-                    .expect("TODO: error handling");
+                else {
+                    return Err(ConnectionError::UnexpectedPacket);
+                };
                 _ = notifier.complete(pubcomp);
             }
         }
+        Ok(())
     }
 
     pub fn incoming_connack(&mut self, connack: ConnAck<O::Shared>) {
@@ -539,24 +550,27 @@ where
             }
         };
 
-        // TODO: Register ack tracking if QoS 1 or 2
-        self.ch
-            .i_pub_tx
-            .send(incoming)
-            .expect("TODO: error handling");
+        // Ignore error from sending to incoming PUBLISH receiver.
+        // If there is an error, it's because the application dropped the incoming PUBLISH receiver,
+        // in which case `incoming` will be dropped here and will auto-ack it via dropping the ack token.
+        _ = self.ch.i_pub_tx.send(incoming);
     }
 
     /// An incoming AUTH packet has been received from the server
-    pub fn incoming_auth(&mut self, auth: Auth<O::Shared>) {
+    pub fn incoming_auth(&mut self, auth: Auth<O::Shared>) -> Result<(), ConnectionError> {
         match auth.reason_code {
             // TODO: Validate authentication method from CONNACK
             AuthenticateReasonCode::Success => {
-                let notifier = self.inflight.auth.take().expect("TODO: error handling");
+                let Some(notifier) = self.inflight.auth.take() else {
+                    return Err(ConnectionError::UnexpectedPacket);
+                };
                 _ = notifier.complete(ReauthResult::Success(auth));
             }
             AuthenticateReasonCode::ContinueAuthentication => {
                 //pass on, do not stop tracking
-                let notifier = self.inflight.auth.take().expect("TODO: error handling");
+                let Some(notifier) = self.inflight.auth.take() else {
+                    return Err(ConnectionError::UnexpectedPacket);
+                };
                 let token = ReauthToken {
                     method: auth
                         .authentication
@@ -568,10 +582,12 @@ where
                 };
                 _ = notifier.complete(ReauthResult::Continue(auth, token));
             }
-            AuthenticateReasonCode::ReAuthenticate => unreachable!(
-                "AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server"
-            ),
+            AuthenticateReasonCode::ReAuthenticate => {
+                // AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server
+                return Err(ConnectionError::UnexpectedPacket);
+            }
         }
+        Ok(())
     }
 
     /// The connection has been closed for any reason.
