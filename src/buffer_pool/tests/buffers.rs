@@ -6,7 +6,7 @@ use std::{
     mem::{self, MaybeUninit},
 };
 
-use bytes::{Buf as _, BufMut as _, Bytes, BytesMut};
+use bytes::{Buf as _, BufMut, Bytes, BytesMut};
 
 use crate::buffer_pool::{Error, Owned, Shared};
 
@@ -79,7 +79,7 @@ impl Owned for OwnedImpl {
     }
 
     fn put_slice(&mut self, src: &[u8]) {
-        self.inner.put_slice(src);
+        BufMut::put_slice(&mut self.inner, src);
     }
 
     fn freeze(self) -> Self::Shared {

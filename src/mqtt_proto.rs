@@ -1107,6 +1107,7 @@ pub const SHARED_SUBSCRIPTION_PREFIX: &str = "$share/";
 mod tests {
     use std::{io::IoSlice, slice};
 
+    use bytes::Bytes;
     use matches::assert_matches;
 
     use crate::buffer_pool::{
@@ -1284,8 +1285,6 @@ mod tests {
     /// because we care about the sizes in actual production.
     #[test]
     fn packets_sizes() {
-        use crate::buffer_pool::bytes::SharedImpl;
-
         macro_rules! sizes {
             ([ $($ty:ty = $expected:expr,)* ]) => {
                 $(
@@ -1304,24 +1303,24 @@ mod tests {
         }
 
         sizes!([
-            ConnAck<SharedImpl> = 256,
-            Connect<SharedImpl> = 224,
-            Disconnect<SharedImpl> = 104,
+            ConnAck<Bytes> = 256,
+            Connect<Bytes> = 224,
+            Disconnect<Bytes> = 104,
             PingReq = 0,
             PingResp = 0,
-            PubAck<SharedImpl> = 64,
-            PubComp<SharedImpl> = 64,
-            Publish<SharedImpl> = 232,
-            PubRec<SharedImpl> = 64,
-            PubRel<SharedImpl> = 64,
-            SubAck<SharedImpl> = 88,
-            Subscribe<SharedImpl> = 64,
-            UnsubAck<SharedImpl> = 88,
-            Unsubscribe<SharedImpl> = 56,
+            PubAck<Bytes> = 64,
+            PubComp<Bytes> = 64,
+            Publish<Bytes> = 232,
+            PubRec<Bytes> = 64,
+            PubRel<Bytes> = 64,
+            SubAck<Bytes> = 88,
+            Subscribe<Bytes> = 64,
+            UnsubAck<Bytes> = 88,
+            Unsubscribe<Bytes> = 56,
 
-            Packet<SharedImpl> = 256,
+            Packet<Bytes> = 256,
 
-            Publication<SharedImpl> = 208,
+            Publication<Bytes> = 208,
         ]);
     }
 }

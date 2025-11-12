@@ -3,7 +3,8 @@
 
 //! Portable triggering of acknowledgement flows
 
-use crate::buffer_pool::SharedImpl;
+use bytes::Bytes;
+
 use crate::client::ClientError;
 use crate::client::token::completion::{
     PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecAcceptCompletionToken,
@@ -16,7 +17,7 @@ use crate::packet::{
 // TODO: Arguably, perhaps these should have their own error type instead of using ClientError
 
 #[derive(Debug)]
-pub struct PubAckToken(pub(crate) buffered::PubAckToken<SharedImpl>);
+pub struct PubAckToken(pub(crate) buffered::PubAckToken<Bytes>);
 
 impl PubAckToken {
     /// Accept the received PUBLISH by issuing a PUBACK indicating success.
@@ -50,7 +51,7 @@ impl PubAckToken {
 }
 
 #[derive(Debug)]
-pub struct PubRecToken(pub(crate) buffered::PubRecToken<SharedImpl>);
+pub struct PubRecToken(pub(crate) buffered::PubRecToken<Bytes>);
 
 impl PubRecToken {
     /// Accept the received PUBLISH by issuing a PUBREC indicating success.
@@ -90,7 +91,7 @@ impl PubRecToken {
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
 #[derive(Debug)]
-pub struct PubRelToken(pub(crate) buffered::PubRelToken<SharedImpl>);
+pub struct PubRelToken(pub(crate) buffered::PubRelToken<Bytes>);
 
 impl PubRelToken {
     /// Confirm the PUBREC was received by issuing a PUBREL.
@@ -114,7 +115,7 @@ impl PubRelToken {
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
 #[derive(Debug)]
-pub struct PubCompToken(pub(crate) buffered::PubCompToken<SharedImpl>);
+pub struct PubCompToken(pub(crate) buffered::PubCompToken<Bytes>);
 
 impl PubCompToken {
     /// Confirm the PUBREL was received by issuing a PUBCOMP.

@@ -182,7 +182,6 @@ pub mod accumulators;
 pub use accumulators::{BytesAccumulator, EitherBytesAccumulator, Iovecs};
 
 pub mod bytes;
-pub use bytes::{BufferPoolImpl, OwnedImpl, SharedImpl};
 
 #[cfg(test)]
 pub mod tests;

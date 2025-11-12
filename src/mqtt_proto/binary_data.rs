@@ -3,7 +3,7 @@
 
 use std::mem::size_of;
 
-use bytes::{BufMut as _, BytesMut};
+use bytes::{BufMut as _, Bytes, BytesMut};
 
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{DecodeError, EncodeError};
@@ -236,12 +236,12 @@ where
     }
 }
 
-impl From<&[u8]> for BinaryData<buffer_pool::bytes::SharedImpl> {
+impl From<&[u8]> for BinaryData<Bytes> {
     fn from(s: &[u8]) -> Self {
         let mut result = BytesMut::with_capacity(U16_SIZE + s.len());
         result.put(&u16::try_from(s.len()).unwrap().to_be_bytes()[..]);
         result.put(s);
-        Self(result.freeze().into())
+        Self(result.freeze())
     }
 }
 
