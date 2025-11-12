@@ -416,7 +416,7 @@ impl ConnectHandle {
                 .await
                 {
                     Ok(result) => result,
-                    Err(err) => return ConnectResult::Failure(self, ConnectError::Timeout),
+                    Err(err) => Err(err.into()),
                 }
             }
             None => self.transport_connect(connection_transport).await,
@@ -497,9 +497,7 @@ impl ConnectHandle {
                 .await
                 {
                     Ok(result) => result,
-                    Err(err) => {
-                        return ConnectEnhancedAuthResult::Failure(self, ConnectError::Timeout);
-                    }
+                    Err(err) => Err(err.into()),
                 }
             }
             None => self.transport_connect(connection_transport).await,

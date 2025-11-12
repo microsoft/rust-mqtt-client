@@ -62,8 +62,6 @@ pub enum ConnectError {
     ),
     #[error("connection rejected by server: {0:?}")]
     Rejected(crate::packet::ConnAck),
-    #[error("connect attempt timed out")]
-    Timeout,
 }
 
 #[derive(Debug, Error)]
