@@ -10,7 +10,7 @@
 
 use std::{io, pin::pin, time::Duration};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures_util::future::{self, FutureExt as _};
 use openssl::{
     pkey::{PKey, Private},
@@ -19,7 +19,7 @@ use openssl::{
 };
 use thiserror::Error;
 
-use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
+use crate::buffer_pool::{BufferPool, BytesPool};
 use crate::client::{
     channel_data::{
         DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0, PublishRequestQoS1QoS2,
@@ -82,8 +82,8 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         pub_qos12_tx: o_pub_q12_tx,
         sub_tx,
     };
-    let reader_pool = BufferPoolImpl;
-    let writer_pool = BufferPoolImpl;
+    let reader_pool = BytesPool;
+    let writer_pool = BytesPool;
     let owned = writer_pool.take_empty_owned();
     let session = Session::new(
         sub_rx,
@@ -147,8 +147,8 @@ pub enum ConnectionTransportConfig {
     },
     #[cfg(feature = "__integration")]
     Test {
-        incoming_packets: tokio::sync::mpsc::UnboundedReceiver<Packet<SharedImpl>>,
-        outgoing_packets: tokio::sync::mpsc::UnboundedSender<Packet<SharedImpl>>,
+        incoming_packets: tokio::sync::mpsc::UnboundedReceiver<Packet<Bytes>>,
+        outgoing_packets: tokio::sync::mpsc::UnboundedSender<Packet<Bytes>>,
     },
 }
 
@@ -233,11 +233,11 @@ pub struct Client {
     // NOTE: We use different channels for publishes vs. control packets to allow for
     // prioritization of operations by the receiver.
     /// Channel that transmits outgoing PUBLISH requests at QoS 0
-    pub_qos0_tx: tokio::sync::mpsc::Sender<PublishRequestQoS0<SharedImpl>>,
+    pub_qos0_tx: tokio::sync::mpsc::Sender<PublishRequestQoS0<Bytes>>,
     /// Channel that transmits outgoing PUBLISH requests as QoS 1 or 2
-    pub_qos12_tx: tokio::sync::mpsc::Sender<PublishRequestQoS1QoS2<SharedImpl>>,
+    pub_qos12_tx: tokio::sync::mpsc::Sender<PublishRequestQoS1QoS2<Bytes>>,
     /// Channel that transmits outgoing SUBSCRIBE/UNSUBSCRIBE requests
-    sub_tx: tokio::sync::mpsc::Sender<SubscriptionRequest<SharedImpl>>,
+    sub_tx: tokio::sync::mpsc::Sender<SubscriptionRequest<Bytes>>,
 }
 
 impl Client {
@@ -256,7 +256,7 @@ impl Client {
             .send(PublishRequestQoS0(
                 notifier,
                 topic_name.into_inner().into(),
-                payload.into(),
+                payload,
                 retain,
                 properties.into(),
             ))
@@ -280,7 +280,7 @@ impl Client {
             .send(PublishRequestQoS1QoS2::PublishQoS1(
                 notifier,
                 topic_name.into_inner().into(),
-                payload.into(),
+                payload,
                 retain,
                 properties.into(),
             ))
@@ -305,7 +305,7 @@ impl Client {
             .send(PublishRequestQoS1QoS2::PublishQoS2(
                 notifier,
                 topic_name.into_inner().into(),
-                payload.into(),
+                payload,
                 retain,
                 properties.into(),
             ))
@@ -373,7 +373,7 @@ impl Client {
 /// Receives incoming Application Messages as `Publish`es.
 pub struct Receiver {
     /// Channel for receiving incoming PUBLISH packets
-    rx: tokio::sync::mpsc::UnboundedReceiver<IncomingPublishAndToken<SharedImpl>>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<IncomingPublishAndToken<Bytes>>,
 }
 
 impl Receiver {
@@ -389,9 +389,9 @@ impl Receiver {
 
 /// Handle providing MQTT CONNECT functionality.
 pub struct ConnectHandle {
-    session: Session<OwnedImpl>,
-    reader_pool: BufferPoolImpl,
-    writer_pool: BufferPoolImpl,
+    session: Session<BytesMut>,
+    reader_pool: BytesPool,
+    writer_pool: BytesPool,
 }
 
 impl ConnectHandle {
@@ -575,7 +575,7 @@ impl ConnectHandle {
     async fn transport_connect(
         &self,
         transport_config: ConnectionTransportConfig,
-    ) -> io::Result<(Reader<BufferPoolImpl>, Writer<BufferPoolImpl>)> {
+    ) -> io::Result<(Reader<BytesPool>, Writer<BytesPool>)> {
         Ok(match transport_config {
             ConnectionTransportConfig::Tcp { hostname, port } => {
                 crate::io::tokio_tcp::connect(
@@ -622,7 +622,7 @@ impl ConnectHandle {
     #[allow(clippy::too_many_arguments)]
     async fn mqtt_connect(
         &self,
-        writer: &mut Writer<BufferPoolImpl>,
+        writer: &mut Writer<BytesPool>,
         clean_start: bool,
         keep_alive: KeepAlive,
         will: Option<Will>,
@@ -648,9 +648,8 @@ impl ConnectHandle {
 
     async fn mqtt_receive(
         &self,
-        reader: &mut Reader<BufferPoolImpl>,
-    ) -> Result<Packet<SharedImpl>, ConnectError> {
-        // TODO: oh no this can be protocol or io
+        reader: &mut Reader<BytesPool>,
+    ) -> Result<Packet<Bytes>, ConnectError> {
         let mut raw_packet = reader.read().await?;
         Ok(Packet::decode(
             raw_packet.first_byte,
@@ -663,11 +662,11 @@ impl ConnectHandle {
 
 /// Handle for the intermediate step of an MQTT CONNECT with enhanced authentication.
 pub struct EnhancedAuthHandle {
-    session: Session<OwnedImpl>,
-    reader_pool: BufferPoolImpl,
-    writer_pool: BufferPoolImpl,
-    reader: Reader<BufferPoolImpl>,
-    writer: Writer<BufferPoolImpl>,
+    session: Session<BytesMut>,
+    reader_pool: BytesPool,
+    writer_pool: BytesPool,
+    reader: Reader<BytesPool>,
+    writer: Writer<BytesPool>,
     auth_method: String,
 }
 
@@ -793,11 +792,11 @@ impl EnhancedAuthHandle {
 
 /// Runs the MQTT client event loop, keeping the client operational.
 pub struct Connection {
-    session: Session<OwnedImpl>,
-    reader_pool: BufferPoolImpl,
-    writer_pool: BufferPoolImpl,
-    reader: Reader<BufferPoolImpl>,
-    writer: Writer<BufferPoolImpl>,
+    session: Session<BytesMut>,
+    reader_pool: BytesPool,
+    writer_pool: BytesPool,
+    reader: Reader<BytesPool>,
+    writer: Writer<BytesPool>,
 }
 
 impl Connection {
@@ -914,7 +913,7 @@ impl Connection {
     }
 }
 
-pub struct DisconnectHandle(tokio::sync::oneshot::Sender<DisconnectRequest<SharedImpl>>);
+pub struct DisconnectHandle(tokio::sync::oneshot::Sender<DisconnectRequest<Bytes>>);
 
 impl DisconnectHandle {
     pub fn disconnect(self, properties: &DisconnectProperties) -> Result<(), ClientError> {
@@ -945,7 +944,7 @@ impl DisconnectHandle {
 
 pub struct ReauthHandle {
     method: String,
-    tx: tokio::sync::mpsc::Sender<ReauthRequest<SharedImpl>>,
+    tx: tokio::sync::mpsc::Sender<ReauthRequest<Bytes>>,
 }
 
 impl ReauthHandle {
@@ -995,8 +994,8 @@ pub enum ReauthResult {
     Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
 }
 
-impl From<buffered::ReauthResult<SharedImpl>> for ReauthResult {
-    fn from(value: buffered::ReauthResult<SharedImpl>) -> Self {
+impl From<buffered::ReauthResult<Bytes>> for ReauthResult {
+    fn from(value: buffered::ReauthResult<Bytes>) -> Self {
         match value {
             buffered::ReauthResult::Continue(auth, token) => {
                 Self::Continue(auth.into(), ReauthToken(token))
@@ -1012,9 +1011,8 @@ impl From<buffered::ReauthResult<SharedImpl>> for ReauthResult {
 pub enum DisconnectedEvent {
     ApplicationDisconnect,
     ServerDisconnect(Disconnect),
-    IoError(io::Error), // fka Transport
-    ProtocolError(ProtocolError), // TODO: is this a subset of transport? No? why would it be?
-                        // TODO: keepalive timeout? Server will send disconnect, so probably part of ServerRequested
+    IoError(io::Error),
+    ProtocolError(ProtocolError),
 }
 
 /// Internal error type for propagating connection errors
@@ -1037,10 +1035,8 @@ pub enum ManualAcknowledgement {
     QoS2(PubRecToken),
 }
 
-// run_until_disconnect() -> (ConnectHandle, DisconnectedEvent)
-
-impl From<channel_data::IncomingPublishAndToken<SharedImpl>> for (Publish, ManualAcknowledgement) {
-    fn from(inner: channel_data::IncomingPublishAndToken<SharedImpl>) -> Self {
+impl From<channel_data::IncomingPublishAndToken<Bytes>> for (Publish, ManualAcknowledgement) {
+    fn from(inner: channel_data::IncomingPublishAndToken<Bytes>) -> Self {
         match inner {
             channel_data::IncomingPublishAndToken::QoS0(publish) => {
                 (publish.into(), ManualAcknowledgement::QoS0)

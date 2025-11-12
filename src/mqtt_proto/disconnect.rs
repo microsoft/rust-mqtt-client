@@ -248,7 +248,7 @@ mod tests {
     use matches::assert_matches;
 
     use super::*;
-    use crate::mqtt_proto::{self, Packet, byte_str};
+    use crate::mqtt_proto::{self, Packet};
 
     encode_decode_v3! {
         Packet::Disconnect(Disconnect {
@@ -262,9 +262,9 @@ mod tests {
             reason_code: DisconnectReasonCode::Normal,
             other_properties: DisconnectOtherProperties {
                 session_expiry_interval: Some(SessionExpiryInterval::Duration(0)),
-                reason_string: Some(byte_str("just cause")),
-                user_properties: vec![(byte_str("key"), byte_str("value"))],
-                server_reference: Some(byte_str("server")),
+                reason_string: Some("just cause".into()),
+                user_properties: vec![("key".into(), "value".into())],
+                server_reference: Some("server".into()),
             },
         }),
 
@@ -272,9 +272,9 @@ mod tests {
             reason_code: DisconnectReasonCode::Normal,
             other_properties: DisconnectOtherProperties {
                 session_expiry_interval: Some(SessionExpiryInterval::Duration(1)),
-                reason_string: Some(byte_str("just cause")),
-                user_properties: vec![(byte_str("key"), byte_str("value"))],
-                server_reference: Some(byte_str("server")),
+                reason_string: Some("just cause".into()),
+                user_properties: vec![("key".into(), "value".into())],
+                server_reference: Some("server".into()),
             },
         }),
     }
@@ -286,9 +286,9 @@ mod tests {
                 reason_code: code,
                 other_properties: DisconnectOtherProperties {
                     session_expiry_interval: Some(SessionExpiryInterval::Duration(1)),
-                    reason_string: Some(byte_str("just cause")),
-                    user_properties: vec![(byte_str("key"), byte_str("value"))],
-                    server_reference: Some(byte_str("server")),
+                    reason_string: Some("just cause".into()),
+                    user_properties: vec![("key".into(), "value".into())],
+                    server_reference: Some("server".into()),
                 },
             });
 

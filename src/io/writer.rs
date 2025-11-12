@@ -3,7 +3,7 @@
 
 use std::io::{self, IoSlice};
 
-use crate::buffer_pool::{BufferPool, BytesAccumulator, EitherBytesAccumulator, Iovecs};
+use crate::buffer_pool::{BufferPool, BytesAccumulator, EitherAccumulator, Iovecs};
 use crate::io::WritableStream;
 use crate::mqtt_proto::{ByteCounter, Packet, ProtocolVersion};
 
@@ -13,14 +13,14 @@ where
     BP: BufferPool,
 {
     inner: Box<dyn WritableStream>,
-    buf: EitherBytesAccumulator<BP>,
+    buf: EitherAccumulator<BP>,
 }
 
 impl<BP> Writer<BP>
 where
     BP: BufferPool,
 {
-    pub(crate) fn new(inner: Box<dyn WritableStream>, buf: EitherBytesAccumulator<BP>) -> Self {
+    pub(crate) fn new(inner: Box<dyn WritableStream>, buf: EitherAccumulator<BP>) -> Self {
         Self { inner, buf }
     }
 
@@ -126,17 +126,15 @@ mod tests {
         pin::Pin,
     };
 
-    use crate::buffer_pool::{
-        BufferPool as _, EitherBytesAccumulator,
-        tests::{BufferPoolImpl, SharedImpl},
-    };
+    use bytes::Bytes;
+
+    use super::Writer;
+    use crate::buffer_pool::{BufferPool as _, BytesPool, EitherAccumulator};
     use crate::io::WritableStream;
     use crate::mqtt_proto::{
         Connect, Filter, KeepAlive, Packet, PacketIdentifier, ProtocolVersion, QoS, Subscribe,
-        SubscribeOptions, SubscribeTo, byte_str,
+        SubscribeOptions, SubscribeTo,
     };
-
-    use super::Writer;
 
     struct MockWritableStream {
         expected_writes: VecDeque<Vec<&'static [u8]>>,
@@ -178,7 +176,7 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
-        let p1 = Packet::<SharedImpl>::Connect(Connect {
+        let p1 = Packet::<Bytes>::Connect(Connect {
             username: None,
             password: None,
             will: None,
@@ -188,10 +186,10 @@ mod tests {
             other_properties: Default::default(),
         });
 
-        let p2 = Packet::<SharedImpl>::Subscribe(Subscribe {
+        let p2 = Packet::<Bytes>::Subscribe(Subscribe {
             packet_identifier: PacketIdentifier::new(1).unwrap(),
             subscribe_to: vec![SubscribeTo {
-                topic_filter: Filter::new(byte_str("foo")).unwrap(),
+                topic_filter: Filter::new("foo".into()).unwrap(),
                 options: SubscribeOptions {
                     maximum_qos: QoS::AtLeastOnce,
                     other_properties: Default::default(),
@@ -213,10 +211,10 @@ mod tests {
             ]]
             .into(),
         };
-        let pool = BufferPoolImpl;
+        let pool = BytesPool;
         let mut writer = Writer::new(
             Box::new(stream),
-            EitherBytesAccumulator::<BufferPoolImpl>::Iovecs(pool.take_empty_owned().into()),
+            EitherAccumulator::<BytesPool>::Iovecs(pool.take_empty_owned().into()),
         );
         writer.write(&p1, ProtocolVersion::V5).await.unwrap();
         writer.write(&p2, ProtocolVersion::V5).await.unwrap();

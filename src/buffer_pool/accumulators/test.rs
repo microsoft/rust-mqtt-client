@@ -7,10 +7,10 @@ use bytes::{Buf as _, BytesMut};
 
 use crate::buffer_pool::{BytesAccumulator, Error, Iovecs, Shared};
 
-/// Unlike [`single::BytesAccumulatorImpl`](crate::buffer_pool::accumulators::single::BytesAccumulatorImpl),
-/// this `BytesAccumulatorImpl` enforces that `reserve` was called before `try_put_*`.
+/// Unlike [`SingleAccumulator`](crate::buffer_pool::SingleAccumulator),
+/// this `TestAccumulator` enforces that `reserve` was called before `try_put_*`.
 #[derive(Debug, Eq, PartialEq)]
-pub struct BytesAccumulatorImpl<S> {
+pub struct TestAccumulator<S> {
     inner: BytesMut,
 
     // Used to enforce that the BytesMut does not have more capacity what it was asked to reserve,
@@ -25,9 +25,9 @@ pub struct BytesAccumulatorImpl<S> {
     shared: PhantomData<S>,
 }
 
-impl<S> BytesAccumulatorImpl<S> {
+impl<S> TestAccumulator<S> {
     pub fn with_capacity(len: usize) -> Self {
-        BytesAccumulatorImpl {
+        TestAccumulator {
             inner: BytesMut::with_capacity(len),
             unfilled_len: len,
             put_done_required: false,
@@ -36,7 +36,7 @@ impl<S> BytesAccumulatorImpl<S> {
     }
 }
 
-impl<S> BytesAccumulator for BytesAccumulatorImpl<S>
+impl<S> BytesAccumulator for TestAccumulator<S>
 where
     S: Shared,
 {

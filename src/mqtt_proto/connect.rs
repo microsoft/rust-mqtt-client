@@ -590,15 +590,15 @@ where
 mod tests {
     use std::num::{NonZeroU16, NonZeroU32};
 
+    use bytes::Bytes;
     use matches::assert_matches;
     use test_case::test_case;
 
-    use crate::buffer_pool::{Shared, tests::SharedImpl};
+    use crate::buffer_pool::Shared as _;
 
     use crate::mqtt_proto::{
         Authentication, BinaryData, DecodeError, EncodeError, Packet, ProtocolVersion, Publication,
-        PublicationOtherProperties, QoS, SessionExpiryInterval, binary_data, byte_str, tests,
-        topic,
+        PublicationOtherProperties, QoS, SessionExpiryInterval, tests, topic,
     };
     use crate::mqtt_proto::{Connect, ConnectOtherProperties};
 
@@ -607,7 +607,7 @@ mod tests {
             username: None,
             password: None,
             will: None,
-            client_id: Some(byte_str("kittens")),
+            client_id: Some("kittens".into()),
             clean_start: false,
             keep_alive: 30.into(),
             other_properties: ConnectOtherProperties {
@@ -644,9 +644,9 @@ mod tests {
                     user_properties: vec![],
                     content_type: None,
                 },
-                payload: SharedImpl::from_static(b"hello world"),
+                payload: Bytes::from_static(b"hello world"),
             }, 0))),
-            client_id: Some(byte_str("kittens")),
+            client_id: Some("kittens".into()),
             clean_start: true,
             keep_alive: 30.into(),
             other_properties: Default::default(),
@@ -696,7 +696,7 @@ mod tests {
             username: None,
             password: None,
             will: None,
-            client_id: Some(byte_str("client_id")),
+            client_id: Some("client_id".into()),
             clean_start: true,
             keep_alive: 10.into(),
             other_properties: ConnectOtherProperties {
@@ -712,8 +712,8 @@ mod tests {
         }),
 
         Packet::Connect(Connect {
-            username: Some(byte_str("username")),
-            password: Some(binary_data("password")),
+            username: Some("username".into()),
+            password: Some(b"password".into()),
             will: Some(Box::new((
                 Publication {
                     topic_name: topic("topic"),
@@ -723,15 +723,15 @@ mod tests {
                         payload_is_utf8: true,
                         message_expiry_interval: Some(10),
                         response_topic: Some(topic("response")),
-                        correlation_data: Some(binary_data(b"correlation")),
-                        user_properties: vec![(byte_str("foo"), byte_str("bar"))],
-                        content_type: Some(byte_str("content")),
+                        correlation_data: Some(b"correlation".into()),
+                        user_properties: vec![("foo".into(), "bar".into())],
+                        content_type: Some("content".into()),
                     },
-                    payload: SharedImpl::from_static(b"payload"),
+                    payload: Bytes::from_static(b"payload"),
                 },
                 10,
             ))),
-            client_id: Some(byte_str("client_id")),
+            client_id: Some("client_id".into()),
             clean_start: false,
             keep_alive: 10.into(),
             other_properties: ConnectOtherProperties {
@@ -741,46 +741,44 @@ mod tests {
                 topic_alias_maximum: 10,
                 request_response_information: true,
                 request_problem_information: true,
-                user_properties: vec![(byte_str("foo"), byte_str("bar"))],
-                authentication: Some(Authentication { method: byte_str("method"), data: Some(binary_data(b"data")) }),
+                user_properties: vec![("foo".into(), "bar".into())],
+                authentication: Some(Authentication { method: "method".into(), data: Some(b"data".into()) }),
             },
         }),
     }
 
     #[test_case(
-        binary_data(b"\x10\x0C\x00\x04MQTT\x04\x22\x00\x0A\x00\x00"),
+        b"\x10\x0C\x00\x04MQTT\x04\x22\x00\x0A\x00\x00",
         ProtocolVersion::V3;
         "v3 WILL_RETAIN"
     )]
     #[test_case(
-        binary_data(b"\x10\x0C\x00\x04MQTT\x04\x0A\x00\x0A\x00\x00"),
+        b"\x10\x0C\x00\x04MQTT\x04\x0A\x00\x0A\x00\x00",
         ProtocolVersion::V3;
         "v3 WILL_QOS"
     )]
     #[test_case(
-        binary_data(b"\x10\x0C\x00\x04MQTT\x04\x2A\x00\x0A\x00\x00"),
+        b"\x10\x0C\x00\x04MQTT\x04\x2A\x00\x0A\x00\x00",
         ProtocolVersion::V3;
         "v3 WILL_RETAIN and WILL_QOS"
     )]
     #[test_case(
-        binary_data(b"\x10\x0D\x00\x04MQTT\x05\x22\x00\x0A\x00\x00\x00"),
+        b"\x10\x0D\x00\x04MQTT\x05\x22\x00\x0A\x00\x00\x00",
         ProtocolVersion::V5;
         "v5 WILL_RETAIN"
     )]
     #[test_case(
-        binary_data(b"\x10\x0D\x00\x04MQTT\x05\x0A\x00\x0A\x00\x00\x00"),
+        b"\x10\x0D\x00\x04MQTT\x05\x0A\x00\x0A\x00\x00\x00",
         ProtocolVersion::V5;
         "v5 WILL_QOS"
     )]
     #[test_case(
-        binary_data(b"\x10\x0D\x00\x04MQTT\x05\x2A\x00\x0A\x00\x00\x00"),
+        b"\x10\x0D\x00\x04MQTT\x05\x2A\x00\x0A\x00\x00\x00",
         ProtocolVersion::V5;
         "v5 WILL_RETAIN and WILL_QOS"
     )]
-    fn will_properties_flags_set_but_not_will_flag(
-        encoding: BinaryData<SharedImpl>,
-        version: ProtocolVersion,
-    ) {
+    fn will_properties_flags_set_but_not_will_flag(encoding: &[u8], version: ProtocolVersion) {
+        let encoding = BinaryData::<Bytes>::from(encoding);
         let mut buffer = encoding.into_shared();
         buffer.drain(std::mem::size_of::<u16>());
 
@@ -791,53 +789,49 @@ mod tests {
     }
 
     #[test_case(
-        binary_data(b"\x10\x0C\x00\x04MQTT\x04\x02\x00\x0A\x00\x00"),
+        b"\x10\x0C\x00\x04MQTT\x04\x02\x00\x0A\x00\x00",
         ProtocolVersion::V3,
         false,
         false
     )]
     #[test_case(
-        binary_data(b"\x10\x16\x00\x04MQTT\x04\x42\x00\x0A\x00\x00\x00\x08password"),
+        b"\x10\x16\x00\x04MQTT\x04\x42\x00\x0A\x00\x00\x00\x08password",
         ProtocolVersion::V3,
         false,
         true
     )]
     #[test_case(
-        binary_data(b"\x10\x16\x00\x04MQTT\x04\x82\x00\x0A\x00\x00\x00\x08username"),
+        b"\x10\x16\x00\x04MQTT\x04\x82\x00\x0A\x00\x00\x00\x08username",
         ProtocolVersion::V3,
         true,
         false
     )]
     #[test_case(
-        binary_data(
-            b"\x10\x20\x00\x04MQTT\x04\xC2\x00\x0A\x00\x00\x00\x08username\x00\x08password",
-        ),
+        b"\x10\x20\x00\x04MQTT\x04\xC2\x00\x0A\x00\x00\x00\x08username\x00\x08password",
         ProtocolVersion::V3,
         true,
         true
     )]
     #[test_case(
-        binary_data(b"\x10\x0D\x00\x04MQTT\x05\x02\x00\x0A\x00\x00\x00"),
+        b"\x10\x0D\x00\x04MQTT\x05\x02\x00\x0A\x00\x00\x00",
         ProtocolVersion::V5,
         false,
         false
     )]
     #[test_case(
-        binary_data(b"\x10\x17\x00\x04MQTT\x05\x42\x00\x0A\x00\x00\x00\x00\x08password"),
+        b"\x10\x17\x00\x04MQTT\x05\x42\x00\x0A\x00\x00\x00\x00\x08password",
         ProtocolVersion::V5,
         false,
         true
     )]
     #[test_case(
-        binary_data(b"\x10\x17\x00\x04MQTT\x05\x82\x00\x0A\x00\x00\x00\x00\x08username"),
+        b"\x10\x17\x00\x04MQTT\x05\x82\x00\x0A\x00\x00\x00\x00\x08username",
         ProtocolVersion::V5,
         true,
         false
     )]
     #[test_case(
-        binary_data(
-            b"\x10\x21\x00\x04MQTT\x05\xC2\x00\x0A\x00\x00\x00\x00\x08username\x00\x08password",
-        ),
+        b"\x10\x21\x00\x04MQTT\x05\xC2\x00\x0A\x00\x00\x00\x00\x08username\x00\x08password",
         ProtocolVersion::V5,
         true,
         true
@@ -845,11 +839,13 @@ mod tests {
     // Lint wants `encoding` to be taken as borrow, but that makes the `test_case()` exprs more complicated.
     #[allow(clippy::needless_pass_by_value)]
     fn password_flag_set_but_not_username_flag(
-        encoding: BinaryData<SharedImpl>,
+        encoding: &[u8],
         version: ProtocolVersion,
         username_present: bool,
         password_present: bool,
     ) {
+        let encoding = BinaryData::<Bytes>::from(encoding);
+
         // Decode test
 
         let mut buffer = encoding.clone().into_shared();
@@ -866,8 +862,8 @@ mod tests {
             assert_eq!(
                 actual_packet.unwrap(),
                 Packet::Connect(Connect {
-                    username: username_present.then(|| byte_str("username")),
-                    password: password_present.then(|| binary_data(b"password")),
+                    username: username_present.then(|| "username".into()),
+                    password: password_present.then(|| b"password".into()),
                     will: None,
                     client_id: None,
                     clean_start: true,
@@ -880,8 +876,8 @@ mod tests {
         // Encode test
 
         let packet = Packet::Connect(Connect {
-            username: username_present.then(|| byte_str("username")),
-            password: password_present.then(|| binary_data(b"password")),
+            username: username_present.then(|| "username".into()),
+            password: password_present.then(|| b"password".into()),
             will: None,
             client_id: None,
             clean_start: true,

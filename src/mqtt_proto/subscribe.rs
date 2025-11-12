@@ -347,19 +347,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::buffer_pool::{Shared, tests::SharedImpl};
-    use matches::assert_matches;
     use std::num::NonZeroU32;
+
+    use bytes::Bytes;
+    use matches::assert_matches;
     use test_case::test_case;
 
     use super::{
         RetainHandling, Subscribe, SubscribeOptions, SubscribeOptionsOtherProperties,
         SubscribeOtherProperties, SubscribeTo,
     };
-
+    use crate::buffer_pool::Shared;
     use crate::mqtt_proto::{
-        BinaryData, DecodeError, Packet, PacketIdentifier, ProtocolVersion, QoS, binary_data,
-        byte_str, filter,
+        BinaryData, DecodeError, Packet, PacketIdentifier, ProtocolVersion, QoS, filter,
     };
 
     encode_decode_v3! {
@@ -396,13 +396,14 @@ mod tests {
             ],
             other_properties: SubscribeOtherProperties {
                 subscription_identifier: Some(NonZeroU32::new(1).unwrap()),
-                user_properties: vec![(byte_str("cat"), byte_str("dog"))],
+                user_properties: vec![("cat".into(), "dog".into())],
             },
         }),
     }
 
-    #[test_case(binary_data(b"\x82!\0\x02\r\x0b\x01&\0\x03cat\0\x03dog\0\x0e$share/foo/bar-"))]
-    fn no_local_for_shared_subscription(encoding: BinaryData<SharedImpl>) {
+    #[test_case(b"\x82!\0\x02\r\x0b\x01&\0\x03cat\0\x03dog\0\x0e$share/foo/bar-")]
+    fn no_local_for_shared_subscription(encoding: &[u8]) {
+        let encoding = BinaryData::<Bytes>::from(encoding);
         let mut buffer = encoding.into_shared();
         buffer.drain(std::mem::size_of::<u16>());
 

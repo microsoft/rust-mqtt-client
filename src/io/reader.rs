@@ -107,9 +107,7 @@ mod tests {
 
     use matches::assert_matches;
 
-    use crate::buffer_pool::{
-        BufferPool as _, maybe_uninit_copy_from_slice, tests::BufferPoolImpl,
-    };
+    use crate::buffer_pool::{BufferPool as _, BytesPool, maybe_uninit_copy_from_slice};
     use crate::io::ReadableStream;
 
     use super::{RawPacket, Reader};
@@ -185,8 +183,8 @@ mod tests {
             // Rest of SUBSCRIBE and start of PUBLISH
             &b"\x09\x00\x01\x00\x00\x03\x66\x6f\x6f\x09\x32"[..],
         ]);
-        let pool = BufferPoolImpl;
-        let mut reader = Reader::<BufferPoolImpl>::new(Box::new(stream), pool.take_empty_owned());
+        let pool = BytesPool;
+        let mut reader = Reader::<BytesPool>::new(Box::new(stream), pool.take_empty_owned());
 
         let packet = reader.read().await.unwrap();
         assert_matches!(packet, RawPacket { first_byte: 0x10, rest } if rest == b"\x00\x04\x4d\x51\x54\x54\x05\x02\x00\x00\x05\x11\xff\xff\xff\xff\x00\x00"[..]);

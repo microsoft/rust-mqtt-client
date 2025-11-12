@@ -11,7 +11,7 @@ use std::{
 
 use tokio::net::{TcpStream, ToSocketAddrs};
 
-use crate::buffer_pool::{BufferPool, EitherBytesAccumulator};
+use crate::buffer_pool::{BufferPool, EitherAccumulator};
 
 use crate::io::{ReadableStream, Reader, WritableStream, Writer};
 
@@ -41,7 +41,7 @@ where
     let read = Rc::new(stream);
     let read_buf = reader_pool.take_empty_owned();
     let write = read.clone();
-    let write_buf = EitherBytesAccumulator::Iovecs(writer_pool.take_empty_owned().into());
+    let write_buf = EitherAccumulator::Iovecs(writer_pool.take_empty_owned().into());
 
     (
         Reader::new(Box::new(TcpStreamRead { inner: read }), read_buf),

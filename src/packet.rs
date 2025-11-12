@@ -1857,14 +1857,15 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::mqtt_proto::{binary_data, byte_str, topic};
-    use crate::packet::{self, PacketIdentifier, SessionExpiryInterval};
-    use crate::{buffer_pool::tests::SharedImpl, packet::KeepAlive};
-    use crate::{mqtt_proto, topic};
     use std::num::{NonZeroU16, NonZeroU32};
 
+    use bytes::Bytes;
     use paste::paste;
 
+    use crate::mqtt_proto::topic;
+    use crate::packet::KeepAlive;
+    use crate::packet::{self, PacketIdentifier, SessionExpiryInterval};
+    use crate::{mqtt_proto, topic};
     #[allow(clippy::needless_pass_by_value)]
     fn compare_as_buffered<T, U>(packet: T, proto_packet: U)
     where
@@ -1951,51 +1952,51 @@ mod test {
     fn property_defaults() {
         compare_as_buffered(
             packet::ConnectProperties::default(),
-            mqtt_proto::ConnectOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::ConnectOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::ConnAckProperties::default(),
-            mqtt_proto::ConnAckOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::ConnAckOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::PublishProperties::default(),
-            mqtt_proto::PublishOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::PublishOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::PubAckProperties::default(),
-            mqtt_proto::PubAckOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::PubAckOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::PubRecProperties::default(),
-            mqtt_proto::PubRecOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::PubRecOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::PubRelProperties::default(),
-            mqtt_proto::PubRelOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::PubRelOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::PubCompProperties::default(),
-            mqtt_proto::PubCompOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::PubCompOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::SubscribeProperties::default(),
-            mqtt_proto::SubscribeOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::SubscribeOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::SubAckProperties::default(),
-            mqtt_proto::SubAckOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::SubAckOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::UnsubscribeProperties::default(),
-            mqtt_proto::UnsubscribeOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::UnsubscribeOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::UnsubAckProperties::default(),
-            mqtt_proto::UnsubAckOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::UnsubAckOtherProperties::<Bytes>::default(),
         );
         compare_as_buffered(
             packet::DisconnectProperties::default(),
-            mqtt_proto::DisconnectOtherProperties::<SharedImpl>::default(),
+            mqtt_proto::DisconnectOtherProperties::<Bytes>::default(),
         );
     }
 
@@ -2021,8 +2022,8 @@ mod test {
             request_response_information: true,
             request_problem_information: false,
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
             authentication: None, // TODO: add support
         }
@@ -2064,19 +2065,19 @@ mod test {
                 maximum_qos: mqtt_proto::QoS::AtLeastOnce,
                 retain_available: true,
                 maximum_packet_size: NonZeroU32::new(1024).unwrap(),
-                assigned_client_id: Some(byte_str("client_id")),
+                assigned_client_id: Some("client_id".into()),
                 topic_alias_maximum: 10,
-                reason_string: Some(byte_str("Not authorized")),
+                reason_string: Some("Not authorized".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
                 wildcard_subscription_available: true,
                 subscription_identifiers_available: true,
                 shared_subscription_available: false,
                 server_keep_alive: Some(KeepAlive::Duration(NonZeroU16::new(30).unwrap())),
-                response_information: Some(byte_str("response info")),
-                server_reference: Some(byte_str("server ref")),
+                response_information: Some("response info".into()),
+                server_reference: Some("server ref".into()),
                 authentication: None, // TODO: add support
             },
         }
@@ -2107,7 +2108,7 @@ mod test {
             },
         },
         mqtt_proto::Publish {
-            payload: SharedImpl::from_static(b"payload"),
+            payload: Bytes::from_static(b"payload"),
             packet_identifier_dup_qos: mqtt_proto::PacketIdentifierDupQoS::AtLeastOnce(
                 PacketIdentifier::new(42).unwrap(),
                 true,
@@ -2119,13 +2120,13 @@ mod test {
                 message_expiry_interval: Some(3600),
                 topic_alias: Some(1.try_into().unwrap()),
                 response_topic: Some(topic("response/topic")),
-                correlation_data: Some(binary_data("correlation")),
+                correlation_data: Some(b"correlation".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
                 subscription_identifiers: vec![1.try_into().unwrap(), 42.try_into().unwrap()],
-                content_type: Some(byte_str("content/type")),
+                content_type: Some("content/type".into()),
             },
         }
     );
@@ -2147,10 +2148,10 @@ mod test {
             packet_identifier: PacketIdentifier::new(42).unwrap(),
             reason_code: mqtt_proto::PubAckReasonCode::NotAuthorized,
             other_properties: mqtt_proto::PubAckOtherProperties {
-                reason_string: Some(byte_str("Not authorized")),
+                reason_string: Some("Not authorized".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
             },
         }
@@ -2173,10 +2174,10 @@ mod test {
             packet_identifier: PacketIdentifier::new(42).unwrap(),
             reason_code: mqtt_proto::PubRecReasonCode::NotAuthorized,
             other_properties: mqtt_proto::PubRecOtherProperties {
-                reason_string: Some(byte_str("Not authorized")),
+                reason_string: Some("Not authorized".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
             },
         }
@@ -2199,10 +2200,10 @@ mod test {
             packet_identifier: PacketIdentifier::new(42).unwrap(),
             reason_code: mqtt_proto::PubRelReasonCode::PacketIdentifierNotFound,
             other_properties: mqtt_proto::PubRelOtherProperties {
-                reason_string: Some(byte_str("Packet ID not found")),
+                reason_string: Some("Packet ID not found".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
             },
         }
@@ -2225,10 +2226,10 @@ mod test {
             packet_identifier: PacketIdentifier::new(42).unwrap(),
             reason_code: mqtt_proto::PubCompReasonCode::PacketIdentifierNotFound,
             other_properties: mqtt_proto::PubCompOtherProperties {
-                reason_string: Some(byte_str("Packet ID not found")),
+                reason_string: Some("Packet ID not found".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
             },
         }
@@ -2246,8 +2247,8 @@ mod test {
         mqtt_proto::SubscribeOtherProperties {
             subscription_identifier: Some(42.try_into().unwrap()),
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         }
     );
@@ -2275,10 +2276,10 @@ mod test {
                 mqtt_proto::SubscribeReasonCode::NotAuthorized,
             ],
             other_properties: mqtt_proto::SubAckOtherProperties {
-                reason_string: Some(byte_str("Not authorized")),
+                reason_string: Some("Not authorized".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
             },
         }
@@ -2294,8 +2295,8 @@ mod test {
         },
         mqtt_proto::UnsubscribeOtherProperties {
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         }
     );
@@ -2323,10 +2324,10 @@ mod test {
                 mqtt_proto::UnsubAckReasonCode::NotAuthorized,
             ],
             other_properties: mqtt_proto::UnsubAckOtherProperties {
-                reason_string: Some(byte_str("Not authorized")),
+                reason_string: Some("Not authorized".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
             },
         }
@@ -2350,12 +2351,12 @@ mod test {
             reason_code: mqtt_proto::DisconnectReasonCode::Normal,
             other_properties: mqtt_proto::DisconnectOtherProperties {
                 session_expiry_interval: Some(packet::SessionExpiryInterval::Duration(3600)),
-                reason_string: Some(byte_str("Normal disconnection")),
+                reason_string: Some("Normal disconnection".into()),
                 user_properties: vec![
-                    (byte_str("key1"), byte_str("value1")),
-                    (byte_str("key2"), byte_str("value2")),
+                    ("key1".into(), "value1".into()),
+                    ("key2".into(), "value2".into()),
                 ],
-                server_reference: Some(byte_str("server/ref")),
+                server_reference: Some("server/ref".into()),
             }
         }
     );
@@ -2379,13 +2380,13 @@ mod test {
         mqtt_proto::Auth {
             reason_code: mqtt_proto::AuthenticateReasonCode::ContinueAuthentication,
             authentication: Some(mqtt_proto::Authentication {
-                method: byte_str("authmethod"),
-                data: Some(binary_data("authdata")),
+                method: "authmethod".into(),
+                data: Some(b"authdata".into()),
             }),
-            reason_string: Some(byte_str("Continue authentication")),
+            reason_string: Some("Continue authentication".into()),
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         }
     );

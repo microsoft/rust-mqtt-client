@@ -261,20 +261,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use buffer_pool::{
-        BufferPool as _,
-        tests::{BufferPoolImpl, SharedImpl},
-    };
+    use bytes::Bytes;
 
     use super::*;
-    use crate::mqtt_proto::{Packet, PacketIdentifier, binary_data, byte_str, topic};
+    use crate::buffer_pool::{BufferPool as _, BytesPool};
+    use crate::mqtt_proto::{Packet, PacketIdentifier, topic};
 
     encode_decode_v3! {
         Packet::Publish(Publish {
             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(PacketIdentifier::new(1).unwrap(), false),
             retain: false,
             topic_name: topic("foo/bar"),
-            payload: SharedImpl::from_static(b"hello world"),
+            payload: Bytes::from_static(b"hello world"),
             other_properties: Default::default(),
         }),
     }
@@ -284,9 +282,9 @@ mod tests {
             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
             retain: false,
             topic_name: topic("foo/bar"),
-            payload: SharedImpl::from_static(b"hello world"),
+            payload: Bytes::from_static(b"hello world"),
             other_properties: PublishOtherProperties {
-                user_properties: vec![(byte_str("hello"), byte_str("world"))],
+                user_properties: vec![("hello".into(), "world".into())],
                 ..Default::default()
             },
         }),
@@ -295,9 +293,9 @@ mod tests {
             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(PacketIdentifier::new(1).unwrap(), false),
             retain: false,
             topic_name: topic("foo/bar"),
-            payload: SharedImpl::from_static(b"hello world"),
+            payload: Bytes::from_static(b"hello world"),
             other_properties: PublishOtherProperties {
-                user_properties: vec![(byte_str("hello"), byte_str("world"))],
+                user_properties: vec![("hello".into(), "world".into())],
                 ..Default::default()
             },
         }),
@@ -306,9 +304,9 @@ mod tests {
             packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(PacketIdentifier::new(1).unwrap(), false),
             retain: false,
             topic_name: topic("foo/bar"),
-            payload: SharedImpl::from_static(b"hello world"),
+            payload: Bytes::from_static(b"hello world"),
             other_properties: PublishOtherProperties {
-                user_properties: vec![(byte_str("hello"), byte_str("world"))],
+                user_properties: vec![("hello".into(), "world".into())],
                 ..Default::default()
             },
         }),
@@ -317,16 +315,16 @@ mod tests {
             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(PacketIdentifier::new(1).unwrap(), false),
             retain: false,
             topic_name: topic("foo/bar"),
-            payload: SharedImpl::from_static(b"hello world"),
+            payload: Bytes::from_static(b"hello world"),
             other_properties: PublishOtherProperties {
-                user_properties: vec![(byte_str("hello"), byte_str("world"))],
+                user_properties: vec![("hello".into(), "world".into())],
                 payload_is_utf8: true,
                 message_expiry_interval: Some(10),
                 topic_alias: Some(NonZeroU16::new(16).unwrap()),
                 response_topic: Some(topic("response/topic")),
-                correlation_data: Some(binary_data("cd")),
+                correlation_data: Some(b"cd".into()),
                 subscription_identifiers: vec![NonZeroU32::new(1).unwrap(), NonZeroU32::new(2).unwrap()],
-                content_type: Some(byte_str("stuff")),
+                content_type: Some("stuff".into()),
             },
         }),
     }
@@ -337,16 +335,16 @@ mod tests {
             topic_name: topic("kittens"),
             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce,
             retain: false,
-            payload: SharedImpl::from_static(b"meow"),
+            payload: Bytes::from_static(b"meow"),
             other_properties: PublishOtherProperties {
                 response_topic: Some(topic("cute")),
-                user_properties: vec![(byte_str("genus"), byte_str("felix"))],
-                correlation_data: Some(binary_data(b"corr_data")),
+                user_properties: vec![("genus".into(), "felix".into())],
+                correlation_data: Some(b"corr_data".into()),
                 ..Default::default()
             },
         };
 
-        let pool = BufferPoolImpl;
+        let pool = BytesPool;
         let mut owned = pool.take_empty_owned();
 
         let publish_shared = publish.to_shared(&mut owned).unwrap();
