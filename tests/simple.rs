@@ -69,8 +69,5 @@ async fn connect_connack_success() {
     drop(incoming_packets_tx);
 
     let (_connect_handle, disconnected_event) = connection.await;
-    assert_matches!(
-        disconnected_event,
-        DisconnectedEvent::IoError(_)
-    );
+    assert_matches!(disconnected_event, DisconnectedEvent::IoError(_));
 }

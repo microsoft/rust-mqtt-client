@@ -524,15 +524,31 @@ impl ConnectHandle {
             return ConnectEnhancedAuthResult::Failure(self, err);
         }
 
-        let connack = match self.mqtt_receive(&mut reader).await {
+        match self.mqtt_receive(&mut reader).await {
             Ok(Packet::ConnAck(connack)) => {
-                if !connack.is_success() {
-                    return ConnectEnhancedAuthResult::Failure(
-                        self,
-                        ConnectError::Rejected(connack.into()),
-                    );
+                self.session.incoming_connack(connack.clone());
+                if connack.is_success() {
+                    let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+                    let auth_tx = self.session.ch.auth_tx.clone();
+                    self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    ConnectEnhancedAuthResult::Success(
+                        Connection {
+                            session: self.session,
+                            reader_pool: self.reader_pool,
+                            writer_pool: self.writer_pool,
+                            reader,
+                            writer,
+                        },
+                        connack.into(),
+                        DisconnectHandle(disconnect_tx),
+                        ReauthHandle {
+                            method: authentication_info.method,
+                            tx: auth_tx,
+                        },
+                    )
+                } else {
+                    ConnectEnhancedAuthResult::Failure(self, ConnectError::Rejected(connack.into()))
                 }
-                connack
             }
 
             Ok(Packet::Auth(auth)) => {
@@ -544,38 +560,16 @@ impl ConnectHandle {
                     writer,
                     auth_method: authentication_info.method,
                 };
-                return ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle);
+                ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
             }
 
-            Ok(_) => {
-                return ConnectEnhancedAuthResult::Failure(
-                    self,
-                    ConnectError::Protocol(ProtocolError::UnexpectedPacket),
-                );
-            }
+            Ok(_) => ConnectEnhancedAuthResult::Failure(
+                self,
+                ConnectError::Protocol(ProtocolError::UnexpectedPacket),
+            ),
 
-            Err(err) => return ConnectEnhancedAuthResult::Failure(self, err),
-        };
-        self.session.incoming_connack(connack.clone());
-
-        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-        let auth_tx = self.session.ch.auth_tx.clone();
-        self.session.ch.disconnect_rx = Some(disconnect_rx);
-        ConnectEnhancedAuthResult::Success(
-            Connection {
-                session: self.session,
-                reader_pool: self.reader_pool,
-                writer_pool: self.writer_pool,
-                reader,
-                writer,
-            },
-            connack.into(),
-            DisconnectHandle(disconnect_tx),
-            ReauthHandle {
-                method: authentication_info.method,
-                tx: auth_tx,
-            },
-        )
+            Err(err) => ConnectEnhancedAuthResult::Failure(self, err),
+        }
     }
 
     async fn transport_connect(
