@@ -68,9 +68,6 @@ async fn connect_connack_success() {
     // Server EOF
     drop(incoming_packets_tx);
 
-    let (_connect_handle, disconnected_event_or_error) = connection.await;
-    assert_matches!(
-        disconnected_event_or_error,
-        Ok(DisconnectedEvent::Transport)
-    );
+    let (_connect_handle, disconnected_event) = connection.await;
+    assert_matches!(disconnected_event, DisconnectedEvent::IoError(_));
 }

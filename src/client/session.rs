@@ -14,7 +14,6 @@ use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
-    ConnectionError,
     buffered::ReauthResult,
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0,
@@ -31,6 +30,7 @@ use crate::client::{
     },
     token::reauth::buffered::ReauthToken,
 };
+use crate::error::ProtocolError;
 use crate::mqtt_proto::{
     Auth, AuthenticateReasonCode, ByteStr, ConnAck, ConnectReasonCode, Disconnect, Packet,
     PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish,
@@ -373,13 +373,13 @@ where
     pub fn complete_inflight(
         &mut self,
         operation: CompletedOperation<O::Shared>,
-    ) -> Result<(), ConnectionError> {
+    ) -> Result<(), ProtocolError> {
         match operation {
             CompletedOperation::Subscribe(suback) => {
                 self.pkid_pool.release_pkid(suback.packet_identifier);
                 let Some(notifier) = self.inflight.subscribe.remove(&suback.packet_identifier)
                 else {
-                    return Err(ConnectionError::UnexpectedPacket);
+                    return Err(ProtocolError::UnexpectedPacket);
                 };
                 _ = notifier.complete(suback);
             }
@@ -390,7 +390,7 @@ where
                     .unsubscribe
                     .remove(&unsuback.packet_identifier)
                 else {
-                    return Err(ConnectionError::UnexpectedPacket);
+                    return Err(ProtocolError::UnexpectedPacket);
                 };
                 _ = notifier.complete(unsuback);
             }
@@ -401,7 +401,7 @@ where
                     .publish_qos1
                     .shift_remove(&puback.packet_identifier)
                 else {
-                    return Err(ConnectionError::UnexpectedPacket);
+                    return Err(ProtocolError::UnexpectedPacket);
                 };
                 _ = notifier.complete(puback);
             }
@@ -423,7 +423,7 @@ where
                     .publish_qos2
                     .shift_remove(&pubrec.packet_identifier)
                 else {
-                    return Err(ConnectionError::UnexpectedPacket);
+                    return Err(ProtocolError::UnexpectedPacket);
                 };
 
                 _ = notifier.complete((pubrec, token));
@@ -431,7 +431,7 @@ where
             CompletedOperation::PubRec(pubrel) => {
                 let Some((_, notifier)) = self.inflight.pubrec.remove(&pubrel.packet_identifier)
                 else {
-                    return Err(ConnectionError::UnexpectedPacket);
+                    return Err(ProtocolError::UnexpectedPacket);
                 };
                 let token = PubCompToken::new(pubrel.packet_identifier, self.ch.ack_tx.clone());
                 _ = notifier.complete((pubrel, token));
@@ -443,7 +443,7 @@ where
                     .pubrel
                     .shift_remove(&pubcomp.packet_identifier)
                 else {
-                    return Err(ConnectionError::UnexpectedPacket);
+                    return Err(ProtocolError::UnexpectedPacket);
                 };
                 _ = notifier.complete(pubcomp);
             }
@@ -557,19 +557,19 @@ where
     }
 
     /// An incoming AUTH packet has been received from the server
-    pub fn incoming_auth(&mut self, auth: Auth<O::Shared>) -> Result<(), ConnectionError> {
+    pub fn incoming_auth(&mut self, auth: Auth<O::Shared>) -> Result<(), ProtocolError> {
         match auth.reason_code {
             // TODO: Validate authentication method from CONNACK
             AuthenticateReasonCode::Success => {
                 let Some(notifier) = self.inflight.auth.take() else {
-                    return Err(ConnectionError::UnexpectedPacket);
+                    return Err(ProtocolError::UnexpectedPacket);
                 };
                 _ = notifier.complete(ReauthResult::Success(auth));
             }
             AuthenticateReasonCode::ContinueAuthentication => {
                 //pass on, do not stop tracking
                 let Some(notifier) = self.inflight.auth.take() else {
-                    return Err(ConnectionError::UnexpectedPacket);
+                    return Err(ProtocolError::UnexpectedPacket);
                 };
                 let token = ReauthToken {
                     method: auth
@@ -584,7 +584,7 @@ where
             }
             AuthenticateReasonCode::ReAuthenticate => {
                 // AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server
-                return Err(ConnectionError::UnexpectedPacket);
+                return Err(ProtocolError::UnexpectedPacket);
             }
         }
         Ok(())
