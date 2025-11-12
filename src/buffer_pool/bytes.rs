@@ -9,19 +9,16 @@ use crate::buffer_pool::{BufferPool, Error};
 
 mod buffers;
 
-// This could be Copy too, but that makes it harder to easily swap
-// the custom BufferPoolImpl with this one, since it generates warnings
-// on code like `pool.clone()` that calling `.clone()` on a Copy type is silly.
 #[derive(Clone, Debug, Default)]
-pub struct BufferPoolImpl;
+pub struct BytesPool;
 
-impl BufferPoolImpl {
+impl BytesPool {
     pub fn new() -> Self {
         Default::default()
     }
 }
 
-impl BufferPool for BufferPoolImpl {
+impl BufferPool for BytesPool {
     type Shared = Bytes;
     type Owned = BytesMut;
 

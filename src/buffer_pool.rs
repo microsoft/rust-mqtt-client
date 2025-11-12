@@ -179,12 +179,15 @@ pub trait Shared:
 }
 
 pub mod accumulators;
-pub use accumulators::{BytesAccumulator, EitherBytesAccumulator, Iovecs};
-
-pub mod bytes;
-
 #[cfg(test)]
-pub mod tests;
+pub use accumulators::test::TestAccumulator;
+pub use accumulators::{
+    BytesAccumulator, Iovecs, either::EitherAccumulator, iovecs::IovecsAccumulator,
+    single::SingleAccumulator,
+};
+
+mod bytes;
+pub use bytes::BytesPool;
 
 // TODO(rustup): Replace this with `<[T]>::write_copy_of_slice` when that is stabilized.
 pub fn maybe_uninit_copy_from_slice<T>(this: &mut [MaybeUninit<T>], src: &[T])

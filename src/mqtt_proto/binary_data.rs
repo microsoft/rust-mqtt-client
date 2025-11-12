@@ -245,26 +245,13 @@ impl From<&[u8]> for BinaryData<Bytes> {
     }
 }
 
-#[cfg(test)]
-impl From<&[u8]> for BinaryData<buffer_pool::tests::SharedImpl> {
-    fn from(s: &[u8]) -> Self {
-        let mut result = BytesMut::with_capacity(U16_SIZE + s.len());
-        result.put(&u16::try_from(s.len()).unwrap().to_be_bytes()[..]);
-        result.put(s);
-        Self(result.freeze().into())
+impl<const N: usize> From<&[u8; N]> for BinaryData<Bytes> {
+    fn from(s: &[u8; N]) -> Self {
+        s[..].into()
     }
 }
 
 const U16_SIZE: usize = size_of::<u16>();
-
-#[cfg(test)]
-pub fn binary_data(s: impl AsRef<[u8]>) -> BinaryData<buffer_pool::tests::SharedImpl> {
-    let s = s.as_ref();
-    let mut result = Vec::with_capacity(U16_SIZE + s.len());
-    result.extend_from_slice(&u16::try_from(s.len()).unwrap().to_be_bytes());
-    result.extend_from_slice(s);
-    BinaryData(result.into())
-}
 
 #[cfg(test)]
 mod tests {
@@ -274,37 +261,19 @@ mod tests {
         hash::{Hash, Hasher},
     };
 
+    use bytes::Bytes;
     use matches::assert_matches;
     use test_case::test_case;
 
-    use crate::buffer_pool::{
-        BufferPool as _, Shared as _,
-        tests::{BufferPoolImpl, SharedImpl},
-    };
+    use crate::buffer_pool::{BufferPool as _, Shared as _};
 
-    use super::{BinaryData, DecodeError, binary_data};
+    use super::{BinaryData, DecodeError};
 
-    #[test]
-    fn test_binary_data() {
-        let s = "hello world";
-        let b = binary_data(s);
-        assert_eq!(b.as_bytes(), s.as_bytes());
-    }
-
-    #[test]
-    fn test_binary_data_display() {
-        let b = binary_data("hello world");
-        assert_eq!(
-            format!("{b}"),
-            "BinaryData(SharedImpl(b\"\\0\\x0bhello world\"))",
-        );
-    }
-
-    #[test_case("cats", "cats", true)]
-    #[test_case("cats", "dogs", false)]
-    fn test_binary_data_hash(l: &str, r: &str, expect: bool) {
-        let l = binary_data(l);
-        let r = binary_data(r);
+    #[test_case(b"cats", b"cats", true)]
+    #[test_case(b"cats", b"dogs", false)]
+    fn test_binary_data_hash(l: &[u8], r: &[u8], expect: bool) {
+        let l = BinaryData::from(l);
+        let r = BinaryData::from(r);
         let mut hasher = DefaultHasher::new();
         l.hash(&mut hasher);
         let l_hash = hasher.finish();
@@ -314,46 +283,40 @@ mod tests {
         assert_eq!(l_hash == r_hash, expect);
     }
 
-    #[test_case("cats", "cats", Ordering::Equal)]
-    #[test_case("cats", "dogs", Ordering::Less)]
-    #[test_case("dogs", "cats", Ordering::Greater)]
-    fn test_binary_data_ord(l: &str, r: &str, expect: Ordering) {
-        let l = binary_data(l);
-        let r = binary_data(r);
+    #[test_case(b"cats", b"cats", Ordering::Equal)]
+    #[test_case(b"cats", b"dogs", Ordering::Less)]
+    #[test_case(b"dogs", b"cats", Ordering::Greater)]
+    fn test_binary_data_ord(l: &[u8], r: &[u8], expect: Ordering) {
+        let l = BinaryData::from(l);
+        let r = BinaryData::from(r);
         assert_eq!(l.cmp(&r), expect);
     }
 
     #[test]
     fn test_binary_data_from_shared_with_trailing_garbage() {
-        let s = to_shared(b"\x00\x01hello world");
+        let s = Bytes::from_static(b"\x00\x01hello world");
         let actual = BinaryData::from_shared(s);
         assert_matches!(actual, Err(DecodeError::TrailingGarbage));
     }
 
     #[test]
     fn test_binary_data_from_shared_with_incomplete_packet() {
-        let s = to_shared(b"\x01\x00hello world");
+        let s = Bytes::from_static(b"\x01\x00hello world");
         let actual = BinaryData::from_shared(s);
         assert_matches!(actual, Err(DecodeError::IncompletePacket));
     }
 
     #[test]
     fn test_binary_data_from_shared_with_empty() {
-        let s = to_shared(b"\x00\x00");
+        let s = Bytes::from_static(b"\x00\x00");
         let actual = BinaryData::from_shared(s);
         assert_matches!(actual, Ok(_));
     }
 
     #[test]
     fn test_binary_data_from_shared_simple() {
-        let s = to_shared(b"\x00\x0bhello world");
+        let s = Bytes::from_static(b"\x00\x0bhello world");
         let actual = BinaryData::from_shared(s);
         assert_matches!(actual, Ok(_));
-    }
-
-    fn to_shared(data: &[u8]) -> SharedImpl {
-        let pool = BufferPoolImpl;
-        let mut owned = pool.take_empty_owned();
-        SharedImpl::new(&mut owned, data).expect("binary data test")
     }
 }

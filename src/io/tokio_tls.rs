@@ -31,7 +31,7 @@ use tokio::{
 };
 use tokio_openssl::SslStream;
 
-use crate::buffer_pool::{BufferPool, EitherBytesAccumulator};
+use crate::buffer_pool::{BufferPool, EitherAccumulator};
 use crate::client::ConnectionTransportTlsConfig;
 use crate::io::{ReadableStream, Reader, WritableStream, Writer, tokio_tcp};
 use crate::opensslext::ssl::{ConnectionTrafficSecrets, ExtractedSecrets};
@@ -56,7 +56,7 @@ where
         Either::Right(ssl_stream) => {
             let (read, write) = tokio::io::split(ssl_stream);
             let read_buf = reader_pool.take_empty_owned();
-            let write_buf = EitherBytesAccumulator::Single(Default::default());
+            let write_buf = EitherAccumulator::Single(Default::default());
 
             (
                 Reader::new(Box::new(OpensslStreamRead { inner: read }), read_buf),

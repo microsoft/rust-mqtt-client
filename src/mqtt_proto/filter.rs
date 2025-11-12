@@ -398,16 +398,14 @@ where
 }
 
 #[cfg(test)]
-pub fn filter(
-    s: impl AsRef<str>,
-) -> Filter<crate::mqtt_proto::ByteStr<buffer_pool::tests::SharedImpl>> {
-    let t = crate::mqtt_proto::byte_str(s);
-    Filter::new(t).expect("topic")
+pub fn filter(s: impl AsRef<str>) -> Filter<crate::mqtt_proto::ByteStr<bytes::Bytes>> {
+    let t = crate::mqtt_proto::ByteStr::from(s.as_ref());
+    Filter::new(t).unwrap()
 }
 
 #[cfg(test)]
 pub fn filter_owned(s: impl AsRef<str>) -> Filter<String> {
-    Filter::new(s.as_ref().to_owned()).expect("topic")
+    Filter::new(s.as_ref().to_owned()).unwrap()
 }
 
 #[cfg(test)]
@@ -415,7 +413,7 @@ pub fn filter_str<S>(s: S) -> Filter<S>
 where
     S: AsRef<str>,
 {
-    Filter::new(s).expect("topic")
+    Filter::new(s).unwrap()
 }
 
 #[cfg(test)]

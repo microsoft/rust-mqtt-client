@@ -218,7 +218,7 @@ impl PubAckReasonCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mqtt_proto::{Packet, byte_str};
+    use crate::mqtt_proto::Packet;
 
     encode_decode_v3! {
         Packet::PubAck(PubAck {
@@ -239,8 +239,8 @@ mod tests {
             packet_identifier: PacketIdentifier::new(0x1234).unwrap(),
             reason_code: PubAckReasonCode::Success,
             other_properties: PubAckOtherProperties {
-                reason_string: Some(byte_str("foo")),
-                user_properties: vec![(byte_str("bar"), byte_str("baz"))],
+                reason_string: Some("foo".into()),
+                user_properties: vec![("bar".into(), "baz".into())],
             },
         }) => b"\x40\x15\x12\x34\x00\x11\x1f\x00\x03foo\x26\x00\x03bar\x00\x03baz",
 
@@ -254,8 +254,8 @@ mod tests {
             packet_identifier: PacketIdentifier::new(0x1234).unwrap(),
             reason_code: PubAckReasonCode::NoMatchingSubscribers,
             other_properties: PubAckOtherProperties {
-                reason_string: Some(byte_str("foo")),
-                user_properties: vec![(byte_str("bar"), byte_str("baz"))],
+                reason_string: Some("foo".into()),
+                user_properties: vec![("bar".into(), "baz".into())],
             },
         }) => b"\x40\x15\x12\x34\x10\x11\x1f\x00\x03foo\x26\x00\x03bar\x00\x03baz",
 
@@ -269,8 +269,8 @@ mod tests {
             packet_identifier: PacketIdentifier::new(0x1234).unwrap(),
             reason_code: PubAckReasonCode::UnspecifiedError,
             other_properties: PubAckOtherProperties {
-                reason_string: Some(byte_str("foo")),
-                user_properties: vec![(byte_str("bar"), byte_str("baz"))],
+                reason_string: Some("foo".into()),
+                user_properties: vec![("bar".into(), "baz".into())],
             },
         }) => b"\x40\x15\x12\x34\x80\x11\x1f\x00\x03foo\x26\x00\x03bar\x00\x03baz",
 

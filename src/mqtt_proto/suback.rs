@@ -235,7 +235,7 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
-    use crate::mqtt_proto::{Packet, byte_str};
+    use crate::mqtt_proto::Packet;
 
     #[test_case(
         ProtocolVersion::V3,
@@ -301,8 +301,8 @@ mod tests {
                 SubscribeReasonCode::WildcardSubscriptionsNotSupported,
             ],
             other_properties: SubAckOtherProperties {
-                reason_string: Some(byte_str("reason")),
-                user_properties: vec![(byte_str("foo"), byte_str("bar"))],
+                reason_string: Some("reason".into()),
+                user_properties: vec![("foo".into(), "bar".into())],
             },
         }),
     }

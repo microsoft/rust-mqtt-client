@@ -440,10 +440,11 @@ pub(crate) mod buffered {
 
 #[cfg(test)]
 mod test {
+    use bytes::Bytes;
+
     use super::buffered::*;
-    use crate::buffer_pool::tests::SharedImpl;
     use crate::client::channel_data::AcknowledgementRequest;
-    use crate::mqtt_proto::{PacketIdentifier, PubAckOtherProperties, PubAckReasonCode, byte_str};
+    use crate::mqtt_proto::{PacketIdentifier, PubAckOtherProperties, PubAckReasonCode};
 
     #[tokio::test]
     async fn puback_token_accept() {
@@ -451,10 +452,10 @@ mod test {
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
         let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Success")),
+            reason_string: Some("Test Success".into()),
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         };
         let token = PubAckToken::new(pkid, epoch, tx);
@@ -480,10 +481,10 @@ mod test {
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
         let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Reject")),
+            reason_string: Some("Test Reject".into()),
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         };
         let token = PubAckToken::new(pkid, epoch, tx);
@@ -510,7 +511,7 @@ mod test {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
-        let token = PubAckToken::<SharedImpl>::new(pkid, epoch, tx);
+        let token = PubAckToken::<Bytes>::new(pkid, epoch, tx);
         // Drop the token without accepting or rejecting it
         drop(token);
         // It was accepted automatically with default properties
@@ -533,10 +534,10 @@ mod test {
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
         let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Success")),
+            reason_string: Some("Test Success".into()),
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         };
         let token = PubAckToken::new(pkid, epoch, tx);

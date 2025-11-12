@@ -6,7 +6,7 @@ use std::{collections::VecDeque, io::IoSlice};
 use crate::buffer_pool::{self, BytesAccumulator, Error, Iovecs, Owned, Shared};
 
 #[derive(Debug)]
-pub struct BytesAccumulatorImpl<O>
+pub struct IovecsAccumulator<O>
 where
     O: Owned,
 {
@@ -16,12 +16,12 @@ where
     total_size: usize,
 }
 
-impl<O> BytesAccumulatorImpl<O>
+impl<O> IovecsAccumulator<O>
 where
     O: Owned,
 {
     pub fn new(owned: O) -> Self {
-        BytesAccumulatorImpl {
+        IovecsAccumulator {
             owned,
             chunks: Default::default(),
             total_size: 0,
@@ -29,7 +29,7 @@ where
     }
 }
 
-impl<O> BytesAccumulator for BytesAccumulatorImpl<O>
+impl<O> BytesAccumulator for IovecsAccumulator<O>
 where
     O: Owned,
 {
@@ -109,7 +109,7 @@ where
         // the one that wasn't.
 
         #[cold]
-        fn drain_slow<O>(this: &mut BytesAccumulatorImpl<O>, mut n: usize)
+        fn drain_slow<O>(this: &mut IovecsAccumulator<O>, mut n: usize)
         where
             O: Owned,
         {
@@ -143,7 +143,7 @@ where
     }
 }
 
-impl<O> From<O> for BytesAccumulatorImpl<O>
+impl<O> From<O> for IovecsAccumulator<O>
 where
     O: Owned,
 {

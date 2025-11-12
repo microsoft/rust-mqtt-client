@@ -247,24 +247,18 @@ where
 }
 
 #[cfg(test)]
-pub fn byte_str(s: impl AsRef<str>) -> ByteStr<buffer_pool::tests::SharedImpl> {
-    ByteStr(crate::mqtt_proto::binary_data(s.as_ref().as_bytes()))
-}
-
-#[cfg(test)]
 mod tests {
     use std::ops::RangeInclusive;
 
     use test_case::test_case;
 
-    use buffer_pool::{BufferPool as _, tests::BufferPoolImpl};
+    use buffer_pool::{BufferPool as _, BytesPool};
 
     use super::*;
-    use crate::mqtt_proto::binary_data;
 
     #[test]
     fn new() {
-        let mut buffer = BufferPoolImpl.take_empty_owned();
+        let mut buffer = BytesPool.take_empty_owned();
 
         let val = ByteStr::new(&mut buffer, "dummy").unwrap();
 
@@ -274,7 +268,7 @@ mod tests {
 
     #[test]
     fn ord() {
-        let mut buffer = BufferPoolImpl.take_empty_owned();
+        let mut buffer = BytesPool.take_empty_owned();
 
         let val1 = ByteStr::new(&mut buffer, "dummy1").unwrap();
 
@@ -285,7 +279,7 @@ mod tests {
 
     #[test]
     fn debug() {
-        let mut buffer = BufferPoolImpl.take_empty_owned();
+        let mut buffer = BytesPool.take_empty_owned();
 
         let val = ByteStr::new(&mut buffer, "dummy").unwrap();
 
@@ -294,7 +288,7 @@ mod tests {
 
     #[test]
     fn into_shared_and_from_utf8_shared() {
-        let mut buffer = BufferPoolImpl.take_empty_owned();
+        let mut buffer = BytesPool.take_empty_owned();
 
         // when 398 (len) is encoded as firs two bytes,
         // it is an invalid UTF-8 sequence, so will fail
@@ -313,7 +307,7 @@ mod tests {
     #[test_case("abc")]
     #[test_case("A𪛔")]
     fn decode_unicode_ok(input: &str) {
-        let mut src = binary_data(input).into_shared();
+        let mut src = BinaryData::from(input.as_bytes()).into_shared();
 
         let actual = ByteStr::decode(&mut src).unwrap().unwrap();
         assert_eq!(actual.as_ref(), input);
@@ -328,7 +322,7 @@ mod tests {
             let input: char = input.try_into().unwrap();
             let input = input.to_string();
 
-            let mut src = binary_data(input).into_shared();
+            let mut src = BinaryData::from(input.as_bytes()).into_shared();
 
             _ = ByteStr::decode(&mut src).unwrap_err();
         }

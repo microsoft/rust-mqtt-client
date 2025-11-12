@@ -18,7 +18,7 @@ use openssl::{
     x509::X509,
 };
 
-use crate::buffer_pool::{BufferPool, bytes::BufferPoolImpl};
+use crate::buffer_pool::{BufferPool, BytesPool};
 use crate::client::{
     channel_data::{
         DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0, PublishRequestQoS1QoS2,
@@ -81,8 +81,8 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         pub_qos12_tx: o_pub_q12_tx,
         sub_tx,
     };
-    let reader_pool = BufferPoolImpl;
-    let writer_pool = BufferPoolImpl;
+    let reader_pool = BytesPool;
+    let writer_pool = BytesPool;
     let owned = writer_pool.take_empty_owned();
     let session = Session::new(
         sub_rx,
@@ -389,8 +389,8 @@ impl Receiver {
 /// Handle providing MQTT CONNECT functionality.
 pub struct ConnectHandle {
     session: Session<BytesMut>,
-    reader_pool: BufferPoolImpl,
-    writer_pool: BufferPoolImpl,
+    reader_pool: BytesPool,
+    writer_pool: BytesPool,
 }
 
 impl ConnectHandle {
@@ -567,7 +567,7 @@ impl ConnectHandle {
     async fn transport_connect(
         &self,
         transport_config: ConnectionTransportConfig,
-    ) -> io::Result<(Reader<BufferPoolImpl>, Writer<BufferPoolImpl>)> {
+    ) -> io::Result<(Reader<BytesPool>, Writer<BytesPool>)> {
         Ok(match transport_config {
             ConnectionTransportConfig::Tcp { hostname, port } => {
                 crate::io::tokio_tcp::connect(
@@ -614,7 +614,7 @@ impl ConnectHandle {
     #[allow(clippy::too_many_arguments)]
     async fn mqtt_connect(
         &self,
-        writer: &mut Writer<BufferPoolImpl>,
+        writer: &mut Writer<BytesPool>,
         clean_start: bool,
         keep_alive: KeepAlive,
         will: Option<Will>,
@@ -640,7 +640,7 @@ impl ConnectHandle {
 
     async fn mqtt_receive(
         &self,
-        reader: &mut Reader<BufferPoolImpl>,
+        reader: &mut Reader<BytesPool>,
     ) -> Result<Packet<Bytes>, ConnectionError> {
         let mut raw_packet = reader.read().await?;
         Ok(Packet::decode(
@@ -654,10 +654,10 @@ impl ConnectHandle {
 /// Handle for the intermediate step of an MQTT CONNECT with enhanced authentication.
 pub struct EnhancedAuthHandle {
     session: Session<BytesMut>,
-    reader_pool: BufferPoolImpl,
-    writer_pool: BufferPoolImpl,
-    reader: Reader<BufferPoolImpl>,
-    writer: Writer<BufferPoolImpl>,
+    reader_pool: BytesPool,
+    writer_pool: BytesPool,
+    reader: Reader<BytesPool>,
+    writer: Writer<BytesPool>,
     auth_method: String,
 }
 
@@ -778,10 +778,10 @@ impl EnhancedAuthHandle {
 /// Runs the MQTT client event loop, keeping the client operational.
 pub struct Connection {
     session: Session<BytesMut>,
-    reader_pool: BufferPoolImpl,
-    writer_pool: BufferPoolImpl,
-    reader: Reader<BufferPoolImpl>,
-    writer: Writer<BufferPoolImpl>,
+    reader_pool: BytesPool,
+    writer_pool: BytesPool,
+    reader: Reader<BytesPool>,
+    writer: Writer<BytesPool>,
 }
 
 impl Connection {

@@ -9,17 +9,17 @@ use crate::buffer_pool::{BytesAccumulator, Error, Iovecs, Shared};
 
 /// This type impls [`BytesAccumulator`] with a target of a single [`BytesMut`].
 ///
-/// `BytesAccumulatorImpl` does not require `reserve` to be called and will grow its inner `BytesMut` anyway.
+/// `SingleAccumulator` does not require `reserve` to be called and will grow its inner `BytesMut` anyway.
 #[derive(Debug, PartialEq, Eq)]
-pub struct BytesAccumulatorImpl<S>(BytesMut, PhantomData<S>);
+pub struct SingleAccumulator<S>(BytesMut, PhantomData<S>);
 
-impl<S> BytesAccumulatorImpl<S> {
+impl<S> SingleAccumulator<S> {
     pub fn new() -> Self {
         Default::default()
     }
 }
 
-impl<S> BytesAccumulator for BytesAccumulatorImpl<S>
+impl<S> BytesAccumulator for SingleAccumulator<S>
 where
     S: Shared,
 {
@@ -72,13 +72,13 @@ where
     }
 }
 
-impl<S> AsRef<[u8]> for BytesAccumulatorImpl<S> {
+impl<S> AsRef<[u8]> for SingleAccumulator<S> {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
     }
 }
 
-impl<S> Default for BytesAccumulatorImpl<S> {
+impl<S> Default for SingleAccumulator<S> {
     fn default() -> Self {
         Self(BytesMut::new(), PhantomData)
     }

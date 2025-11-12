@@ -126,30 +126,31 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use matches::assert_matches;
 
     use super::*;
     use crate::buffer_pool;
-    use crate::mqtt_proto::{Packet, binary_data, byte_str};
+    use crate::mqtt_proto::Packet;
 
     encode_decode_v5! {
         Packet::Auth(Auth {
             reason_code: AuthenticateReasonCode::Success,
-            authentication: Some(Authentication { method: byte_str("foo"), data: Some(binary_data(b"foo")) }),
-            reason_string: Some(byte_str("foo")),
-            user_properties: vec![(byte_str("foo"), byte_str("bar"))],
+            authentication: Some(Authentication { method: "foo".into(), data: Some(b"foo".into()) }),
+            reason_string: Some("foo".into()),
+            user_properties: vec![("foo".into(), "bar".into())],
         }),
 
         Packet::Auth(Auth {
             reason_code: AuthenticateReasonCode::ContinueAuthentication,
-            authentication: Some(Authentication { method: byte_str("foo"), data: None }),
+            authentication: Some(Authentication { method: "foo".into(), data: None }),
             reason_string: None,
             user_properties: vec![],
         }),
 
         Packet::Auth(Auth {
             reason_code: AuthenticateReasonCode::ReAuthenticate,
-            authentication: Some(Authentication { method: byte_str("foo"), data: None }),
+            authentication: Some(Authentication { method: "foo".into(), data: None }),
             reason_string: None,
             user_properties: vec![],
         }),
@@ -157,20 +158,20 @@ mod tests {
         Packet::Auth(Auth {
             reason_code: AuthenticateReasonCode::ReAuthenticate,
             authentication: None,
-            reason_string: Some(byte_str("foo")),
+            reason_string: Some("foo".into()),
             user_properties: vec![],
         }),
     }
 
     #[test]
     fn decode_v3_fails() {
-        let mut buf = binary_data(b"\x00\x00").into_shared();
+        let mut buf = Bytes::from_static(b"\x00\x00");
         assert_matches!(
-            Auth::<buffer_pool::tests::SharedImpl>::decode(0, &mut buf, ProtocolVersion::V3),
+            Auth::<Bytes>::decode(0, &mut buf, ProtocolVersion::V3),
             Err(DecodeError::UnrecognizedPacket {
                 packet_type: 0xF0,
                 flags: 0x00,
-                remaining_length: 4
+                remaining_length: 2
             })
         );
     }
