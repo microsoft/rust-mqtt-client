@@ -858,7 +858,6 @@ impl Connection {
                     writer.flush().await?;
                     // If we wrote a DISCONNECT packet, also close the connection.
                     if disconnect {
-                        //return DisconnectedEvent::ApplicationDisconnect;
                         return Ok(GracefulDisconnect::Application);
                     }
                 }
@@ -982,9 +981,6 @@ pub enum ConnectEnhancedAuthResult {
     Success(Connection, ConnAck, DisconnectHandle, ReauthHandle),
     Failure(ConnectHandle, ConnectError),
 }
-
-// Should the above two be flattened into Result, with a variant on success for enhanced auth?
-// Maybe...
 
 /// Indicates the result of an MQTT AUTH operation on an existing connection.
 #[derive(Debug)]
