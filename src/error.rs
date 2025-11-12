@@ -49,3 +49,31 @@ impl std::fmt::Display for OperationFailure {
         write!(f, "Operation failed: {}", self.reason)
     }
 }
+
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError), // TODO: source?
+    #[error("I/O error: {0}")]
+    Io(
+        #[from]
+        #[source]
+        std::io::Error,
+    ),
+    #[error("connection rejected by server: {0:?}")]
+    Rejected(crate::packet::ConnAck),
+    #[error("connect attempt timed out")]
+    Timeout,
+}
+
+#[derive(Debug, Error)]
+pub enum ProtocolError {
+    #[error("protocol violation: malformed packet: {0}")]
+    MalformedPacket(
+        #[from]
+        #[source]
+        crate::mqtt_proto::DecodeError,
+    ),
+    #[error("protocol violation: unexpected packet")]
+    UnexpectedPacket,
+}

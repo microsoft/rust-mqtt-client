@@ -17,6 +17,7 @@ use openssl::{
     ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVersion},
     x509::X509,
 };
+use thiserror::Error;
 
 use crate::buffer_pool::{BufferPool, BufferPoolImpl, OwnedImpl, SharedImpl};
 use crate::client::{
@@ -35,7 +36,7 @@ use crate::client::{
         reauth::ReauthToken,
     },
 };
-use crate::error::ClientError;
+use crate::error::{ClientError, ConnectError, ProtocolError};
 use crate::io::{Reader, Writer};
 use crate::mqtt_proto::{
     self,
@@ -395,6 +396,86 @@ pub struct ConnectHandle {
 
 impl ConnectHandle {
     #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
+    pub async fn connect(
+        mut self,
+        connection_transport: ConnectionTransportConfig,
+        clean_start: bool,
+        keep_alive: KeepAlive,
+        will: Option<Will>,
+        username: Option<String>,
+        password: Option<Bytes>,
+        properties: ConnectProperties,
+        connection_timeout: Option<Duration>,
+    ) -> ConnectResult {
+        let streams = match connection_timeout {
+            Some(connection_timeout) => {
+                match tokio::time::timeout(
+                    connection_timeout,
+                    self.transport_connect(connection_transport),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(err) => Err(err.into()),
+                }
+            }
+            None => self.transport_connect(connection_transport).await,
+        };
+        let (mut reader, mut writer) = match streams {
+            Ok(streams) => streams,
+            Err(err) => {
+                return ConnectResult::Failure(self, err.into());
+            }
+        };
+
+        if let Err(err) = self
+            .mqtt_connect(
+                &mut writer,
+                clean_start,
+                keep_alive,
+                will,
+                username,
+                password,
+                properties,
+            )
+            .await
+        {
+            return ConnectResult::Failure(self, err);
+        }
+
+        let connack = match self.mqtt_receive(&mut reader).await {
+            Ok(Packet::ConnAck(connack)) => {
+                if !connack.is_success() {
+                    return ConnectResult::Failure(self, ConnectError::Rejected(connack.into()));
+                }
+                connack
+            }
+            Ok(_) => {
+                return ConnectResult::Failure(
+                    self,
+                    ConnectError::Protocol(ProtocolError::UnexpectedPacket),
+                );
+            }
+            Err(err) => return ConnectResult::Failure(self, err),
+        };
+        self.session.incoming_connack(connack.clone());
+
+        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+        self.session.ch.disconnect_rx = Some(disconnect_rx);
+        ConnectResult::Success(
+            Connection {
+                session: self.session,
+                reader_pool: self.reader_pool,
+                writer_pool: self.writer_pool,
+                reader,
+                writer,
+            },
+            connack.into(),
+            DisconnectHandle(disconnect_tx),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect_enhanced_auth(
         mut self,
         connection_transport: ConnectionTransportConfig,
@@ -425,7 +506,7 @@ impl ConnectHandle {
         let (mut reader, mut writer) = match streams {
             Ok(streams) => streams,
             Err(err) => {
-                return ConnectEnhancedAuthResult::Failure(self, Err(err.into()));
+                return ConnectEnhancedAuthResult::Failure(self, err.into());
             }
         };
         if let Err(err) = self
@@ -440,36 +521,18 @@ impl ConnectHandle {
             )
             .await
         {
-            return ConnectEnhancedAuthResult::Failure(self, Err(err));
+            return ConnectEnhancedAuthResult::Failure(self, err);
         }
 
-        match self.mqtt_receive(&mut reader).await {
+        let connack = match self.mqtt_receive(&mut reader).await {
             Ok(Packet::ConnAck(connack)) => {
-                self.session.incoming_connack(connack.clone());
-
-                if connack.is_success() {
-                    let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-                    let auth_tx = self.session.ch.auth_tx.clone();
-                    self.session.ch.disconnect_rx = Some(disconnect_rx);
-                    let connection = Connection {
-                        session: self.session,
-                        reader_pool: self.reader_pool,
-                        writer_pool: self.writer_pool,
-                        reader,
-                        writer,
-                    };
-                    ConnectEnhancedAuthResult::Success(
-                        connection,
-                        connack.into(),
-                        ReauthHandle {
-                            method: authentication_info.method,
-                            tx: auth_tx,
-                        },
-                        DisconnectHandle(disconnect_tx),
-                    )
-                } else {
-                    ConnectEnhancedAuthResult::Failure(self, Ok(connack.into()))
+                if !connack.is_success() {
+                    return ConnectEnhancedAuthResult::Failure(
+                        self,
+                        ConnectError::Rejected(connack.into()),
+                    );
                 }
+                connack
             }
 
             Ok(Packet::Auth(auth)) => {
@@ -481,77 +544,24 @@ impl ConnectHandle {
                     writer,
                     auth_method: authentication_info.method,
                 };
-                ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
+                return ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle);
             }
 
             Ok(_) => {
-                ConnectEnhancedAuthResult::Failure(self, Err(ConnectionError::UnexpectedPacket))
+                return ConnectEnhancedAuthResult::Failure(
+                    self,
+                    ConnectError::Protocol(ProtocolError::UnexpectedPacket),
+                );
             }
 
-            Err(err) => ConnectEnhancedAuthResult::Failure(self, Err(err)),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
-    pub async fn connect(
-        mut self,
-        connection_transport: ConnectionTransportConfig,
-        clean_start: bool,
-        keep_alive: KeepAlive,
-        will: Option<Will>,
-        username: Option<String>,
-        password: Option<Bytes>,
-        properties: ConnectProperties,
-        connection_timeout: Option<Duration>,
-    ) -> ConnectResult {
-        let streams = match connection_timeout {
-            Some(connection_timeout) => {
-                match tokio::time::timeout(
-                    connection_timeout,
-                    self.transport_connect(connection_transport),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(err) => Err(err.into()),
-                }
-            }
-            None => self.transport_connect(connection_transport).await,
-        };
-        let (mut reader, mut writer) = match streams {
-            Ok(streams) => streams,
-            Err(err) => {
-                return ConnectResult::Failure(self, Err(err.into()));
-            }
-        };
-
-        if let Err(err) = self
-            .mqtt_connect(
-                &mut writer,
-                clean_start,
-                keep_alive,
-                will,
-                username,
-                password,
-                properties,
-            )
-            .await
-        {
-            return ConnectResult::Failure(self, Err(err));
-        }
-
-        let connack = match self.mqtt_receive(&mut reader).await {
-            Ok(Packet::ConnAck(connack)) => connack,
-            Ok(_) => return ConnectResult::Failure(self, Err(ConnectionError::UnexpectedPacket)),
-            Err(err) => return ConnectResult::Failure(self, Err(err)),
+            Err(err) => return ConnectEnhancedAuthResult::Failure(self, err),
         };
         self.session.incoming_connack(connack.clone());
-        let connack = connack.into();
 
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-
+        let auth_tx = self.session.ch.auth_tx.clone();
         self.session.ch.disconnect_rx = Some(disconnect_rx);
-        ConnectResult::Success(
+        ConnectEnhancedAuthResult::Success(
             Connection {
                 session: self.session,
                 reader_pool: self.reader_pool,
@@ -559,8 +569,12 @@ impl ConnectHandle {
                 reader,
                 writer,
             },
-            connack,
+            connack.into(),
             DisconnectHandle(disconnect_tx),
+            ReauthHandle {
+                method: authentication_info.method,
+                tx: auth_tx,
+            },
         )
     }
 
@@ -621,7 +635,7 @@ impl ConnectHandle {
         username: Option<String>,
         password: Option<Bytes>,
         properties: ConnectProperties,
-    ) -> Result<(), ConnectionError> {
+    ) -> Result<(), ConnectError> {
         // Transport has been established. Send CONNECT and wait for CONNACK.
         // TODO: Get values from options
         let connect = Packet::Connect(Connect {
@@ -641,13 +655,15 @@ impl ConnectHandle {
     async fn mqtt_receive(
         &self,
         reader: &mut Reader<BufferPoolImpl>,
-    ) -> Result<Packet<SharedImpl>, ConnectionError> {
+    ) -> Result<Packet<SharedImpl>, ConnectError> {
+        // TODO: oh no this can be protocol or io
         let mut raw_packet = reader.read().await?;
         Ok(Packet::decode(
             raw_packet.first_byte,
             &mut raw_packet.rest,
             ProtocolVersion::V5,
-        )?)
+        )
+        .map_err(ProtocolError::from)?)
     }
 }
 
@@ -685,7 +701,7 @@ impl EnhancedAuthHandle {
                 reader_pool: self.reader_pool,
                 writer_pool: self.writer_pool,
             };
-            return ConnectEnhancedAuthResult::Failure(connect_handle, Err(err.into()));
+            return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
         }
         if let Err(err) = self.writer.flush().await {
             let connect_handle = ConnectHandle {
@@ -693,7 +709,7 @@ impl EnhancedAuthHandle {
                 reader_pool: self.reader_pool,
                 writer_pool: self.writer_pool,
             };
-            return ConnectEnhancedAuthResult::Failure(connect_handle, Err(err.into()));
+            return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
         }
 
         // Wait for next response
@@ -705,7 +721,7 @@ impl EnhancedAuthHandle {
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
                 };
-                return ConnectEnhancedAuthResult::Failure(connect_handle, Err(err.into()));
+                return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
             }
         };
         let packet = match Packet::decode(
@@ -720,7 +736,10 @@ impl EnhancedAuthHandle {
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
                 };
-                return ConnectEnhancedAuthResult::Failure(connect_handle, Err(err.into()));
+                return ConnectEnhancedAuthResult::Failure(
+                    connect_handle,
+                    ProtocolError::from(err).into(),
+                );
             }
         };
 
@@ -742,11 +761,11 @@ impl EnhancedAuthHandle {
                     ConnectEnhancedAuthResult::Success(
                         connection,
                         connack.into(),
+                        DisconnectHandle(disconnect_tx),
                         ReauthHandle {
                             method: self.auth_method.clone(),
                             tx: auth_tx,
                         },
-                        DisconnectHandle(disconnect_tx),
                     )
                 } else {
                     let connect_handle = ConnectHandle {
@@ -754,7 +773,10 @@ impl EnhancedAuthHandle {
                         reader_pool: self.reader_pool,
                         writer_pool: self.writer_pool,
                     };
-                    ConnectEnhancedAuthResult::Failure(connect_handle, Ok(connack.into()))
+                    ConnectEnhancedAuthResult::Failure(
+                        connect_handle,
+                        ConnectError::Rejected(connack.into()),
+                    )
                 }
             }
 
@@ -768,7 +790,7 @@ impl EnhancedAuthHandle {
                 };
                 ConnectEnhancedAuthResult::Failure(
                     connect_handle,
-                    Err(ConnectionError::UnexpectedPacket),
+                    ConnectError::Protocol(ProtocolError::UnexpectedPacket),
                 )
             }
         }
@@ -787,19 +809,28 @@ pub struct Connection {
 impl Connection {
     /// Drives this connection until it is disconnected.
     /// Packets will only be sent and received while this future is running.
-    pub async fn run_until_disconnect(
-        mut self,
-    ) -> (ConnectHandle, Result<DisconnectedEvent, ConnectionError>) {
-        let result = self.run_until_disconnect_inner().await;
+    pub async fn run_until_disconnect(mut self) -> (ConnectHandle, DisconnectedEvent) {
+        let event = match self.run_until_disconnect_inner().await {
+            Ok(GracefulDisconnect::Application) => DisconnectedEvent::ApplicationDisconnect,
+            Ok(GracefulDisconnect::Server(disconnect)) => {
+                DisconnectedEvent::ServerDisconnect(disconnect)
+            }
+            Err(InnerConnectionError::Io(e)) => DisconnectedEvent::IoError(e),
+            Err(InnerConnectionError::Protocol(e)) => DisconnectedEvent::ProtocolError(e),
+        };
         let connect_handle = ConnectHandle {
             session: self.session,
             reader_pool: self.reader_pool,
             writer_pool: self.writer_pool,
         };
-        (connect_handle, result)
+        // NOTE: By returning here, we implicitly drop the `reader` and `writer` stored on the
+        // `Connection`, implicitly closing the underlying transport.
+        (connect_handle, event)
     }
 
-    async fn run_until_disconnect_inner(&mut self) -> Result<DisconnectedEvent, ConnectionError> {
+    async fn run_until_disconnect_inner(
+        &mut self,
+    ) -> Result<GracefulDisconnect, InnerConnectionError> {
         let (reader, writer) = (&mut self.reader, &mut self.writer);
 
         loop {
@@ -834,7 +865,8 @@ impl Connection {
                     writer.flush().await?;
                     // If we wrote a DISCONNECT packet, also close the connection.
                     if disconnect {
-                        return Ok(DisconnectedEvent::UserRequested);
+                        //return DisconnectedEvent::ApplicationDisconnect;
+                        return Ok(GracefulDisconnect::Application);
                     }
                 }
 
@@ -844,7 +876,8 @@ impl Connection {
                         raw_packet.first_byte,
                         &mut raw_packet.rest,
                         ProtocolVersion::V5,
-                    )?;
+                    )
+                    .map_err(ProtocolError::MalformedPacket)?;
 
                     match packet {
                         Packet::Auth(auth) => self.session.incoming_auth(auth)?,
@@ -867,20 +900,20 @@ impl Connection {
 
                         Packet::Disconnect(disconnect) => {
                             self.session.server_disconnect(&disconnect);
-                            return Ok(DisconnectedEvent::ServerRequested(disconnect.into()));
+                            return Ok(GracefulDisconnect::Server(disconnect.into()));
                         }
 
                         Packet::Publish(publish) => self.session.incoming_publish(publish),
 
                         Packet::PingResp(_) => (),
 
-                        packet => return Err(ConnectionError::UnexpectedPacket),
+                        packet => return Err(ProtocolError::UnexpectedPacket)?,
                     }
                 }
 
                 future::Either::Right(Err(err)) => {
                     self.session.transport_disconnect(&err);
-                    return Ok(DisconnectedEvent::Transport);
+                    return Err(err)?;
                 }
             }
         }
@@ -947,15 +980,18 @@ impl ReauthHandle {
 /// Indicates the result of an MQTT CONNECT.
 pub enum ConnectResult {
     Success(Connection, ConnAck, DisconnectHandle),
-    Failure(ConnectHandle, Result<ConnAck, ConnectionError>),
+    Failure(ConnectHandle, ConnectError),
 }
 
 /// Indicates the result of an MQTT CONNECT with enhanced authentication.
 pub enum ConnectEnhancedAuthResult {
     Continue(Auth, EnhancedAuthHandle),
-    Success(Connection, ConnAck, ReauthHandle, DisconnectHandle),
-    Failure(ConnectHandle, Result<ConnAck, ConnectionError>),
+    Success(Connection, ConnAck, DisconnectHandle, ReauthHandle),
+    Failure(ConnectHandle, ConnectError),
 }
+
+// Should the above two be flattened into Result, with a variant on success for enhanced auth?
+// Maybe...
 
 /// Indicates the result of an MQTT AUTH operation on an existing connection.
 #[derive(Debug)]
@@ -978,11 +1014,27 @@ impl From<buffered::ReauthResult<SharedImpl>> for ReauthResult {
 }
 
 /// Details about a client disconnect
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum DisconnectedEvent {
-    Transport,
-    UserRequested,
-    ServerRequested(Disconnect),
+    ApplicationDisconnect,
+    ServerDisconnect(Disconnect),
+    IoError(io::Error), // fka Transport
+    ProtocolError(ProtocolError), // TODO: is this a subset of transport? No? why would it be?
+                        // TODO: keepalive timeout? Server will send disconnect, so probably part of ServerRequested
+}
+
+/// Internal error type for propagating connection errors
+#[derive(Error, Debug)]
+#[error(transparent)]
+enum InnerConnectionError {
+    Io(#[from] io::Error),
+    Protocol(#[from] ProtocolError),
+}
+
+/// Internal enum for distinguishing disconnect types
+enum GracefulDisconnect {
+    Application,
+    Server(Disconnect),
 }
 
 pub enum ManualAcknowledgement {
@@ -990,6 +1042,8 @@ pub enum ManualAcknowledgement {
     QoS1(PubAckToken),
     QoS2(PubRecToken),
 }
+
+// run_until_disconnect() -> (ConnectHandle, DisconnectedEvent)
 
 impl From<channel_data::IncomingPublishAndToken<SharedImpl>> for (Publish, ManualAcknowledgement) {
     fn from(inner: channel_data::IncomingPublishAndToken<SharedImpl>) -> Self {
@@ -1007,26 +1061,6 @@ impl From<channel_data::IncomingPublishAndToken<SharedImpl>> for (Publish, Manua
             ),
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ConnectionError {
-    #[error("protocol violation: malformed packet: {0}")]
-    MalformedPacket(
-        #[from]
-        #[source]
-        crate::mqtt_proto::DecodeError,
-    ),
-
-    #[error("I/O error: {0}")]
-    Io(
-        #[from]
-        #[source]
-        io::Error,
-    ),
-
-    #[error("protocol violation: unexpected packet")]
-    UnexpectedPacket,
 }
 
 mod buffered {
