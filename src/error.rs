@@ -53,7 +53,7 @@ impl std::fmt::Display for OperationFailure {
 #[derive(Debug, Error)]
 pub enum ConnectError {
     #[error(transparent)]
-    Protocol(#[from] ProtocolError), // TODO: source?
+    Protocol(#[from] ProtocolError),
     #[error("I/O error: {0}")]
     Io(
         #[from]

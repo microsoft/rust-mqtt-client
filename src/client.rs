@@ -497,7 +497,9 @@ impl ConnectHandle {
                 .await
                 {
                     Ok(result) => result,
-                    Err(err) => return ConnectEnhancedAuthResult::Failure(self, ConnectError::Timeout),
+                    Err(err) => {
+                        return ConnectEnhancedAuthResult::Failure(self, ConnectError::Timeout);
+                    }
                 }
             }
             None => self.transport_connect(connection_transport).await,
@@ -904,7 +906,7 @@ impl Connection {
 
                 future::Either::Right(Err(err)) => {
                     self.session.transport_disconnect(&err);
-                    return Err(err)?;
+                    return Err(err.into());
                 }
             }
         }
