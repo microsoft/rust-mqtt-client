@@ -416,7 +416,7 @@ impl ConnectHandle {
                 .await
                 {
                     Ok(result) => result,
-                    Err(err) => Err(err.into()),
+                    Err(err) => return ConnectResult::Failure(self, ConnectError::Timeout),
                 }
             }
             None => self.transport_connect(connection_transport).await,
@@ -488,7 +488,6 @@ impl ConnectHandle {
         authentication_info: AuthenticationInfo,
         connection_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
-        // TODO: Even with enhanced auth, we may need skip the intermediate auth step if we get a connack
         let streams = match connection_timeout {
             Some(connection_timeout) => {
                 match tokio::time::timeout(
@@ -498,7 +497,7 @@ impl ConnectHandle {
                 .await
                 {
                     Ok(result) => result,
-                    Err(err) => Err(err.into()),
+                    Err(err) => return ConnectEnhancedAuthResult::Failure(self, ConnectError::Timeout),
                 }
             }
             None => self.transport_connect(connection_transport).await,
