@@ -3,7 +3,8 @@
 
 //! Portable triggering of acknowledgement flows
 
-use crate::buffer_pool::SharedImpl;
+use bytes::Bytes;
+
 use crate::client::ClientError;
 use crate::client::token::completion::{
     PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecAcceptCompletionToken,
@@ -16,7 +17,7 @@ use crate::packet::{
 // TODO: Arguably, perhaps these should have their own error type instead of using ClientError
 
 #[derive(Debug)]
-pub struct PubAckToken(pub(crate) buffered::PubAckToken<SharedImpl>);
+pub struct PubAckToken(pub(crate) buffered::PubAckToken<Bytes>);
 
 impl PubAckToken {
     /// Accept the received PUBLISH by issuing a PUBACK indicating success.
@@ -50,7 +51,7 @@ impl PubAckToken {
 }
 
 #[derive(Debug)]
-pub struct PubRecToken(pub(crate) buffered::PubRecToken<SharedImpl>);
+pub struct PubRecToken(pub(crate) buffered::PubRecToken<Bytes>);
 
 impl PubRecToken {
     /// Accept the received PUBLISH by issuing a PUBREC indicating success.
@@ -90,7 +91,7 @@ impl PubRecToken {
 
 /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
 #[derive(Debug)]
-pub struct PubRelToken(pub(crate) buffered::PubRelToken<SharedImpl>);
+pub struct PubRelToken(pub(crate) buffered::PubRelToken<Bytes>);
 
 impl PubRelToken {
     /// Confirm the PUBREC was received by issuing a PUBREL.
@@ -114,7 +115,7 @@ impl PubRelToken {
 
 /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
 #[derive(Debug)]
-pub struct PubCompToken(pub(crate) buffered::PubCompToken<SharedImpl>);
+pub struct PubCompToken(pub(crate) buffered::PubCompToken<Bytes>);
 
 impl PubCompToken {
     /// Confirm the PUBREL was received by issuing a PUBCOMP.
@@ -439,10 +440,11 @@ pub(crate) mod buffered {
 
 #[cfg(test)]
 mod test {
+    use bytes::Bytes;
+
     use super::buffered::*;
-    use crate::buffer_pool::tests::SharedImpl;
     use crate::client::channel_data::AcknowledgementRequest;
-    use crate::mqtt_proto::{PacketIdentifier, PubAckOtherProperties, PubAckReasonCode, byte_str};
+    use crate::mqtt_proto::{PacketIdentifier, PubAckOtherProperties, PubAckReasonCode};
 
     #[tokio::test]
     async fn puback_token_accept() {
@@ -450,10 +452,10 @@ mod test {
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
         let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Success")),
+            reason_string: Some("Test Success".into()),
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         };
         let token = PubAckToken::new(pkid, epoch, tx);
@@ -479,10 +481,10 @@ mod test {
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
         let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Reject")),
+            reason_string: Some("Test Reject".into()),
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         };
         let token = PubAckToken::new(pkid, epoch, tx);
@@ -509,7 +511,7 @@ mod test {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
-        let token = PubAckToken::<SharedImpl>::new(pkid, epoch, tx);
+        let token = PubAckToken::<Bytes>::new(pkid, epoch, tx);
         // Drop the token without accepting or rejecting it
         drop(token);
         // It was accepted automatically with default properties
@@ -532,10 +534,10 @@ mod test {
         let pkid = PacketIdentifier::new(1).unwrap();
         let epoch = 3;
         let properties = PubAckOtherProperties {
-            reason_string: Some(byte_str("Test Success")),
+            reason_string: Some("Test Success".into()),
             user_properties: vec![
-                (byte_str("key1"), byte_str("value1")),
-                (byte_str("key2"), byte_str("value2")),
+                ("key1".into(), "value1".into()),
+                ("key2".into(), "value2".into()),
             ],
         };
         let token = PubAckToken::new(pkid, epoch, tx);

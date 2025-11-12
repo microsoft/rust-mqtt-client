@@ -3,7 +3,7 @@
 
 //! Synchronization for portable reporting of remote operations
 
-use crate::buffer_pool::SharedImpl;
+use bytes::Bytes;
 use thiserror::Error;
 
 #[derive(Clone, PartialEq, Debug, Error)]
@@ -59,12 +59,12 @@ macro_rules! make_completion_token_ty {
 
 make_completion_token_ty!(pub struct PublishQoS0CompletionToken(CompletionToken<()>));
 
-make_completion_token_ty!(pub struct PublishQoS1CompletionToken(CompletionToken<crate::mqtt_proto::PubAck<SharedImpl>> -> crate::packet::PubAck { Into::into }));
+make_completion_token_ty!(pub struct PublishQoS1CompletionToken(CompletionToken<crate::mqtt_proto::PubAck<Bytes>> -> crate::packet::PubAck { Into::into }));
 
 make_completion_token_ty!(pub struct PublishQoS2CompletionToken(
     CompletionToken<(
-        crate::mqtt_proto::PubRec<SharedImpl>,
-        Option<crate::client::token::acknowledgement::buffered::PubRelToken<SharedImpl>>,
+        crate::mqtt_proto::PubRec<Bytes>,
+        Option<crate::client::token::acknowledgement::buffered::PubRelToken<Bytes>>,
     )> -> (
         crate::packet::PubRec,
         Option<crate::client::token::acknowledgement::PubRelToken>,
@@ -75,8 +75,8 @@ make_completion_token_ty!(pub struct PublishQoS2CompletionToken(
 
 make_completion_token_ty!(pub struct PubRecAcceptCompletionToken(
     CompletionToken<(
-        crate::mqtt_proto::PubRel<SharedImpl>,
-        crate::client::token::acknowledgement::buffered::PubCompToken<SharedImpl>,
+        crate::mqtt_proto::PubRel<Bytes>,
+        crate::client::token::acknowledgement::buffered::PubCompToken<Bytes>,
     )> -> (
         crate::packet::PubRel,
         crate::client::token::acknowledgement::PubCompToken,
@@ -87,13 +87,13 @@ make_completion_token_ty!(pub struct PubRecAcceptCompletionToken(
 
 make_completion_token_ty!(pub struct PubRecRejectCompletionToken(CompletionToken<()>));
 
-make_completion_token_ty!(pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<SharedImpl>> -> crate::packet::PubComp { Into::into }));
+make_completion_token_ty!(pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<Bytes>> -> crate::packet::PubComp { Into::into }));
 
-make_completion_token_ty!(pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<SharedImpl>> -> crate::packet::SubAck { Into::into }));
+make_completion_token_ty!(pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<Bytes>> -> crate::packet::SubAck { Into::into }));
 
-make_completion_token_ty!(pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<SharedImpl>> -> crate::packet::UnsubAck { Into::into }));
+make_completion_token_ty!(pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<Bytes>> -> crate::packet::UnsubAck { Into::into }));
 
-make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<crate::client::buffered::ReauthResult<SharedImpl>> -> crate::client::ReauthResult { Into::into }));
+make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<crate::client::buffered::ReauthResult<Bytes>> -> crate::client::ReauthResult { Into::into }));
 
 make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>));
 

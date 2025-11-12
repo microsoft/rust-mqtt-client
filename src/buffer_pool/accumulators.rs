@@ -91,11 +91,11 @@ pub struct Iovecs {
     pub total_len: usize,
 }
 
-mod either;
-pub use either::EitherBytesAccumulator;
+pub(crate) mod either;
 
-pub mod iovecs;
-pub mod single;
+pub(crate) mod iovecs;
+
+pub(crate) mod single;
 
 #[cfg(test)]
-pub mod tests;
+pub(crate) mod test;

@@ -194,10 +194,13 @@ impl UnsubAckReasonCode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::mqtt_proto::{self, BinaryData, Packet, binary_data, byte_str};
-    use buffer_pool::{Shared, tests::SharedImpl};
+    use bytes::Bytes;
     use test_case::test_case;
+
+    use buffer_pool::Shared;
+
+    use super::*;
+    use crate::mqtt_proto::{self, BinaryData, Packet};
 
     encode_decode_v3! {
         Packet::UnsubAck(UnsubAck {
@@ -220,27 +223,28 @@ mod tests {
                 UnsubAckReasonCode::PacketIdentifierInUse,
             ],
             other_properties: UnsubAckOtherProperties {
-                reason_string: Some(byte_str("reason")),
-                user_properties: vec![(byte_str("foo"), byte_str("bar"))],
+                reason_string: Some("reason".into()),
+                user_properties: vec![("foo".into(), "bar".into())],
             },
         }),
     }
 
-    #[test_case(binary_data(b"\xb0\x0e\x12\x34\x0a\x1f\x00\x07Success\x00"), UnsubAckReasonCode::Success, "Success", ProtocolVersion::V5; "Decode Unsuback Success")]
-    #[test_case(binary_data(b"\xb0\x1e\x12\x34\x1a\x1f\x00\x17No subscription existed\x11"), UnsubAckReasonCode::NoSubscriptionExisted,"No subscription existed",  ProtocolVersion::V5; "Decode Unsuback NoSubscriptionExisted")]
-    #[test_case(binary_data(b"\xb0\x18\x12\x34\x14\x1f\x00\x11Unspecified error\x80"), UnsubAckReasonCode::UnspecifiedError,"Unspecified error", ProtocolVersion::V5; "Decode Unsuback UnspecifiedError")]
-    #[test_case(binary_data(b"\xb0\x24\x12\x34\x20\x1f\x00\x1dImplementation specific error\x83"), UnsubAckReasonCode::ImplementationSpecificError,"Implementation specific error", ProtocolVersion::V5; "Decode Unsuback ImplementationSpecificError")]
-    #[test_case(binary_data(b"\xb0\x15\x12\x34\x11\x1f\x00\x0eNot authorized\x87"), UnsubAckReasonCode::NotAuthorized,"Not authorized", ProtocolVersion::V5; "Decode Unsuback NotAuthorized")]
-    #[test_case(binary_data(b"\xb0\x1b\x12\x34\x17\x1f\x00\x14Topic Filter invalid\x8f"), UnsubAckReasonCode::TopicFilterInvalid, "Topic Filter invalid", ProtocolVersion::V5; "Decode Unsuback TopicFilterInvalid")]
-    #[test_case(binary_data(b"\xb0\x1f\x12\x34\x1b\x1f\x00\x18Packet Identifier in use\x91"), UnsubAckReasonCode::PacketIdentifierInUse,"Packet Identifier in use", ProtocolVersion::V5; "Decode Unsuback PacketIdentifierInUse")]
+    #[test_case(b"\xb0\x0e\x12\x34\x0a\x1f\x00\x07Success\x00", UnsubAckReasonCode::Success, "Success", ProtocolVersion::V5; "Decode Unsuback Success")]
+    #[test_case(b"\xb0\x1e\x12\x34\x1a\x1f\x00\x17No subscription existed\x11", UnsubAckReasonCode::NoSubscriptionExisted,"No subscription existed",  ProtocolVersion::V5; "Decode Unsuback NoSubscriptionExisted")]
+    #[test_case(b"\xb0\x18\x12\x34\x14\x1f\x00\x11Unspecified error\x80", UnsubAckReasonCode::UnspecifiedError,"Unspecified error", ProtocolVersion::V5; "Decode Unsuback UnspecifiedError")]
+    #[test_case(b"\xb0\x24\x12\x34\x20\x1f\x00\x1dImplementation specific error\x83", UnsubAckReasonCode::ImplementationSpecificError,"Implementation specific error", ProtocolVersion::V5; "Decode Unsuback ImplementationSpecificError")]
+    #[test_case(b"\xb0\x15\x12\x34\x11\x1f\x00\x0eNot authorized\x87", UnsubAckReasonCode::NotAuthorized,"Not authorized", ProtocolVersion::V5; "Decode Unsuback NotAuthorized")]
+    #[test_case(b"\xb0\x1b\x12\x34\x17\x1f\x00\x14Topic Filter invalid\x8f", UnsubAckReasonCode::TopicFilterInvalid, "Topic Filter invalid", ProtocolVersion::V5; "Decode Unsuback TopicFilterInvalid")]
+    #[test_case(b"\xb0\x1f\x12\x34\x1b\x1f\x00\x18Packet Identifier in use\x91", UnsubAckReasonCode::PacketIdentifierInUse,"Packet Identifier in use", ProtocolVersion::V5; "Decode Unsuback PacketIdentifierInUse")]
     // Lint wants `encoding` to be taken as borrow, but that makes the `test_case()` exprs more complicated.
     #[allow(clippy::needless_pass_by_value)]
     fn decode_packet_unsuback_v5(
-        encoding: BinaryData<SharedImpl>,
+        encoding: &[u8],
         reason: UnsubAckReasonCode,
         reason_str: &str,
         version: ProtocolVersion,
     ) {
+        let encoding = BinaryData::<Bytes>::from(encoding);
         let mut buffer = encoding.clone().into_shared();
         buffer.drain(std::mem::size_of::<u16>());
 
@@ -248,7 +252,7 @@ mod tests {
             packet_identifier: PacketIdentifier::new(0x1234).unwrap(),
             reason_codes: vec![reason],
             other_properties: UnsubAckOtherProperties {
-                reason_string: Some(byte_str(reason_str)),
+                reason_string: Some(reason_str.into()),
                 user_properties: vec![],
             },
         });

@@ -75,16 +75,17 @@ impl<S, const COUNT_SHARED: bool> Default for ByteCounter<S, COUNT_SHARED> {
 
 #[cfg(test)]
 mod tests {
-    use crate::buffer_pool::{BytesAccumulator as _, tests::SharedImpl};
+    use bytes::Bytes;
 
     use super::ByteCounter;
+    use crate::buffer_pool::BytesAccumulator as _;
 
     #[test]
     fn can_accept_more_always_true() {
-        let counter = ByteCounter::<SharedImpl, true>::default();
+        let counter = ByteCounter::<Bytes, true>::default();
         assert!(counter.can_accept_more());
 
-        let counter = ByteCounter::<SharedImpl, false>::default();
+        let counter = ByteCounter::<Bytes, false>::default();
         assert!(counter.can_accept_more());
     }
 
@@ -92,7 +93,7 @@ mod tests {
     fn count_shared() {
         let mut counter = ByteCounter::<_, true>::default();
         counter.try_put_u8(1).unwrap();
-        counter.put_shared(SharedImpl::from_static(b"foo"));
+        counter.put_shared(Bytes::from_static(b"foo"));
         counter.try_put_u8(2).unwrap();
         assert_eq!(counter.into_count(), 1 + 3 + 1);
     }
@@ -101,7 +102,7 @@ mod tests {
     fn dont_count_shared() {
         let mut counter = ByteCounter::<_, false>::default();
         counter.try_put_u8(1).unwrap();
-        counter.put_shared(SharedImpl::from_static(b"foo"));
+        counter.put_shared(Bytes::from_static(b"foo"));
         counter.try_put_u8(2).unwrap();
         #[expect(clippy::identity_op)]
         {

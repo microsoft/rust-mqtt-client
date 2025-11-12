@@ -21,7 +21,7 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::buffer_pool::{BufferPool, EitherBytesAccumulator};
+use crate::buffer_pool::{BufferPool, EitherAccumulator};
 use crate::client::ConnectionTransportTlsConfig;
 use crate::io::{ReadableStream, Reader, WritableStream, Writer, tokio_tls};
 
@@ -69,7 +69,7 @@ where
             };
             let (read, write) = tokio::io::split(stream);
             let read_buf = reader_pool.take_empty_owned();
-            let write_buf = EitherBytesAccumulator::Single(Default::default());
+            let write_buf = EitherAccumulator::Single(Default::default());
             Ok((
                 Reader::new(Box::new(WebSocketStreamRead { inner: read }), read_buf),
                 Writer::new(Box::new(WebSocketStreamWrite { inner: write }), write_buf),
@@ -86,7 +86,7 @@ where
             };
             let (read, write) = tokio::io::split(stream);
             let read_buf = reader_pool.take_empty_owned();
-            let write_buf = EitherBytesAccumulator::Single(Default::default());
+            let write_buf = EitherAccumulator::Single(Default::default());
             Ok((
                 Reader::new(Box::new(WebSocketStreamRead { inner: read }), read_buf),
                 Writer::new(Box::new(WebSocketStreamWrite { inner: write }), write_buf),

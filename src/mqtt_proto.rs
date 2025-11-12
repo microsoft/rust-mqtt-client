@@ -99,7 +99,7 @@ macro_rules! encode_decode_v3 {
         { }
     ) => {
         $($attrs)*
-        fn encode_decode_v3(packet: Packet<crate::buffer_pool::tests::SharedImpl>, expected_encoding: Option<&[u8]>) {
+        fn encode_decode_v3(packet: Packet<bytes::Bytes>, expected_encoding: Option<&[u8]>) {
             let mut encoding = crate::mqtt_proto::tests::encode(&packet, crate::mqtt_proto::ProtocolVersion::V3);
             println!("encoded packet: {encoding:?}");
             if let Some(expected_encoding) = expected_encoding {
@@ -152,7 +152,7 @@ macro_rules! encode_decode_v5 {
         { }
     ) => {
         $($attrs)*
-        fn encode_decode_v5(packet: Packet<crate::buffer_pool::tests::SharedImpl>, expected_encoding: Option<&[u8]>) {
+        fn encode_decode_v5(packet: Packet<bytes::Bytes>, expected_encoding: Option<&[u8]>) {
             let mut encoding = crate::mqtt_proto::tests::encode(&packet, crate::mqtt_proto::ProtocolVersion::V5);
             println!("encoded packet: {encoding:?}");
             if let Some(expected_encoding) = expected_encoding {
@@ -175,8 +175,6 @@ macro_rules! encode_decode_v5 {
 
 mod binary_data;
 pub use binary_data::BinaryData;
-#[cfg(test)]
-pub use binary_data::binary_data;
 
 mod buffer;
 pub use buffer::SharedExt;
@@ -186,8 +184,6 @@ pub use byte_counter::ByteCounter;
 
 mod byte_str;
 pub use byte_str::ByteStr;
-#[cfg(test)]
-pub use byte_str::byte_str;
 
 mod filter;
 pub use filter::{ClassifiedFilter, Filter};
@@ -1107,11 +1103,10 @@ pub const SHARED_SUBSCRIPTION_PREFIX: &str = "$share/";
 mod tests {
     use std::{io::IoSlice, slice};
 
+    use bytes::Bytes;
     use matches::assert_matches;
 
-    use crate::buffer_pool::{
-        BytesAccumulator, Shared, accumulators::tests::BytesAccumulatorImpl, tests::SharedImpl,
-    };
+    use crate::buffer_pool::{BytesAccumulator, Shared, TestAccumulator};
     use crate::mqtt_proto::{
         ByteCounter, ConnAck, Connect, DecodeError, Disconnect, EncodeError, Packet, PingReq,
         PingResp, ProtocolVersion, PubAck, PubComp, PubRec, PubRel, Publication, Publish, SubAck,
@@ -1123,8 +1118,8 @@ mod tests {
         encode_varint,
     };
 
-    pub(crate) fn create_packet_as_shared(first_byte: u8, payload: &[u8]) -> SharedImpl {
-        let mut result = BytesAccumulatorImpl::<SharedImpl>::with_capacity(5 + payload.len());
+    pub(crate) fn create_packet_as_shared(first_byte: u8, payload: &[u8]) -> Bytes {
+        let mut result = TestAccumulator::<Bytes>::with_capacity(5 + payload.len());
         result.try_put_u8(first_byte).unwrap();
         encode_remaining_length(payload.len(), &mut result).unwrap();
         result.try_put_slice(payload).unwrap();
@@ -1132,7 +1127,7 @@ mod tests {
 
         let mut iovec = IoSlice::new(&[]);
         result.to_iovecs(slice::from_mut(&mut iovec));
-        SharedImpl::copy_from_slice(&iovec)
+        Bytes::copy_from_slice(&iovec)
     }
 
     pub(crate) fn decode<S>(src: &mut S, version: ProtocolVersion) -> Packet<S>
@@ -1142,7 +1137,7 @@ mod tests {
         Packet::decode_full(src, version).unwrap()
     }
 
-    pub(crate) fn encode<S>(packet: &Packet<S>, version: ProtocolVersion) -> SharedImpl
+    pub(crate) fn encode<S>(packet: &Packet<S>, version: ProtocolVersion) -> Bytes
     where
         S: Shared,
     {
@@ -1152,7 +1147,7 @@ mod tests {
     pub(crate) fn try_encode<S>(
         packet: &Packet<S>,
         version: ProtocolVersion,
-    ) -> Result<SharedImpl, EncodeError>
+    ) -> Result<Bytes, EncodeError>
     where
         S: Shared,
     {
@@ -1162,7 +1157,7 @@ mod tests {
             counter.into_count()
         };
 
-        let mut accumulator = BytesAccumulatorImpl::with_capacity(num_bytes_needed);
+        let mut accumulator = TestAccumulator::with_capacity(num_bytes_needed);
 
         // Any validation that failed would've failed when encoding with the ByteCounter above,
         // so this second encode with the BytesAccumulator must succeed.
@@ -1170,7 +1165,7 @@ mod tests {
 
         let mut iovec = IoSlice::new(&[]);
         accumulator.to_iovecs(slice::from_mut(&mut iovec));
-        Ok(SharedImpl::copy_from_slice(&iovec))
+        Ok(Bytes::copy_from_slice(&iovec))
     }
 
     #[test]
@@ -1200,21 +1195,21 @@ mod tests {
         let mut iovec = IoSlice::new(&[]);
 
         // Can't encode into a buffer with no unfilled space left
-        let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(0);
+        let mut bytes = TestAccumulator::<Bytes>::with_capacity(0);
         assert_matches!(
             encode_varint(value, &mut bytes),
             Err(EncodeError::InsufficientBuffer)
         );
 
         // Can encode into a buffer with unfilled space left and no filled space
-        let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(8);
+        let mut bytes = TestAccumulator::<Bytes>::with_capacity(8);
         encode_varint(value, &mut bytes).unwrap();
         bytes.put_done();
         bytes.to_iovecs(slice::from_mut(&mut iovec));
         assert_eq!(*iovec, *expected);
 
         // Can encode into a buffer with unfilled space left and some filled space
-        let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(8);
+        let mut bytes = TestAccumulator::<Bytes>::with_capacity(8);
         bytes.try_put_slice(&[0x00; 3][..]).unwrap();
         encode_varint(value, &mut bytes).unwrap();
         bytes.put_done();
@@ -1223,12 +1218,12 @@ mod tests {
     }
 
     fn varint_encode_inner_too_high(value: u32) {
-        let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(8);
+        let mut bytes = TestAccumulator::<Bytes>::with_capacity(8);
         assert_matches!(encode_varint(value, &mut bytes), Err(EncodeError::VarintTooHigh(v)) if v == value);
     }
 
     fn remaining_length_encode_inner_too_high(value: usize) {
-        let mut bytes = BytesAccumulatorImpl::<SharedImpl>::with_capacity(8);
+        let mut bytes = TestAccumulator::<Bytes>::with_capacity(8);
         assert_matches!(encode_remaining_length(value, &mut bytes), Err(EncodeError::RemainingLengthTooHigh(v)) if v == value);
     }
 
@@ -1284,8 +1279,6 @@ mod tests {
     /// because we care about the sizes in actual production.
     #[test]
     fn packets_sizes() {
-        use crate::buffer_pool::bytes::SharedImpl;
-
         macro_rules! sizes {
             ([ $($ty:ty = $expected:expr,)* ]) => {
                 $(
@@ -1304,24 +1297,24 @@ mod tests {
         }
 
         sizes!([
-            ConnAck<SharedImpl> = 256,
-            Connect<SharedImpl> = 224,
-            Disconnect<SharedImpl> = 104,
+            ConnAck<Bytes> = 256,
+            Connect<Bytes> = 224,
+            Disconnect<Bytes> = 104,
             PingReq = 0,
             PingResp = 0,
-            PubAck<SharedImpl> = 64,
-            PubComp<SharedImpl> = 64,
-            Publish<SharedImpl> = 232,
-            PubRec<SharedImpl> = 64,
-            PubRel<SharedImpl> = 64,
-            SubAck<SharedImpl> = 88,
-            Subscribe<SharedImpl> = 64,
-            UnsubAck<SharedImpl> = 88,
-            Unsubscribe<SharedImpl> = 56,
+            PubAck<Bytes> = 64,
+            PubComp<Bytes> = 64,
+            Publish<Bytes> = 232,
+            PubRec<Bytes> = 64,
+            PubRel<Bytes> = 64,
+            SubAck<Bytes> = 88,
+            Subscribe<Bytes> = 64,
+            UnsubAck<Bytes> = 88,
+            Unsubscribe<Bytes> = 56,
 
-            Packet<SharedImpl> = 256,
+            Packet<Bytes> = 256,
 
-            Publication<SharedImpl> = 208,
+            Publication<Bytes> = 208,
         ]);
     }
 }

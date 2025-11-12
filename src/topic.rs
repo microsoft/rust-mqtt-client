@@ -116,32 +116,31 @@ impl fmt::Display for TopicFilter {
 #[cfg(test)]
 #[allow(clippy::similar_names)] // clippy doesn't like tn/tf variables
 mod tests {
+    use bytes::Bytes;
+
     use super::{TopicFilter, TopicName};
-    use crate::{
-        buffer_pool::{self, BufferPool},
-        mqtt_proto,
-    };
+    use crate::mqtt_proto;
 
     #[test]
     fn convert_to_buffered_proto_types() {
         let tn = TopicName::new("a/b/c").unwrap();
         let tf = TopicFilter::new("a/b/+").unwrap();
-        let mut o2 = buffer_pool::BufferPoolImpl.take_empty_owned();
 
         let tn_inner = tn.clone().into_inner(); // clone to retain original for assert
-        let tn_buffered = tn_inner.to_shared(&mut o2).unwrap();
+        let tn_buffered = mqtt_proto::Topic::<mqtt_proto::ByteStr<Bytes>>::from(tn_inner);
         assert_eq!(tn.as_str(), tn_buffered.as_str());
 
         let tf_inner = tf.clone().into_inner(); // clone to retain original for assert
-        let tf_buffered = tf_inner.to_shared(&mut o2).unwrap();
+        let tf_buffered = mqtt_proto::Filter::<mqtt_proto::ByteStr<Bytes>>::from(tf_inner);
         assert_eq!(tf.as_str(), tf_buffered.as_str());
     }
 
     #[test]
     fn convert_from_buffered_proto_types() {
-        let mut o1 = buffer_pool::BufferPoolImpl.take_empty_owned();
-        let tn_buffered = mqtt_proto::Topic::new_shared(&mut o1, "a/b/c").unwrap();
-        let tf_buffered = mqtt_proto::Filter::new_shared(&mut o1, "a/b/+").unwrap();
+        let tn_buffered =
+            mqtt_proto::Topic::new(mqtt_proto::ByteStr::<Bytes>::from("a/b/c")).unwrap();
+        let tf_buffered =
+            mqtt_proto::Filter::new(mqtt_proto::ByteStr::<Bytes>::from("a/b/+")).unwrap();
 
         let tn = TopicName::from(tn_buffered.to_owned());
         let tf = TopicFilter::from(tf_buffered.to_owned());

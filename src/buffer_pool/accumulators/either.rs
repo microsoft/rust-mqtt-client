@@ -3,17 +3,19 @@
 
 use std::io::IoSlice;
 
-use crate::buffer_pool::{BufferPool, BytesAccumulator, Error, Iovecs};
+use crate::buffer_pool::{
+    BufferPool, BytesAccumulator, Error, Iovecs, IovecsAccumulator, SingleAccumulator,
+};
 
-pub enum EitherBytesAccumulator<BP>
+pub enum EitherAccumulator<BP>
 where
     BP: BufferPool,
 {
-    Iovecs(super::iovecs::BytesAccumulatorImpl<BP::Owned>),
-    Single(super::single::BytesAccumulatorImpl<BP::Shared>),
+    Iovecs(IovecsAccumulator<BP::Owned>),
+    Single(SingleAccumulator<BP::Shared>),
 }
 
-impl<BP> BytesAccumulator for EitherBytesAccumulator<BP>
+impl<BP> BytesAccumulator for EitherAccumulator<BP>
 where
     BP: BufferPool,
 {
@@ -76,11 +78,11 @@ where
     }
 }
 
-impl<BP> std::fmt::Debug for EitherBytesAccumulator<BP>
+impl<BP> std::fmt::Debug for EitherAccumulator<BP>
 where
     BP: BufferPool,
-    super::iovecs::BytesAccumulatorImpl<BP::Owned>: std::fmt::Debug,
-    super::single::BytesAccumulatorImpl<BP::Shared>: std::fmt::Debug,
+    IovecsAccumulator<BP::Owned>: std::fmt::Debug,
+    SingleAccumulator<BP::Shared>: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

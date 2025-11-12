@@ -436,7 +436,7 @@ mod tests {
     use matches::assert_matches;
 
     use super::*;
-    use crate::mqtt_proto::{self, Packet, byte_str};
+    use crate::mqtt_proto::{self, Packet};
 
     encode_decode_v3! {
         Packet::ConnAck(ConnAck {
@@ -647,7 +647,7 @@ mod tests {
                 assigned_client_id: None,
                 topic_alias_maximum: 0,
                 reason_string: None,
-                user_properties: vec![(byte_str("key"), byte_str("value"))],
+                user_properties: vec![("key".into(), "value".into())],
                 wildcard_subscription_available: true,
                 shared_subscription_available: true,
                 subscription_identifiers_available: true,

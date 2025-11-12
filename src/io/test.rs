@@ -9,7 +9,7 @@ use std::pin::Pin;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::buffer_pool::{
-    BufferPool, BytesAccumulator as _, EitherBytesAccumulator, Owned as _, Shared,
+    BufferPool, BytesAccumulator as _, EitherAccumulator, Owned as _, Shared,
 };
 use crate::io::{ReadableStream, Reader, WritableStream, Writer, reader::RawPacket};
 use crate::mqtt_proto::{self, ByteCounter, Packet, ProtocolVersion};
@@ -33,7 +33,7 @@ where
         read_buf,
     );
 
-    let write_buf = EitherBytesAccumulator::Single(Default::default());
+    let write_buf = EitherAccumulator::Single(Default::default());
     let writer = Writer::new(
         Box::new(TestStreamWrite {
             outgoing_packets,
@@ -89,7 +89,7 @@ where
                         counter.into_count()
                     };
 
-                    let mut accumulator = EitherBytesAccumulator::<BP>::Single(Default::default());
+                    let mut accumulator = EitherAccumulator::<BP>::Single(Default::default());
                     accumulator.reserve(num_bytes_needed).unwrap();
 
                     packet

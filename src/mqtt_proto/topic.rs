@@ -216,11 +216,9 @@ where
 }
 
 #[cfg(test)]
-pub fn topic(
-    s: impl AsRef<str>,
-) -> Topic<crate::mqtt_proto::ByteStr<buffer_pool::tests::SharedImpl>> {
-    let t = crate::mqtt_proto::byte_str(s);
-    Topic::new(t).expect("topic")
+pub fn topic(s: impl AsRef<str>) -> Topic<crate::mqtt_proto::ByteStr<bytes::Bytes>> {
+    let t = crate::mqtt_proto::ByteStr::from(s.as_ref());
+    Topic::new(t).unwrap()
 }
 
 #[cfg(test)]
@@ -228,7 +226,7 @@ pub fn topic_str<S>(s: S) -> Topic<S>
 where
     S: AsRef<str>,
 {
-    Topic::new(s).expect("topic")
+    Topic::new(s).unwrap()
 }
 
 #[cfg(test)]
@@ -238,7 +236,7 @@ mod tests {
 
     use super::{Topic, topic};
 
-    use crate::mqtt_proto::{DecodeError, byte_str};
+    use crate::mqtt_proto::{ByteStr, DecodeError};
 
     #[test]
     fn create() {
@@ -259,7 +257,7 @@ mod tests {
     #[test_case("a/+")]
     #[test_case("b/#")]
     fn invalid(topic: &str) {
-        assert_matches!(Topic::new(byte_str(topic)), Err(DecodeError::InvalidTopic(t)) if t == topic);
+        assert_matches!(Topic::new(ByteStr::from(topic)), Err(DecodeError::InvalidTopic(t)) if t == topic);
     }
 
     #[test_case("/b", &["", "b"], "b", &["b"])]

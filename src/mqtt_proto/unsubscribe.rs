@@ -153,7 +153,7 @@ where
 mod tests {
     use super::{Unsubscribe, UnsubscribeOtherProperties};
 
-    use crate::mqtt_proto::{Packet, PacketIdentifier, byte_str, filter};
+    use crate::mqtt_proto::{Packet, PacketIdentifier, filter};
 
     encode_decode_v3! {
         Packet::Unsubscribe(Unsubscribe {
@@ -170,7 +170,7 @@ mod tests {
             packet_identifier: PacketIdentifier::new(0x1234).unwrap(),
             unsubscribe_from: vec![filter("topic")],
             other_properties: UnsubscribeOtherProperties {
-                user_properties: vec![(byte_str("foo"), byte_str("bar"))],
+                user_properties: vec![("foo".into(), "bar".into())],
             },
         }),
     }
