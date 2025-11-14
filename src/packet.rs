@@ -144,8 +144,6 @@ where
 /// session ends, or after the delay interval elapses after a disconnect
 #[derive(Clone)]
 pub struct Will {
-    /// Number of seconds after a disconnect before the Will message is published
-    pub delay_interval: u32,
     /// Topic name to publish the Will message to
     pub topic_name: TopicName,
     /// Quality of Service for the Will message
@@ -155,7 +153,55 @@ pub struct Will {
     /// Payload for the Will message
     pub payload: Bytes,
     /// Properties for the Will message
-    pub properties: PublishProperties,
+    pub properties: WillProperties,
+}
+
+impl<S> From<Will> for Box<(mqtt_proto::Publication<S>, u32)>
+where
+    S: Shared + From<bytes::Bytes>,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
+    for<'a> &'a str: Into<ByteStr<S>>,
+{
+    fn from(will: Will) -> Self {
+        let delay_interval = will.properties.delay_interval;
+        let publication = mqtt_proto::Publication {
+            topic_name: will.topic_name.into_inner().into(),
+            qos: will.qos.into(),
+            retain: will.retain,
+            payload: will.payload.into(),
+            other_properties: will.properties.into(),
+        };
+        Box::new((publication, delay_interval))
+    }
+}
+
+#[derive(Clone)]
+pub struct WillProperties {
+    pub delay_interval: u32,
+    pub payload_format_indicator: PayloadFormatIndicator,
+    pub message_expiry_interval: Option<u32>,
+    pub content_type: Option<String>,
+    pub response_topic: Option<TopicName>,
+    pub correlation_data: Option<Bytes>,
+    pub user_properties: Vec<(String, String)>,
+}
+
+impl<S> From<WillProperties> for mqtt_proto::PublicationOtherProperties<S>
+where
+    S: Shared,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
+    for<'a> &'a str: Into<ByteStr<S>>,
+{
+    fn from(wp: WillProperties) -> Self {
+        Self {
+            payload_is_utf8: matches!(wp.payload_format_indicator, PayloadFormatIndicator::UTF8),
+            message_expiry_interval: wp.message_expiry_interval,
+            response_topic: wp.response_topic.map(|t| t.into_inner().into()),
+            correlation_data: wp.correlation_data.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(wp.user_properties),
+            content_type: wp.content_type.as_deref().map(Into::into),
+        }
+    }
 }
 
 //////////////////// Packets ////////////////////

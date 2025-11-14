@@ -101,6 +101,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         session,
         reader_pool,
         writer_pool,
+        cfg_client_id: options.client_id,
     };
     let receiver = Receiver { rx: i_pub_rx };
     (client, connect_handle, receiver)
@@ -392,6 +393,7 @@ pub struct ConnectHandle {
     session: Session<BytesMut>,
     reader_pool: BytesPool,
     writer_pool: BytesPool,
+    cfg_client_id: Option<String>,
 }
 
 impl ConnectHandle {
@@ -469,6 +471,7 @@ impl ConnectHandle {
                 writer_pool: self.writer_pool,
                 reader,
                 writer,
+                cfg_client_id: self.cfg_client_id,
             },
             connack.into(),
             DisconnectHandle(disconnect_tx),
@@ -504,9 +507,7 @@ impl ConnectHandle {
         };
         let (mut reader, mut writer) = match streams {
             Ok(streams) => streams,
-            Err(err) => {
-                return ConnectEnhancedAuthResult::Failure(self, err.into());
-            }
+            Err(err) => return ConnectEnhancedAuthResult::Failure(self, err.into()),
         };
         if let Err(err) = self
             .mqtt_connect(
@@ -537,6 +538,7 @@ impl ConnectHandle {
                             writer_pool: self.writer_pool,
                             reader,
                             writer,
+                            cfg_client_id: self.cfg_client_id,
                         },
                         connack.into(),
                         DisconnectHandle(disconnect_tx),
@@ -558,6 +560,7 @@ impl ConnectHandle {
                     reader,
                     writer,
                     auth_method: authentication_info.method,
+                    cfg_client_id: self.cfg_client_id,
                 };
                 ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
             }
@@ -630,12 +633,11 @@ impl ConnectHandle {
         properties: ConnectProperties,
     ) -> Result<(), ConnectError> {
         // Transport has been established. Send CONNECT and wait for CONNACK.
-        // TODO: Get values from options
         let connect = Packet::Connect(Connect {
-            username: None,  // TODO
-            password: None,  // TODO
-            will: None,      // TODO
-            client_id: None, // TODO from client-wide config
+            username: username.as_deref().map(Into::into),
+            password: password.as_deref().map(Into::into),
+            will: will.map(Into::into),
+            client_id: self.cfg_client_id.as_deref().map(Into::into),
             clean_start,
             keep_alive,
             other_properties: properties.into(),
@@ -667,6 +669,7 @@ pub struct EnhancedAuthHandle {
     reader: Reader<BytesPool>,
     writer: Writer<BytesPool>,
     auth_method: String,
+    cfg_client_id: Option<String>,
 }
 
 impl EnhancedAuthHandle {
@@ -692,6 +695,7 @@ impl EnhancedAuthHandle {
                 session: self.session,
                 reader_pool: self.reader_pool,
                 writer_pool: self.writer_pool,
+                cfg_client_id: self.cfg_client_id,
             };
             return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
         }
@@ -700,6 +704,7 @@ impl EnhancedAuthHandle {
                 session: self.session,
                 reader_pool: self.reader_pool,
                 writer_pool: self.writer_pool,
+                cfg_client_id: self.cfg_client_id,
             };
             return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
         }
@@ -712,6 +717,7 @@ impl EnhancedAuthHandle {
                     session: self.session,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
+                    cfg_client_id: self.cfg_client_id,
                 };
                 return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
             }
@@ -727,6 +733,7 @@ impl EnhancedAuthHandle {
                     session: self.session,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
+                    cfg_client_id: self.cfg_client_id,
                 };
                 return ConnectEnhancedAuthResult::Failure(
                     connect_handle,
@@ -749,6 +756,7 @@ impl EnhancedAuthHandle {
                         writer_pool: self.writer_pool,
                         reader: self.reader,
                         writer: self.writer,
+                        cfg_client_id: self.cfg_client_id,
                     };
                     ConnectEnhancedAuthResult::Success(
                         connection,
@@ -764,6 +772,7 @@ impl EnhancedAuthHandle {
                         session: self.session,
                         reader_pool: self.reader_pool,
                         writer_pool: self.writer_pool,
+                        cfg_client_id: self.cfg_client_id,
                     };
                     ConnectEnhancedAuthResult::Failure(
                         connect_handle,
@@ -779,6 +788,7 @@ impl EnhancedAuthHandle {
                     session: self.session,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
+                    cfg_client_id: self.cfg_client_id,
                 };
                 ConnectEnhancedAuthResult::Failure(
                     connect_handle,
@@ -796,6 +806,7 @@ pub struct Connection {
     writer_pool: BytesPool,
     reader: Reader<BytesPool>,
     writer: Writer<BytesPool>,
+    cfg_client_id: Option<String>,
 }
 
 impl Connection {
@@ -814,6 +825,7 @@ impl Connection {
             session: self.session,
             reader_pool: self.reader_pool,
             writer_pool: self.writer_pool,
+            cfg_client_id: self.cfg_client_id,
         };
         // NOTE: By returning here, we implicitly drop the `reader` and `writer` stored on the
         // `Connection`, implicitly closing the underlying transport.
