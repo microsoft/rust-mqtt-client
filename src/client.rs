@@ -633,11 +633,10 @@ impl ConnectHandle {
         properties: ConnectProperties,
     ) -> Result<(), ConnectError> {
         // Transport has been established. Send CONNECT and wait for CONNACK.
-        // TODO: Get values from options
         let connect = Packet::Connect(Connect {
             username: username.as_deref().map(Into::into),
             password: password.as_deref().map(Into::into),
-            will: None, // TODO
+            will: will.map(Into::into),
             client_id: self.cfg_client_id.as_deref().map(Into::into),
             clean_start,
             keep_alive,

@@ -158,6 +158,24 @@ pub struct Will {
     pub properties: PublishProperties,
 }
 
+impl<S> From<Will> for Box<(mqtt_proto::Publication<S>, u32)>
+where
+    S: Shared + From<bytes::Bytes>,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
+    for<'a> &'a str: Into<ByteStr<S>>,
+{
+    fn from(will: Will) -> Self {
+        let publication = mqtt_proto::Publication {
+            topic_name: will.topic_name.into_inner().into(),
+            qos: will.qos.into(),
+            retain: will.retain,
+            payload: will.payload.into(),
+            other_properties: will.properties.into(),
+        };
+        Box::new((publication, will.delay_interval))
+    }
+}
+
 //////////////////// Packets ////////////////////
 
 /// CONNACK packet
@@ -779,6 +797,26 @@ where
             correlation_data: pp.correlation_data.as_deref().map(Into::into),
             user_properties: map_user_properties_to_bytestr(pp.user_properties),
             subscription_identifiers: pp.subscription_identifiers,
+            content_type: pp.content_type.as_deref().map(Into::into),
+        }
+    }
+}
+
+impl<S> From<PublishProperties> for mqtt_proto::PublicationOtherProperties<S>
+where
+    S: Shared,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
+    for<'a> &'a str: Into<ByteStr<S>>,
+{
+    fn from(pp: PublishProperties) -> Self {
+        Self {
+            payload_is_utf8: matches!(pp.payload_format_indicator, PayloadFormatIndicator::UTF8),
+            message_expiry_interval: pp.message_expiry_interval,
+            //topic_alias: pp.topic_alias,
+            response_topic: pp.response_topic.map(|t| t.into_inner().into()),
+            correlation_data: pp.correlation_data.as_deref().map(Into::into),
+            user_properties: map_user_properties_to_bytestr(pp.user_properties),
+            //subscription_identifiers: pp.subscription_identifiers,
             content_type: pp.content_type.as_deref().map(Into::into),
         }
     }
