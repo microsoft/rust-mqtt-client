@@ -23,7 +23,7 @@ use crate::{buffer_pool, mqtt_proto};
 //////////////////// Misc. ////////////////////
 
 /// Quality of Service
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum QoS {
     AtMostOnce = 0,
     AtLeastOnce = 1,
