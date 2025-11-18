@@ -186,14 +186,18 @@ mod byte_str;
 pub use byte_str::ByteStr;
 
 mod filter;
+#[cfg(any(test, feature = "__integration"))]
+pub use filter::filter;
 pub use filter::{ClassifiedFilter, Filter};
 #[cfg(test)]
-pub use filter::{filter, filter_owned, filter_str};
+pub use filter::{filter_owned, filter_str};
 
 mod topic;
 pub use topic::Topic;
+#[cfg(any(test, feature = "__integration"))]
+pub use topic::topic;
 #[cfg(test)]
-pub use topic::{topic, topic_str};
+pub use topic::topic_str;
 
 #[macro_use]
 mod property;

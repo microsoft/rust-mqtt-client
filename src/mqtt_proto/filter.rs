@@ -397,7 +397,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "__integration"))]
 pub fn filter(s: impl AsRef<str>) -> Filter<crate::mqtt_proto::ByteStr<bytes::Bytes>> {
     let t = crate::mqtt_proto::ByteStr::from(s.as_ref());
     Filter::new(t).unwrap()

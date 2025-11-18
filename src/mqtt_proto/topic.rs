@@ -215,7 +215,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "__integration"))]
 pub fn topic(s: impl AsRef<str>) -> Topic<crate::mqtt_proto::ByteStr<bytes::Bytes>> {
     let t = crate::mqtt_proto::ByteStr::from(s.as_ref());
     Topic::new(t).unwrap()
