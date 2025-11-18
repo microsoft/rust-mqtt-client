@@ -661,6 +661,12 @@ impl ConnectHandle {
     }
 }
 
+impl std::fmt::Debug for ConnectHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectHandle").finish_non_exhaustive()
+    }
+}
+
 /// Handle for the intermediate step of an MQTT CONNECT with enhanced authentication.
 pub struct EnhancedAuthHandle {
     session: Session<BytesMut>,

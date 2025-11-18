@@ -149,7 +149,6 @@ where
 
                 OutgoingPacketRequest::AcknowledgementRequest(ack_req) => {
                     match ack_req {
-                        // TODO: Reject PUBACK if epoch does not match current connection epoch. Unless this is superfluous. Verify.
                         // TODO: It would be preferable if the notifier was not triggered on
                         // PUBACK / PUBCOMP until they were actually sent over the network.
                         AcknowledgementRequest::PubAck(notifier, puback, epoch) => {
@@ -327,7 +326,15 @@ where
                     .shift_remove_index(0)
                     .expect("Already checked")
                 {
-                    break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
+                    // Ignore request if its epoch does not match the current connection epoch.
+                    match &ack_req {
+                        AcknowledgementRequest::PubAck(_, _, epoch) => {
+                            if *epoch == self.connection_epoch {
+                                break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
+                            }
+                        }
+                        _ => break OutgoingPacketRequest::AcknowledgementRequest(ack_req),
+                    }
                 }
             }
             // Otherwise, poll for next outgoing request
