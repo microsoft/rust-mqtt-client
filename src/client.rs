@@ -439,6 +439,7 @@ impl ConnectHandle {
                 username,
                 password,
                 properties,
+                None,
             )
             .await
         {
@@ -491,6 +492,7 @@ impl ConnectHandle {
         authentication_info: AuthenticationInfo,
         connection_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
+        let auth_method = authentication_info.method.clone();
         let streams = match connection_timeout {
             Some(connection_timeout) => {
                 match tokio::time::timeout(
@@ -518,6 +520,7 @@ impl ConnectHandle {
                 username,
                 password,
                 properties,
+                Some(authentication_info),
             )
             .await
         {
@@ -543,7 +546,7 @@ impl ConnectHandle {
                         connack.into(),
                         DisconnectHandle(disconnect_tx),
                         ReauthHandle {
-                            method: authentication_info.method,
+                            method: auth_method,
                             tx: auth_tx,
                         },
                     )
@@ -559,7 +562,7 @@ impl ConnectHandle {
                     writer_pool: self.writer_pool,
                     reader,
                     writer,
-                    auth_method: authentication_info.method,
+                    auth_method,
                     cfg_client_id: self.cfg_client_id,
                 };
                 ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
@@ -631,8 +634,13 @@ impl ConnectHandle {
         username: Option<String>,
         password: Option<Bytes>,
         properties: ConnectProperties,
+        authentication_info: Option<AuthenticationInfo>,
     ) -> Result<(), ConnectError> {
         // Transport has been established. Send CONNECT and wait for CONNACK.
+
+        let mut properties: mqtt_proto::ConnectOtherProperties<Bytes> = properties.into();
+        properties.authentication = authentication_info.map(Into::into);
+
         let connect = Packet::Connect(Connect {
             username: username.as_deref().map(Into::into),
             password: password.as_deref().map(Into::into),
@@ -640,7 +648,7 @@ impl ConnectHandle {
             client_id: self.cfg_client_id.as_deref().map(Into::into),
             clean_start,
             keep_alive,
-            other_properties: properties.into(),
+            other_properties: properties,
         });
         writer.write(&connect, ProtocolVersion::V5).await?;
         writer.flush().await?;
