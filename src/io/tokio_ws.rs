@@ -225,12 +225,13 @@ where
 
 impl<S> ReadableStream for WebSocketStreamRead<S>
 where
+    S: Send,
     WebSocketStream<S>: AsyncRead,
 {
     fn read<'a, 'buf>(
         &'a mut self,
         buf: &'a mut [MaybeUninit<u8>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
         let mut buf = ReadBuf::uninit(buf);
         Box::pin(async move { self.inner.read_buf(&mut buf).await })
     }
@@ -238,16 +239,17 @@ where
 
 impl<S> WritableStream for WebSocketStreamWrite<S>
 where
+    S: Send,
     WebSocketStream<S>: AsyncWrite,
 {
     fn write_vectored<'a, 'buf>(
         &'a mut self,
         bufs: &'a [IoSlice<'buf>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
         Box::pin(self.inner.write_vectored(bufs))
     }
 
-    fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>> {
+    fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + '_>> {
         Box::pin(self.inner.flush())
     }
 }

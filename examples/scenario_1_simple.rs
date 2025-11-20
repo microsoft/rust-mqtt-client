@@ -25,21 +25,21 @@ async fn main() {
     let (client, connect_handle, receiver) = new_client(options);
 
     // Connect to the MQTT broker and wait for the connection to complete
-    if let ConnectResult::Success(connection, _, _) = connect_handle
-        .connect(
-            ConnectionTransportConfig::Tcp {
-                hostname: HOSTNAME.to_string(),
-                port: PORT,
-            },
-            false,
-            KeepAlive::Infinite,
-            None,
-            None,
-            None,
-            ConnectProperties::default(),
-            None,
-        )
-        .await
+    if let ConnectResult::Success(connection, _, _) = tokio::task::spawn(connect_handle.connect(
+        ConnectionTransportConfig::Tcp {
+            hostname: HOSTNAME.to_string(),
+            port: PORT,
+        },
+        false,
+        KeepAlive::Infinite,
+        None,
+        None,
+        None,
+        ConnectProperties::default(),
+        None,
+    ))
+    .await
+    .unwrap()
     {
         println!("Connected to MQTT broker");
 
