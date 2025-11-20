@@ -12,7 +12,7 @@ pub struct Writer<BP>
 where
     BP: BufferPool,
 {
-    inner: Box<dyn WritableStream>,
+    inner: Box<dyn WritableStream + Send>,
     buf: EitherAccumulator<BP>,
 }
 
@@ -20,7 +20,7 @@ impl<BP> Writer<BP>
 where
     BP: BufferPool,
 {
-    pub(crate) fn new(inner: Box<dyn WritableStream>, buf: EitherAccumulator<BP>) -> Self {
+    pub(crate) fn new(inner: Box<dyn WritableStream + Send>, buf: EitherAccumulator<BP>) -> Self {
         Self { inner, buf }
     }
 

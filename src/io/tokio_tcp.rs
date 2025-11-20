@@ -6,7 +6,7 @@ use std::{
     io::{self, IoSlice},
     mem::MaybeUninit,
     pin::Pin,
-    rc::Rc,
+    sync::Arc,
 };
 
 use tokio::net::{TcpStream, ToSocketAddrs};
@@ -38,7 +38,7 @@ pub(crate) fn connect_inner<BP>(
 where
     BP: BufferPool,
 {
-    let read = Rc::new(stream);
+    let read = Arc::new(stream);
     let read_buf = reader_pool.take_empty_owned();
     let write = read.clone();
     let write_buf = EitherAccumulator::Iovecs(writer_pool.take_empty_owned().into());
@@ -50,11 +50,11 @@ where
 }
 
 struct TcpStreamRead {
-    inner: Rc<TcpStream>,
+    inner: Arc<TcpStream>,
 }
 
 struct TcpStreamWrite {
-    inner: Rc<TcpStream>,
+    inner: Arc<TcpStream>,
 }
 
 impl ReadableStream for TcpStreamRead {

@@ -44,7 +44,7 @@ pub trait BufferPool: Clone + Send + Sync + std::fmt::Debug + Unpin + 'static {
 /// smaller splits of the backing buffer.
 ///
 /// An `Owned` is not `Clone`. It can be converted to a [`Shared`] which is, via [`Owned::freeze`]
-pub trait Owned: std::fmt::Debug {
+pub trait Owned: Send + std::fmt::Debug {
     type Shared: Shared;
 
     fn filled_len(&self) -> usize;
