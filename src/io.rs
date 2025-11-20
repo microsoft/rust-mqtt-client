@@ -25,18 +25,18 @@ pub mod tokio_ws;
 mod writer;
 pub use writer::Writer;
 
-pub(crate) trait ReadableStream {
+pub(crate) trait ReadableStream: Send {
     fn read<'a>(
         &'a mut self,
         buf: &'a mut [MaybeUninit<u8>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>>;
 }
 
-pub(crate) trait WritableStream {
+pub(crate) trait WritableStream: Send {
     fn write_vectored<'a, 'buf>(
         &'a mut self,
         bufs: &'a [IoSlice<'buf>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>>;
 
-    fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>>;
+    fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + '_>>;
 }

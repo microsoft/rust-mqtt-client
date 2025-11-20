@@ -62,7 +62,7 @@ where
     fn read<'a>(
         &'a mut self,
         buf: &'a mut [MaybeUninit<u8>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
         Box::pin(async move {
             loop {
                 if let Some(current_packet) = &mut self.current_packet {
@@ -124,7 +124,7 @@ where
     fn write_vectored<'a, 'buf>(
         &'a mut self,
         bufs: &'a [IoSlice<'buf>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
         Box::pin(async move {
             let mut written = 0;
             for buf in bufs {
@@ -172,7 +172,7 @@ where
         })
     }
 
-    fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>> {
+    fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + '_>> {
         Box::pin(future::ready(Ok(())))
     }
 }

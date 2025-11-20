@@ -114,12 +114,12 @@ mod tests {
 
     impl<R> ReadableStream for Cursor<R>
     where
-        R: AsRef<[u8]>,
+        R: AsRef<[u8]> + Send,
     {
         fn read<'a>(
             &'a mut self,
             buf: &'a mut [MaybeUninit<u8>],
-        ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
             #[allow(clippy::cast_possible_truncation)]
             Box::pin(async move {
                 // Would be nice to use `<Cursor as Read>::read()` but that requires `buf: &mut [u8]`
@@ -150,7 +150,7 @@ mod tests {
         fn read<'a>(
             &'a mut self,
             buf: &'a mut [MaybeUninit<u8>],
-        ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
             Box::pin(async move {
                 let Some(mut next_read) = self.reads.pop_front() else {
                     return Ok(0);

@@ -144,7 +144,7 @@ mod tests {
         fn write_vectored<'a, 'buf>(
             &'a mut self,
             bufs: &'a [IoSlice<'buf>],
-        ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
             Box::pin(async move {
                 let Some(next_expected_write) = self.expected_writes.pop_front() else {
                     panic!("MockWritableStream did not expect a write of {bufs:02x?}");
@@ -160,7 +160,7 @@ mod tests {
             })
         }
 
-        fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>> {
+        fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + '_>> {
             Box::pin(future::ready(Ok(())))
         }
     }

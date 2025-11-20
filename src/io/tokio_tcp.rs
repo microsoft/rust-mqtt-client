@@ -61,7 +61,7 @@ impl ReadableStream for TcpStreamRead {
     fn read<'a>(
         &'a mut self,
         buf: &'a mut [MaybeUninit<u8>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
         Box::pin(async move {
             loop {
                 self.inner.readable().await?;
@@ -87,7 +87,7 @@ impl WritableStream for TcpStreamWrite {
     fn write_vectored<'a, 'buf>(
         &'a mut self,
         bufs: &'a [IoSlice<'buf>],
-    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>> {
         Box::pin(async move {
             loop {
                 self.inner.writable().await?;
@@ -99,7 +99,7 @@ impl WritableStream for TcpStreamWrite {
         })
     }
 
-    fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>> {
+    fn flush(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + '_>> {
         // Ideally we'd call `<TcpStream as AsyncWriteExt>::flush()` here but we don't have a `TcpStream`, only an `Rc<TcpStream>`.
         // That said, as of tokio 1.33.0, `<TcpStream as AsyncWriteExt>::flush()` is itself a no-op that returns `future::ready(Ok(()))`,
         // so we can just do that ourselves.
