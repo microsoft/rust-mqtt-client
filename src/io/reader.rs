@@ -13,7 +13,7 @@ pub struct Reader<BP>
 where
     BP: BufferPool,
 {
-    inner: Box<dyn ReadableStream>,
+    inner: Box<dyn ReadableStream + Send>,
     buf: BP::Owned,
 }
 
@@ -27,7 +27,7 @@ impl<BP> Reader<BP>
 where
     BP: BufferPool,
 {
-    pub(crate) fn new(inner: Box<dyn ReadableStream>, buf: BP::Owned) -> Self {
+    pub(crate) fn new(inner: Box<dyn ReadableStream + Send>, buf: BP::Owned) -> Self {
         Self { inner, buf }
     }
 
