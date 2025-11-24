@@ -3,9 +3,6 @@
 
 //! MQTT packet types and associated properties and reason codes.
 
-// TODO: This may not be necessary in it's entirety - this is a straight port of API proposal stubs.
-// Remove items as necessary.
-
 use std::fmt::Write as _;
 use std::num::{NonZeroU16, NonZeroU32};
 

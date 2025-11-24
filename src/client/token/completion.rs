@@ -6,6 +6,7 @@
 use bytes::Bytes;
 use thiserror::Error;
 
+/// Indicates a failure that occurred during the completion of an MQTT operation.
 #[derive(Clone, PartialEq, Debug, Error)]
 pub enum CompletionError {
     #[error("Communication channels with the client have been closed")]

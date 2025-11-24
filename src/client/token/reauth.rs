@@ -5,11 +5,9 @@
 
 use bytes::Bytes;
 
-use crate::client::ClientError;
 use crate::client::token::completion::ReauthCompletionToken;
+use crate::error::DetachedError;
 use crate::packet::AuthProperties;
-
-// TODO: Arguably, perhaps these should have their own error type instead of using ClientError
 
 #[derive(Debug)]
 pub struct ReauthToken(pub(crate) buffered::ReauthToken<Bytes>);
@@ -19,7 +17,7 @@ impl ReauthToken {
         self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> Result<ReauthCompletionToken, ClientError> {
+    ) -> Result<ReauthCompletionToken, DetachedError> {
         let token = self
             .0
             .continue_reauth(
@@ -34,9 +32,9 @@ impl ReauthToken {
 
 pub(crate) mod buffered {
     use crate::buffer_pool::Shared;
-    use crate::client::ClientError;
     use crate::client::channel_data::ReauthRequest;
     use crate::client::token::completion::buffered::{ReauthCompletionToken, completion_pair};
+    use crate::error::DetachedError;
     use crate::mqtt_proto::{
         Auth, AuthenticateReasonCode, Authentication, BinaryData, ByteStr, UserProperties,
     };
@@ -59,7 +57,7 @@ pub(crate) mod buffered {
             authentication_data: Option<BinaryData<S>>,
             reason_string: Option<ByteStr<S>>,
             user_properties: UserProperties<S>,
-        ) -> Result<ReauthCompletionToken<S>, ClientError> {
+        ) -> Result<ReauthCompletionToken<S>, DetachedError> {
             let (notifier, token) = completion_pair();
             let auth = Auth {
                 reason_code: AuthenticateReasonCode::ContinueAuthentication,
@@ -73,7 +71,7 @@ pub(crate) mod buffered {
             self.tx
                 .send(ReauthRequest(notifier, auth))
                 .await
-                .map_err(|_| ClientError::DetachedClient)?;
+                .map_err(|_| DetachedError {})?;
             Ok(ReauthCompletionToken(token))
         }
     }

@@ -5,16 +5,14 @@
 
 use bytes::Bytes;
 
-use crate::client::ClientError;
 use crate::client::token::completion::{
     PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecAcceptCompletionToken,
     PubRecRejectCompletionToken, PubRelCompletionToken,
 };
+use crate::error::DetachedError;
 use crate::packet::{
     PubAckProperties, PubCompProperties, PubRecProperties, PubRejectReason, PubRelProperties,
 };
-
-// TODO: Arguably, perhaps these should have their own error type instead of using ClientError
 
 #[derive(Debug)]
 pub struct PubAckToken(pub(crate) buffered::PubAckToken<Bytes>);
@@ -31,7 +29,7 @@ impl PubAckToken {
     pub fn accept(
         self,
         properties: PubAckProperties,
-    ) -> impl Future<Output = Result<PubAckCompletionToken, ClientError>> {
+    ) -> impl Future<Output = Result<PubAckCompletionToken, DetachedError>> {
         self.0.accept(properties.into())
     }
 
@@ -45,7 +43,7 @@ impl PubAckToken {
         self,
         reason: PubRejectReason,
         properties: PubAckProperties,
-    ) -> impl Future<Output = Result<PubAckCompletionToken, ClientError>> {
+    ) -> impl Future<Output = Result<PubAckCompletionToken, DetachedError>> {
         self.0.reject(reason.into(), properties.into())
     }
 }
@@ -65,7 +63,7 @@ impl PubRecToken {
     pub async fn accept(
         self,
         properties: PubRecProperties,
-    ) -> Result<PubRecAcceptCompletionToken, ClientError> {
+    ) -> Result<PubRecAcceptCompletionToken, DetachedError> {
         self.0
             .accept(properties.into())
             .await
@@ -84,7 +82,7 @@ impl PubRecToken {
         self,
         reason: PubRejectReason,
         properties: PubRecProperties,
-    ) -> impl Future<Output = Result<PubRecRejectCompletionToken, ClientError>> {
+    ) -> impl Future<Output = Result<PubRecRejectCompletionToken, DetachedError>> {
         self.0.reject(reason.into(), properties.into())
     }
 }
@@ -105,7 +103,7 @@ impl PubRelToken {
     pub async fn confirm(
         self,
         properties: PubRelProperties,
-    ) -> Result<PubRelCompletionToken, ClientError> {
+    ) -> Result<PubRelCompletionToken, DetachedError> {
         self.0
             .confirm(properties.into())
             .await
@@ -129,7 +127,7 @@ impl PubCompToken {
     pub fn confirm(
         self,
         properties: PubCompProperties,
-    ) -> impl Future<Output = Result<PubCompConfirmCompletionToken, ClientError>> {
+    ) -> impl Future<Output = Result<PubCompConfirmCompletionToken, DetachedError>> {
         self.0.confirm(properties.into())
     }
 }
@@ -145,7 +143,7 @@ pub(crate) mod buffered {
         PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecAcceptCompletionToken,
         PubRecRejectCompletionToken, PubRelConfirmCompletionToken, completion_pair,
     };
-    use crate::error::ClientError;
+    use crate::error::DetachedError;
     use crate::mqtt_proto::{
         PacketIdentifier, PubAck, PubAckOtherProperties, PubAckReasonCode, PubCompOtherProperties,
         PubRecOtherProperties, PubRecReasonCode, PubRelOtherProperties,
@@ -196,7 +194,7 @@ pub(crate) mod buffered {
         pub async fn accept(
             self,
             properties: PubAckOtherProperties<S>,
-        ) -> Result<PubAckCompletionToken, ClientError> {
+        ) -> Result<PubAckCompletionToken, DetachedError> {
             self.send(properties, PubAckReasonCode::Success).await
         }
 
@@ -210,7 +208,7 @@ pub(crate) mod buffered {
             self,
             reason: PubAckReasonCode,
             properties: PubAckOtherProperties<S>,
-        ) -> Result<PubAckCompletionToken, ClientError> {
+        ) -> Result<PubAckCompletionToken, DetachedError> {
             self.send(properties, reason).await
         }
 
@@ -219,7 +217,7 @@ pub(crate) mod buffered {
             mut self,
             properties: PubAckOtherProperties<S>,
             reason: PubAckReasonCode,
-        ) -> Result<PubAckCompletionToken, ClientError> {
+        ) -> Result<PubAckCompletionToken, DetachedError> {
             self.triggered = true;
             PubAckToken::inner_send(&self.tx, self.pkid, properties, reason, self.epoch).await
         }
@@ -232,7 +230,7 @@ pub(crate) mod buffered {
             other_properties: PubAckOtherProperties<S>,
             reason_code: PubAckReasonCode,
             epoch: u64,
-        ) -> Result<PubAckCompletionToken, ClientError> {
+        ) -> Result<PubAckCompletionToken, DetachedError> {
             let (notifier, token) = completion_pair();
             let puback = PubAck {
                 packet_identifier,
@@ -241,7 +239,7 @@ pub(crate) mod buffered {
             };
             tx.send(AcknowledgementRequest::PubAck(notifier, puback, epoch))
                 .await
-                .map_err(|_| ClientError::DetachedClient)?;
+                .map_err(|_| DetachedError {})?;
             Ok(PubAckCompletionToken(token))
         }
     }
@@ -308,7 +306,7 @@ pub(crate) mod buffered {
         pub async fn accept(
             self,
             properties: PubRecOtherProperties<S>,
-        ) -> Result<PubRecAcceptCompletionToken<S>, ClientError> {
+        ) -> Result<PubRecAcceptCompletionToken<S>, DetachedError> {
             unimplemented!()
         }
 
@@ -324,7 +322,7 @@ pub(crate) mod buffered {
             self,
             reason: PubRecReasonCode,
             properties: PubRecOtherProperties<S>,
-        ) -> Result<PubRecRejectCompletionToken, ClientError> {
+        ) -> Result<PubRecRejectCompletionToken, DetachedError> {
             unimplemented!()
         }
     }
@@ -373,7 +371,7 @@ pub(crate) mod buffered {
         pub async fn confirm(
             self,
             properties: PubRelOtherProperties<S>,
-        ) -> Result<PubRelConfirmCompletionToken<S>, ClientError> {
+        ) -> Result<PubRelConfirmCompletionToken<S>, DetachedError> {
             unimplemented!()
         }
     }
@@ -422,7 +420,7 @@ pub(crate) mod buffered {
         pub async fn confirm(
             self,
             properties: PubCompOtherProperties<S>,
-        ) -> Result<PubCompConfirmCompletionToken, ClientError> {
+        ) -> Result<PubCompConfirmCompletionToken, DetachedError> {
             unimplemented!()
         }
     }

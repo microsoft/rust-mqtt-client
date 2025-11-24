@@ -3,8 +3,6 @@
 
 //! Packet Identifier (PKID) management for MQTT session.
 
-// TODO: This may not justify its own module, consider combining with other session state management.
-
 use std::{collections::HashSet, iter::Cycle};
 
 use crate::mqtt_proto::PacketIdentifier;

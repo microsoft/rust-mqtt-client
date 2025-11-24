@@ -36,7 +36,7 @@ use crate::client::{
         reauth::ReauthToken,
     },
 };
-use crate::error::{ClientError, ConnectError, ProtocolError};
+use crate::error::{ConnectError, DetachedError, ProtocolError};
 use crate::io::{Reader, Writer};
 use crate::mqtt_proto::{
     self,
@@ -251,7 +251,7 @@ impl Client {
         payload: Bytes,
         retain: bool,
         properties: PublishProperties,
-    ) -> Result<PublishQoS0CompletionToken, ClientError> {
+    ) -> Result<PublishQoS0CompletionToken, DetachedError> {
         let (notifier, token) = completion_pair();
         self.pub_qos0_tx
             .send(PublishRequestQoS0(
@@ -262,7 +262,7 @@ impl Client {
                 properties.into(),
             ))
             .await
-            .map_err(|_| ClientError::DetachedClient)?;
+            .map_err(|_| DetachedError {})?;
         Ok(PublishQoS0CompletionToken(token))
     }
 
@@ -275,7 +275,7 @@ impl Client {
         payload: Bytes,
         retain: bool,
         properties: PublishProperties,
-    ) -> Result<PublishQoS1CompletionToken, ClientError> {
+    ) -> Result<PublishQoS1CompletionToken, DetachedError> {
         let (notifier, token) = completion_pair();
         self.pub_qos12_tx
             .send(PublishRequestQoS1QoS2::PublishQoS1(
@@ -286,7 +286,7 @@ impl Client {
                 properties.into(),
             ))
             .await
-            .map_err(|_| ClientError::DetachedClient)?;
+            .map_err(|_| DetachedError {})?;
         Ok(PublishQoS1CompletionToken(token))
     }
 
@@ -300,7 +300,7 @@ impl Client {
         payload: Bytes,
         retain: bool,
         properties: PublishProperties,
-    ) -> Result<PublishQoS2CompletionToken, ClientError> {
+    ) -> Result<PublishQoS2CompletionToken, DetachedError> {
         let (notifier, token) = completion_pair();
         self.pub_qos12_tx
             .send(PublishRequestQoS1QoS2::PublishQoS2(
@@ -311,7 +311,7 @@ impl Client {
                 properties.into(),
             ))
             .await
-            .map_err(|_| ClientError::DetachedClient)?;
+            .map_err(|_| DetachedError {})?;
         Ok(PublishQoS2CompletionToken(token))
     }
 
@@ -326,7 +326,7 @@ impl Client {
         retain_as_published: bool,
         retain_handling: RetainHandling,
         properties: SubscribeProperties,
-    ) -> Result<SubscribeCompletionToken, ClientError> {
+    ) -> Result<SubscribeCompletionToken, DetachedError> {
         let (notifier, token) = completion_pair();
 
         let options = mqtt_proto::SubscribeOptions {
@@ -346,7 +346,7 @@ impl Client {
                 properties.into(),
             ))
             .await
-            .map_err(|_| ClientError::DetachedClient)?;
+            .map_err(|_| DetachedError {})?;
         Ok(SubscribeCompletionToken(token))
     }
 
@@ -357,7 +357,7 @@ impl Client {
         &self,
         topic_filter: TopicFilter,
         properties: UnsubscribeProperties,
-    ) -> Result<UnsubscribeCompletionToken, ClientError> {
+    ) -> Result<UnsubscribeCompletionToken, DetachedError> {
         let (notifier, token) = completion_pair();
         self.sub_tx
             .send(SubscriptionRequest::Unsubscribe(
@@ -366,7 +366,7 @@ impl Client {
                 properties.into(),
             ))
             .await
-            .map_err(|_| ClientError::DetachedClient)?;
+            .map_err(|_| DetachedError {})?;
         Ok(UnsubscribeCompletionToken(token))
     }
 }
@@ -940,7 +940,7 @@ impl Connection {
 pub struct DisconnectHandle(tokio::sync::oneshot::Sender<DisconnectRequest<Bytes>>);
 
 impl DisconnectHandle {
-    pub fn disconnect(self, properties: &DisconnectProperties) -> Result<(), ClientError> {
+    pub fn disconnect(self, properties: &DisconnectProperties) -> Result<(), DetachedError> {
         let DisconnectProperties {
             session_expiry_interval,
             reason_string,
@@ -960,7 +960,7 @@ impl DisconnectHandle {
             },
         });
 
-        self.0.send(req).map_err(|_| ClientError::DetachedClient)
+        self.0.send(req).map_err(|_| DetachedError {})
     }
 }
 
@@ -976,7 +976,7 @@ impl ReauthHandle {
         &self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-    ) -> Result<ReauthCompletionToken, ClientError> {
+    ) -> Result<ReauthCompletionToken, DetachedError> {
         let (notifier, token) = completion_pair();
         let auth = Auth {
             reason: AuthReason::Reauthenticate,
@@ -989,7 +989,7 @@ impl ReauthHandle {
         self.tx
             .send(ReauthRequest(notifier, auth.into()))
             .await
-            .map_err(|_| ClientError::DetachedClient)?;
+            .map_err(|_| DetachedError {})?;
         Ok(ReauthCompletionToken(token))
     }
 }
