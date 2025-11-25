@@ -134,7 +134,7 @@ impl Default for ClientOptions {
 /// Parameters for establishing a new connection.
 pub struct ConnectionTransportConfig {
     pub transport_type: ConnectionTransportType,
-    pub connection_timeout: Option<Duration>,
+    pub timeout: Option<Duration>,
 }
 
 /// The type of transport to use for the new connection.
@@ -560,12 +560,12 @@ impl ConnectHandle {
     ) -> io::Result<(Reader<BytesPool>, Writer<BytesPool>)> {
         let ConnectionTransportConfig {
             transport_type,
-            connection_timeout,
+            timeout,
         } = transport_config;
         Ok(match transport_type {
             ConnectionTransportType::Tcp { hostname, port } => {
                 maybe_timeout(
-                    connection_timeout,
+                    timeout,
                     crate::io::tokio_tcp::connect(
                         (hostname, port),
                         &self.reader_pool,
@@ -581,7 +581,7 @@ impl ConnectHandle {
                 config,
             } => {
                 maybe_timeout(
-                    connection_timeout,
+                    timeout,
                     crate::io::tokio_tls::connect(
                         &hostname,
                         port,
@@ -598,7 +598,7 @@ impl ConnectHandle {
                 tls_config,
             } => {
                 maybe_timeout(
-                    connection_timeout,
+                    timeout,
                     crate::io::tokio_ws::connect(request, tls_config, &self.reader_pool),
                 )
                 .await??

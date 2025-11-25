@@ -43,7 +43,7 @@ async fn connect_connack_success() {
                     incoming_packets: incoming_packets_rx,
                     outgoing_packets: outgoing_packets_tx,
                 },
-                connection_timeout: None,
+                timeout: None,
             },
             false,
             KeepAlive::Duration(keep_alive_time),

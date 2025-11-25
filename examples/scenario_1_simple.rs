@@ -31,7 +31,7 @@ async fn main() {
                 hostname: HOSTNAME.to_string(),
                 port: PORT,
             },
-            connection_timeout: None,
+            timeout: None,
         },
         false,
         KeepAlive::Infinite,

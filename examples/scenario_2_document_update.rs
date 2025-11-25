@@ -86,7 +86,7 @@ async fn mqtt_run(
                         hostname: HOSTNAME.to_string(),
                         port: PORT,
                     },
-                    connection_timeout: None,
+                    timeout: None,
                 },
                 false,
                 KeepAlive::Infinite,
