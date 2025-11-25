@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::pin::pin;
 use std::num::NonZeroU16;
+use std::pin::pin;
 use std::time::Duration;
 
 use azure_mqtt::client::{
@@ -61,7 +61,11 @@ async fn connect_connack_success() {
 
     // Run the connection for long enough that it has time to generate one PINGREQ.
     // Wait one second longer than the keep alive time.
-    _ = tokio::time::timeout(Duration::from_secs(u64::from(keep_alive_time.get() + 1)), &mut connection).await;
+    _ = tokio::time::timeout(
+        Duration::from_secs(u64::from(keep_alive_time.get() + 1)),
+        &mut connection,
+    )
+    .await;
 
     let server_connect = outgoing_packets_rx.recv().await.unwrap();
     assert_matches!(server_connect, Packet::PingReq(mqtt_proto::PingReq));
