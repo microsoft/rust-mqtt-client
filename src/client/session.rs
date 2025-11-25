@@ -32,10 +32,10 @@ use crate::client::{
 };
 use crate::error::ProtocolError;
 use crate::mqtt_proto::{
-    Auth, AuthenticateReasonCode, ByteStr, ConnAck, ConnectReasonCode, Disconnect, Packet,
-    PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel, Publish,
-    PublishOtherProperties, SessionExpiryInterval, SubAck, Subscribe, SubscribeTo, Topic, UnsubAck,
-    Unsubscribe,
+    Auth, AuthenticateReasonCode, ByteStr, ConnAck, ConnectReasonCode, Disconnect, KeepAlive,
+    Packet, PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel,
+    Publish, PublishOtherProperties, SessionExpiryInterval, SubAck, Subscribe, SubscribeTo, Topic,
+    UnsubAck, Unsubscribe,
 };
 
 mod pkid;
@@ -61,7 +61,9 @@ where
     connected: ConnectionState<O::Shared>,
     /// Identifier for the current connection epoch
     connection_epoch: u64,
+    /// Whether the session is transient (i.e. non-persistent, can expire)
     transient: bool,
+    /// Timer for tracking when to send the next PINGREQ (based on keep-alive)
     pingreq_timer: Option<Timer>,
     pub(crate) owned: O, // NOTE: This really shouldn't be pub(crate)
 }
@@ -458,7 +460,7 @@ where
         Ok(())
     }
 
-    pub fn incoming_connack(&mut self, connack: ConnAck<O::Shared>) {
+    pub fn incoming_connack(&mut self, connack: ConnAck<O::Shared>, client_keep_alive: KeepAlive) {
         if let ConnectReasonCode::Success { session_present } = connack.reason_code {
             if !session_present {
                 // Previous session, if any, is not present on the server.
@@ -476,10 +478,24 @@ where
                 self.transient = true;
             }
 
-            self.connected = ConnectionState::Connected { connack };
+            let keep_alive = if let Some(keep_alive) = connack.other_properties.server_keep_alive {
+                keep_alive
+            } else {
+                client_keep_alive
+            };
+            match keep_alive {
+                KeepAlive::Duration(duration) => {
+                    self.pingreq_timer =
+                        Some(Timer::new(Duration::from_secs(u64::from(duration.get()))));
+                }
+                KeepAlive::Infinite => {
+                    // If there is no client or server specified keep alive, there is no requirement
+                    // to ping, although the client may still choose to do so.
+                    self.pingreq_timer = None;
+                }
+            }
 
-            // TODO: Get PINGREQ duration from connect properties
-            self.pingreq_timer = Some(Timer::new(Duration::from_secs(5)));
+            self.connected = ConnectionState::Connected { connack };
         }
     }
 
