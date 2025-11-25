@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use azure_mqtt::client::token::acknowledgement::PubAckToken;
 use azure_mqtt::client::{
-    ClientOptions, ConnectResult, ConnectionTransportConfig, DisconnectedEvent,
-    ManualAcknowledgement, Receiver, new_client,
+    ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
+    DisconnectedEvent, ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
@@ -41,9 +41,12 @@ async fn puback() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                connection_timeout: None,
             },
             false,
             KeepAlive::Infinite,
@@ -51,7 +54,6 @@ async fn puback() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {
@@ -177,9 +179,12 @@ async fn puback() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                connection_timeout: None,
             },
             false,
             KeepAlive::Infinite,
@@ -187,7 +192,6 @@ async fn puback() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {

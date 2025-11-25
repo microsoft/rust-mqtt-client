@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 use azure_mqtt::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig, Receiver,
-    new_client,
+    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
+    ConnectionTransportType, Receiver, new_client,
 };
 use azure_mqtt::packet::{
     ConnectProperties, DeliveryQoS, KeepAlive, QoS, RetainHandling, SubscribeProperties,
@@ -51,9 +51,12 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
         println!("Attempting to connect to MQTT broker...");
         connect_handle = match connect_handle
             .connect(
-                ConnectionTransportConfig::Tcp {
-                    hostname: HOSTNAME.to_string(),
-                    port: PORT,
+                ConnectionTransportConfig {
+                    transport_type: ConnectionTransportType::Tcp {
+                        hostname: HOSTNAME.to_string(),
+                        port: PORT,
+                    },
+                    connection_timeout: None,
                 },
                 false,
                 KeepAlive::Infinite,
@@ -61,7 +64,6 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                 None,
                 None,
                 ConnectProperties::default(),
-                None,
             )
             .await
         {

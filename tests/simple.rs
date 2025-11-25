@@ -6,7 +6,8 @@ use std::pin::pin;
 use std::time::Duration;
 
 use azure_mqtt::client::{
-    ClientOptions, ConnectResult, ConnectionTransportConfig, DisconnectedEvent, new_client,
+    ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
+    DisconnectedEvent, new_client,
 };
 use azure_mqtt::mqtt_proto::{self, ConnectReasonCode, Packet};
 use azure_mqtt::packet::{ConnAck, ConnectProperties, KeepAlive};
@@ -37,9 +38,12 @@ async fn connect_connack_success() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                connection_timeout: None,
             },
             false,
             KeepAlive::Duration(keep_alive_time),
@@ -47,7 +51,6 @@ async fn connect_connack_success() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {
