@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use std::pin::pin;
+use std::num::NonZeroU16;
 use std::time::Duration;
 
 use azure_mqtt::client::{
@@ -32,6 +33,8 @@ async fn connect_connack_success() {
         }))
         .unwrap();
 
+    let keep_alive_time = NonZeroU16::new(5).unwrap();
+
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
             ConnectionTransportConfig::Test {
@@ -39,7 +42,7 @@ async fn connect_connack_success() {
                 outgoing_packets: outgoing_packets_tx,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAlive::Duration(keep_alive_time),
             None,
             None,
             None,
@@ -57,10 +60,8 @@ async fn connect_connack_success() {
     let mut connection = pin!(connection.run_until_disconnect());
 
     // Run the connection for long enough that it has time to generate one PINGREQ.
-    //
-    // TODO: Client currently hard-codes session expiry interval to 5s, so this waits for 5 + 1 = 6s.
-    // Fix this to be based on the interval specified in ConnectOptions when Client is fixed to start doing that.
-    _ = tokio::time::timeout(Duration::from_secs(6), &mut connection).await;
+    // Wait one second longer than the keep alive time.
+    _ = tokio::time::timeout(Duration::from_secs(u64::from(keep_alive_time.get() + 1)), &mut connection).await;
 
     let server_connect = outgoing_packets_rx.recv().await.unwrap();
     assert_matches!(server_connect, Packet::PingReq(mqtt_proto::PingReq));
