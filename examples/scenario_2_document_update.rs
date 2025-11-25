@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use azure_mqtt::client::{
     Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
-    ManualAcknowledgement, Receiver, new_client,
+    ConnectionTransportType, ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
     ConnectProperties, KeepAlive, Publish, QoS, RetainHandling, SubscribeProperties,
@@ -81,9 +81,12 @@ async fn mqtt_run(
         println!("Attempting to connect to MQTT broker...");
         connect_handle = match connect_handle
             .connect(
-                ConnectionTransportConfig::Tcp {
-                    hostname: HOSTNAME.to_string(),
-                    port: PORT,
+                ConnectionTransportConfig {
+                    transport_type: ConnectionTransportType::Tcp {
+                        hostname: HOSTNAME.to_string(),
+                        port: PORT,
+                    },
+                    timeout: None,
                 },
                 false,
                 KeepAlive::Infinite,
@@ -91,7 +94,6 @@ async fn mqtt_run(
                 None,
                 None,
                 ConnectProperties::default(),
-                None,
             )
             .await
         {

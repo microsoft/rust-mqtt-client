@@ -8,7 +8,7 @@
 #![allow(dead_code)]
 #![allow(clippy::unused_async)]
 
-use std::{io, pin::pin, time::Duration};
+use std::{future::Future, io, pin::pin, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use futures_util::future::{self, FutureExt as _};
@@ -132,7 +132,13 @@ impl Default for ClientOptions {
 }
 
 /// Parameters for establishing a new connection.
-pub enum ConnectionTransportConfig {
+pub struct ConnectionTransportConfig {
+    pub transport_type: ConnectionTransportType,
+    pub timeout: Option<Duration>,
+}
+
+/// The type of transport to use for the new connection.
+pub enum ConnectionTransportType {
     Tcp {
         hostname: String,
         port: u16,
@@ -407,23 +413,8 @@ impl ConnectHandle {
         username: Option<String>,
         password: Option<Bytes>,
         properties: ConnectProperties,
-        connection_timeout: Option<Duration>,
     ) -> ConnectResult {
-        let streams = match connection_timeout {
-            Some(connection_timeout) => {
-                match tokio::time::timeout(
-                    connection_timeout,
-                    self.transport_connect(connection_transport),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(err) => Err(err.into()),
-                }
-            }
-            None => self.transport_connect(connection_transport).await,
-        };
-        let (mut reader, mut writer) = match streams {
+        let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
             Ok(streams) => streams,
             Err(err) => {
                 return ConnectResult::Failure(self, err.into());
@@ -446,7 +437,7 @@ impl ConnectHandle {
             return ConnectResult::Failure(self, err);
         }
 
-        let connack = match self.mqtt_receive(&mut reader).await {
+        let connack = match mqtt_receive(&mut reader).await {
             Ok(Packet::ConnAck(connack)) => {
                 if !connack.is_success() {
                     return ConnectResult::Failure(self, ConnectError::Rejected(connack.into()));
@@ -459,7 +450,7 @@ impl ConnectHandle {
                     ConnectError::Protocol(ProtocolError::UnexpectedPacket),
                 );
             }
-            Err(err) => return ConnectResult::Failure(self, err),
+            Err(err) => return ConnectResult::Failure(self, err.into()),
         };
         self.session.incoming_connack(connack.clone(), keep_alive);
 
@@ -490,24 +481,9 @@ impl ConnectHandle {
         password: Option<Bytes>,
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
-        connection_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
         let auth_method = authentication_info.method.clone();
-        let streams = match connection_timeout {
-            Some(connection_timeout) => {
-                match tokio::time::timeout(
-                    connection_timeout,
-                    self.transport_connect(connection_transport),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(err) => Err(err.into()),
-                }
-            }
-            None => self.transport_connect(connection_transport).await,
-        };
-        let (mut reader, mut writer) = match streams {
+        let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
             Ok(streams) => streams,
             Err(err) => return ConnectEnhancedAuthResult::Failure(self, err.into()),
         };
@@ -527,7 +503,7 @@ impl ConnectHandle {
             return ConnectEnhancedAuthResult::Failure(self, err);
         }
 
-        match self.mqtt_receive(&mut reader).await {
+        match mqtt_receive(&mut reader).await {
             Ok(Packet::ConnAck(connack)) => {
                 self.session.incoming_connack(connack.clone(), keep_alive);
                 if connack.is_success() {
@@ -574,7 +550,7 @@ impl ConnectHandle {
                 ConnectError::Protocol(ProtocolError::UnexpectedPacket),
             ),
 
-            Err(err) => ConnectEnhancedAuthResult::Failure(self, err),
+            Err(err) => ConnectEnhancedAuthResult::Failure(self, err.into()),
         }
     }
 
@@ -582,38 +558,54 @@ impl ConnectHandle {
         &self,
         transport_config: ConnectionTransportConfig,
     ) -> io::Result<(Reader<BytesPool>, Writer<BytesPool>)> {
-        Ok(match transport_config {
-            ConnectionTransportConfig::Tcp { hostname, port } => {
-                crate::io::tokio_tcp::connect(
-                    (hostname, port),
-                    &self.reader_pool,
-                    &self.writer_pool,
+        let ConnectionTransportConfig {
+            transport_type,
+            timeout,
+        } = transport_config;
+        Ok(match transport_type {
+            ConnectionTransportType::Tcp { hostname, port } => {
+                maybe_timeout(
+                    timeout,
+                    crate::io::tokio_tcp::connect(
+                        (hostname, port),
+                        &self.reader_pool,
+                        &self.writer_pool,
+                    ),
                 )
-                .await?
+                .await??
             }
 
-            ConnectionTransportConfig::Tls {
+            ConnectionTransportType::Tls {
                 hostname,
                 port,
                 config,
             } => {
-                crate::io::tokio_tls::connect(
-                    &hostname,
-                    port,
-                    config,
-                    &self.reader_pool,
-                    &self.writer_pool,
+                maybe_timeout(
+                    timeout,
+                    crate::io::tokio_tls::connect(
+                        &hostname,
+                        port,
+                        config,
+                        &self.reader_pool,
+                        &self.writer_pool,
+                    ),
                 )
-                .await?
+                .await??
             }
 
-            ConnectionTransportConfig::Ws {
+            ConnectionTransportType::Ws {
                 request,
                 tls_config,
-            } => crate::io::tokio_ws::connect(request, tls_config, &self.reader_pool).await?,
+            } => {
+                maybe_timeout(
+                    timeout,
+                    crate::io::tokio_ws::connect(request, tls_config, &self.reader_pool),
+                )
+                .await??
+            }
 
             #[cfg(feature = "__integration")]
-            ConnectionTransportConfig::Test {
+            ConnectionTransportType::Test {
                 incoming_packets,
                 outgoing_packets,
             } => crate::io::test::connect(
@@ -654,19 +646,6 @@ impl ConnectHandle {
         writer.write(&connect, ProtocolVersion::V5).await?;
         writer.flush().await?;
         Ok(())
-    }
-
-    async fn mqtt_receive(
-        &self,
-        reader: &mut Reader<BytesPool>,
-    ) -> Result<Packet<Bytes>, ConnectError> {
-        let mut raw_packet = reader.read().await?;
-        Ok(Packet::decode(
-            raw_packet.first_byte,
-            &mut raw_packet.rest,
-            ProtocolVersion::V5,
-        )
-        .map_err(ProtocolError::from)?)
     }
 }
 
@@ -726,23 +705,7 @@ impl EnhancedAuthHandle {
         }
 
         // Wait for next response
-        let mut raw_packet = match self.reader.read().await {
-            Ok(raw_packet) => raw_packet,
-            Err(err) => {
-                let connect_handle = ConnectHandle {
-                    session: self.session,
-                    reader_pool: self.reader_pool,
-                    writer_pool: self.writer_pool,
-                    cfg_client_id: self.cfg_client_id,
-                };
-                return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
-            }
-        };
-        let packet = match Packet::decode(
-            raw_packet.first_byte,
-            &mut raw_packet.rest,
-            ProtocolVersion::V5,
-        ) {
+        let packet = match mqtt_receive(&mut self.reader).await {
             Ok(packet) => packet,
             Err(err) => {
                 let connect_handle = ConnectHandle {
@@ -751,10 +714,7 @@ impl EnhancedAuthHandle {
                     writer_pool: self.writer_pool,
                     cfg_client_id: self.cfg_client_id,
                 };
-                return ConnectEnhancedAuthResult::Failure(
-                    connect_handle,
-                    ProtocolError::from(err).into(),
-                );
+                return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
             }
         };
 
@@ -858,7 +818,7 @@ impl Connection {
             // Check for outgoing packets from the session or incoming packets from the reader.
             let next = {
                 let next_outgoing_packet_f = pin!(self.session.next_outgoing_packet());
-                let read_f = pin!(reader.read());
+                let read_f = pin!(mqtt_receive(reader));
                 let f = future::select(next_outgoing_packet_f, read_f);
                 match f.await {
                     future::Either::Left((packet, _)) => future::Either::Left(packet),
@@ -891,49 +851,44 @@ impl Connection {
                 }
 
                 // Incoming packet from reader
-                future::Either::Right(Ok(mut raw_packet)) => {
-                    let packet = Packet::decode(
-                        raw_packet.first_byte,
-                        &mut raw_packet.rest,
-                        ProtocolVersion::V5,
-                    )
-                    .map_err(ProtocolError::MalformedPacket)?;
+                future::Either::Right(Ok(packet)) => match packet {
+                    Packet::Auth(auth) => self.session.incoming_auth(auth)?,
 
-                    match packet {
-                        Packet::Auth(auth) => self.session.incoming_auth(auth)?,
+                    Packet::SubAck(suback) => self
+                        .session
+                        .complete_inflight(CompletedOperation::Subscribe(suback))?,
 
-                        Packet::SubAck(suback) => self
-                            .session
-                            .complete_inflight(CompletedOperation::Subscribe(suback))?,
+                    Packet::UnsubAck(unsuback) => self
+                        .session
+                        .complete_inflight(CompletedOperation::Unsubscribe(unsuback))?,
 
-                        Packet::UnsubAck(unsuback) => self
-                            .session
-                            .complete_inflight(CompletedOperation::Unsubscribe(unsuback))?,
+                    Packet::PubAck(puback) => self
+                        .session
+                        .complete_inflight(CompletedOperation::PublishQoS1(puback))?,
 
-                        Packet::PubAck(puback) => self
-                            .session
-                            .complete_inflight(CompletedOperation::PublishQoS1(puback))?,
+                    Packet::PubRec(pubrec) => self
+                        .session
+                        .complete_inflight(CompletedOperation::PublishQoS2(pubrec))?,
 
-                        Packet::PubRec(pubrec) => self
-                            .session
-                            .complete_inflight(CompletedOperation::PublishQoS2(pubrec))?,
-
-                        Packet::Disconnect(disconnect) => {
-                            self.session.server_disconnect(&disconnect);
-                            return Ok(GracefulDisconnect::Server(disconnect.into()));
-                        }
-
-                        Packet::Publish(publish) => self.session.incoming_publish(publish),
-
-                        Packet::PingResp(_) => (),
-
-                        packet => return Err(ProtocolError::UnexpectedPacket)?,
+                    Packet::Disconnect(disconnect) => {
+                        self.session.server_disconnect(&disconnect);
+                        return Ok(GracefulDisconnect::Server(disconnect.into()));
                     }
-                }
+
+                    Packet::Publish(publish) => self.session.incoming_publish(publish),
+
+                    Packet::PingResp(_) => (),
+
+                    packet => {
+                        let err = ProtocolError::UnexpectedPacket.into();
+                        self.session.transport_disconnect(&err);
+                        return Err(err);
+                    }
+                },
 
                 future::Either::Right(Err(err)) => {
                     self.session.transport_disconnect(&err);
-                    return Err(err.into());
+                    return Err(err);
                 }
             }
         }
@@ -1042,9 +997,18 @@ pub enum DisconnectedEvent {
 /// Internal error type for propagating connection errors
 #[derive(Error, Debug)]
 #[error(transparent)]
-enum InnerConnectionError {
+pub(crate) enum InnerConnectionError {
     Io(#[from] io::Error),
     Protocol(#[from] ProtocolError),
+}
+
+impl From<InnerConnectionError> for ConnectError {
+    fn from(err: InnerConnectionError) -> Self {
+        match err {
+            InnerConnectionError::Io(err) => Self::Io(err),
+            InnerConnectionError::Protocol(err) => Self::Protocol(err),
+        }
+    }
 }
 
 /// Internal enum for distinguishing disconnect types
@@ -1075,6 +1039,32 @@ impl From<channel_data::IncomingPublishAndToken<Bytes>> for (Publish, ManualAckn
             ),
         }
     }
+}
+
+async fn maybe_timeout<F>(
+    timeout: Option<Duration>,
+    f: F,
+) -> Result<F::Output, tokio::time::error::Elapsed>
+where
+    F: Future,
+{
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, f).await,
+        None => Ok(f.await),
+    }
+}
+
+async fn mqtt_receive(
+    reader: &mut Reader<BytesPool>,
+) -> Result<Packet<Bytes>, InnerConnectionError> {
+    let mut raw_packet = reader.read().await?;
+    let packet = Packet::decode(
+        raw_packet.first_byte,
+        &mut raw_packet.rest,
+        ProtocolVersion::V5,
+    )
+    .map_err(ProtocolError::from)?;
+    Ok(packet)
 }
 
 mod buffered {

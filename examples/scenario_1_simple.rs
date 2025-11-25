@@ -3,7 +3,7 @@
 
 use azure_mqtt::client::{
     Client, ClientOptions, ConnectResult, Connection, ConnectionTransportConfig,
-    ManualAcknowledgement, Receiver, new_client,
+    ConnectionTransportType, ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
     ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties, PubRecProperties,
@@ -26,9 +26,12 @@ async fn main() {
 
     // Connect to the MQTT broker and wait for the connection to complete
     if let ConnectResult::Success(connection, _, _) = tokio::task::spawn(connect_handle.connect(
-        ConnectionTransportConfig::Tcp {
-            hostname: HOSTNAME.to_string(),
-            port: PORT,
+        ConnectionTransportConfig {
+            transport_type: ConnectionTransportType::Tcp {
+                hostname: HOSTNAME.to_string(),
+                port: PORT,
+            },
+            timeout: None,
         },
         false,
         KeepAlive::Infinite,
@@ -36,7 +39,6 @@ async fn main() {
         None,
         None,
         ConnectProperties::default(),
-        None,
     ))
     .await
     .unwrap()

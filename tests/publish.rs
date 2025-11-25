@@ -5,7 +5,8 @@ use std::pin::pin;
 use std::time::Duration;
 
 use azure_mqtt::client::{
-    ClientOptions, ConnectResult, ConnectionTransportConfig, DisconnectedEvent, new_client,
+    ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
+    DisconnectedEvent, new_client,
 };
 use azure_mqtt::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
@@ -39,9 +40,12 @@ async fn publish() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
             },
             false,
             KeepAlive::Infinite,
@@ -49,7 +53,6 @@ async fn publish() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {
@@ -153,9 +156,12 @@ async fn publish() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
             },
             false,
             KeepAlive::Infinite,
@@ -163,7 +169,6 @@ async fn publish() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {
@@ -233,9 +238,12 @@ async fn publish() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
             },
             false,
             KeepAlive::Infinite,
@@ -243,7 +251,6 @@ async fn publish() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {
@@ -291,9 +298,12 @@ async fn wait_for_packet_id_available() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
             },
             false,
             KeepAlive::Infinite,
@@ -301,7 +311,6 @@ async fn wait_for_packet_id_available() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {
@@ -405,9 +414,12 @@ async fn wait_for_packet_id_available() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
             },
             false,
             KeepAlive::Infinite,
@@ -415,7 +427,6 @@ async fn wait_for_packet_id_available() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {
@@ -491,9 +502,12 @@ async fn wait_for_packet_id_available() {
 
     let ConnectResult::Success(connection, connack, _disconnect_handle) = connect_handle
         .connect(
-            ConnectionTransportConfig::Test {
-                incoming_packets: incoming_packets_rx,
-                outgoing_packets: outgoing_packets_tx,
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
             },
             false,
             KeepAlive::Infinite,
@@ -501,7 +515,6 @@ async fn wait_for_packet_id_available() {
             None,
             None,
             ConnectProperties::default(),
-            None,
         )
         .await
     else {

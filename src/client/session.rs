@@ -14,6 +14,7 @@ use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
+    InnerConnectionError,
     buffered::ReauthResult,
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0,
@@ -531,8 +532,8 @@ where
     }
 
     /// Trigger a disconnect and adjust state based on the error from the underlying transport
-    pub fn transport_disconnect(&mut self, err: &std::io::Error) {
-        log::error!("client disconnected due to tranport error {err}");
+    pub fn transport_disconnect(&mut self, err: &InnerConnectionError) {
+        log::error!("client disconnected due to transport error {err}");
 
         self.disconnected();
 
