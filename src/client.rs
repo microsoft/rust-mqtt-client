@@ -461,7 +461,7 @@ impl ConnectHandle {
             }
             Err(err) => return ConnectResult::Failure(self, err),
         };
-        self.session.incoming_connack(connack.clone());
+        self.session.incoming_connack(connack.clone(), keep_alive);
 
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
         self.session.ch.disconnect_rx = Some(disconnect_rx);
@@ -529,7 +529,7 @@ impl ConnectHandle {
 
         match self.mqtt_receive(&mut reader).await {
             Ok(Packet::ConnAck(connack)) => {
-                self.session.incoming_connack(connack.clone());
+                self.session.incoming_connack(connack.clone(), keep_alive);
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
                     let auth_tx = self.session.ch.auth_tx.clone();
@@ -564,6 +564,7 @@ impl ConnectHandle {
                     writer,
                     auth_method,
                     cfg_client_id: self.cfg_client_id,
+                    cfg_keep_alive: keep_alive,
                 };
                 ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
             }
@@ -684,6 +685,7 @@ pub struct EnhancedAuthHandle {
     writer: Writer<BytesPool>,
     auth_method: String,
     cfg_client_id: Option<String>,
+    cfg_keep_alive: KeepAlive,
 }
 
 impl EnhancedAuthHandle {
@@ -758,7 +760,8 @@ impl EnhancedAuthHandle {
 
         match packet {
             Packet::ConnAck(connack) => {
-                self.session.incoming_connack(connack.clone());
+                self.session
+                    .incoming_connack(connack.clone(), self.cfg_keep_alive);
 
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
