@@ -450,7 +450,7 @@ impl ConnectHandle {
         username: Option<String>,
         password: Option<Bytes>,
         properties: ConnectProperties,
-        timeout: Option<Duration>,
+        response_timeout: Option<Duration>,
     ) -> ConnectResult {
         let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
             Ok(streams) => streams,
@@ -475,7 +475,7 @@ impl ConnectHandle {
             return ConnectResult::Failure(self, err);
         }
 
-        let connack = match maybe_timeout(timeout, mqtt_receive(&mut reader)).await {
+        let connack = match maybe_timeout(response_timeout, mqtt_receive(&mut reader)).await {
             Ok(Ok(Packet::ConnAck(connack))) => {
                 if !connack.is_success() {
                     return ConnectResult::Failure(self, ConnectError::Rejected(connack.into()));
@@ -489,7 +489,7 @@ impl ConnectHandle {
                 );
             }
             Ok(Err(err)) => return ConnectResult::Failure(self, err.into()),
-            Err(_) => return ConnectResult::Failure(self, ConnectError::Timeout),
+            Err(_) => return ConnectResult::Failure(self, ConnectError::ResponseTimeout),
         };
 
         self.session
@@ -546,7 +546,7 @@ impl ConnectHandle {
         password: Option<Bytes>,
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
-        timeout: Option<Duration>,
+        response_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
         let auth_method = authentication_info.method.clone();
         let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
@@ -569,10 +569,12 @@ impl ConnectHandle {
             return ConnectEnhancedAuthResult::Failure(self, err);
         }
 
-        let packet = match maybe_timeout(timeout, mqtt_receive(&mut reader)).await {
+        let packet = match maybe_timeout(response_timeout, mqtt_receive(&mut reader)).await {
             Ok(Ok(packet)) => packet,
             Ok(Err(err)) => return ConnectEnhancedAuthResult::Failure(self, err.into()),
-            Err(_) => return ConnectEnhancedAuthResult::Failure(self, ConnectError::Timeout),
+            Err(_) => {
+                return ConnectEnhancedAuthResult::Failure(self, ConnectError::ResponseTimeout);
+            }
         };
 
         match packet {
@@ -751,7 +753,7 @@ impl EnhancedAuthHandle {
         mut self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
-        timeout: Option<Duration>,
+        response_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
         // Send auth
         let auth = Packet::Auth(
@@ -785,7 +787,7 @@ impl EnhancedAuthHandle {
         }
 
         // Wait for next response
-        let packet = match maybe_timeout(timeout, mqtt_receive(&mut self.reader)).await {
+        let packet = match maybe_timeout(response_timeout, mqtt_receive(&mut self.reader)).await {
             Ok(Ok(packet)) => packet,
             Ok(Err(err)) => {
                 let connect_handle = ConnectHandle {
@@ -803,7 +805,10 @@ impl EnhancedAuthHandle {
                     writer_pool: self.writer_pool,
                     cfg_client_id: self.cfg_client_id,
                 };
-                return ConnectEnhancedAuthResult::Failure(connect_handle, ConnectError::Timeout);
+                return ConnectEnhancedAuthResult::Failure(
+                    connect_handle,
+                    ConnectError::ResponseTimeout,
+                );
             }
         };
 
