@@ -11,7 +11,7 @@
 use std::{future::Future, io, num::NonZeroU16, pin::pin, time::Duration};
 
 use bytes::{Bytes, BytesMut};
-use futures_util::future;
+use futures_util::future::{self, FutureExt as _};
 use openssl::{
     pkey::{PKey, Private},
     ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVersion},
@@ -945,19 +945,18 @@ impl Connection {
                 // Outgoing packet from session
                 future::Either::Left(packet) => {
                     let mut disconnect = false;
-
-                    if let Packet::Disconnect(disconnect_) = &packet {
-                        disconnect = true;
-                        self.session.client_disconnect(disconnect_);
+                    let mut op_packet = Some(packet);
+                    while let Some(packet_) = op_packet {
+                        if let Packet::Disconnect(disconnect_) = &packet_ {
+                            disconnect = true;
+                            self.session.client_disconnect(disconnect_);
+                        }
+                        writer.write(&packet_, ProtocolVersion::V5).await?;
+                        if disconnect {
+                            break;
+                        }
+                        op_packet = self.session.next_outgoing_packet().now_or_never();
                     }
-                    if let Packet::PingReq(_) = &packet
-                        && let Some(pingresp_timeout) = self.cfg_pingresp_timeout
-                    {
-                        pingresp_timer = Some(Timer::new(pingresp_timeout));
-                    }
-
-                    writer.write(&packet, ProtocolVersion::V5).await?;
-
                     writer.flush().await?;
                     // If we wrote a DISCONNECT packet, also close the connection.
                     if disconnect {
