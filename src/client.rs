@@ -930,11 +930,11 @@ impl Connection {
                 let timeout = pingresp_timer.as_ref().map(Timer::remaining_duration);
                 match maybe_timeout(timeout, io_f).await {
                     Ok(future::Either::Left((packet, _))) => {
-                        log::debug!("OUTGOING: {packet:?}");
+                        log::trace!("OUTGOING: {packet:?}");
                         future::Either::Left(packet)
                     }
                     Ok(future::Either::Right((Ok(raw_packet), _))) => {
-                        log::debug!("INCOMING: {raw_packet:?}");
+                        log::trace!("INCOMING: {raw_packet:?}");
                         future::Either::Right(Ok(raw_packet))
                     }
                     Ok(future::Either::Right((Err(err), _))) => future::Either::Right(Err(err)),
@@ -1173,12 +1173,7 @@ where
     F: Future,
 {
     match timeout {
-        Some(timeout) => {
-            // if timeout == Duration::ZERO {
-            //     return Err(tokio::time::error::Elapsed(()));
-            // }
-            tokio::time::timeout(timeout, f).await
-        }
+        Some(timeout) => tokio::time::timeout(timeout, f).await,
         None => Ok(f.await),
     }
 }
