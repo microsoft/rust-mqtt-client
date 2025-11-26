@@ -48,7 +48,7 @@ async fn connect_connack_success() {
             false,
             KeepAliveConfig::Duration {
                 ping_after: keep_alive_time,
-                response_time: NonZeroU16::new(1).unwrap(),
+                response_time: NonZeroU16::new(5).unwrap(),
             },
             None,
             None,
@@ -76,6 +76,9 @@ async fn connect_connack_success() {
 
     let server_connect = outgoing_packets_rx.recv().await.unwrap();
     assert_matches!(server_connect, Packet::PingReq(mqtt_proto::PingReq));
+    incoming_packets_tx
+        .send(Packet::PingResp(mqtt_proto::PingResp))
+        .unwrap();
 
     // Server EOF
     drop(incoming_packets_tx);

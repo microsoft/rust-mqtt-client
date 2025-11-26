@@ -497,6 +497,13 @@ impl ConnectHandle {
 
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
         self.session.ch.disconnect_rx = Some(disconnect_rx);
+        let cfg_pingresp_timeout = match keep_alive {
+            KeepAliveConfig::Duration {
+                ping_after,
+                response_time,
+            } => Some(Duration::from_secs(u64::from(response_time.get()))),
+            KeepAliveConfig::Infinite => None,
+        };
         ConnectResult::Success(
             Connection {
                 session: self.session,
@@ -505,6 +512,7 @@ impl ConnectHandle {
                 reader,
                 writer,
                 cfg_client_id: self.cfg_client_id,
+                cfg_pingresp_timeout,
             },
             connack.into(),
             DisconnectHandle(disconnect_tx),
@@ -575,6 +583,13 @@ impl ConnectHandle {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
                     let auth_tx = self.session.ch.auth_tx.clone();
                     self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    let cfg_pingresp_timeout = match keep_alive {
+                        KeepAliveConfig::Duration {
+                            ping_after,
+                            response_time,
+                        } => Some(Duration::from_secs(u64::from(response_time.get()))),
+                        KeepAliveConfig::Infinite => None,
+                    };
                     ConnectEnhancedAuthResult::Success(
                         Connection {
                             session: self.session,
@@ -583,6 +598,7 @@ impl ConnectHandle {
                             reader,
                             writer,
                             cfg_client_id: self.cfg_client_id,
+                            cfg_pingresp_timeout,
                         },
                         connack.into(),
                         DisconnectHandle(disconnect_tx),
@@ -605,7 +621,7 @@ impl ConnectHandle {
                     writer,
                     auth_method,
                     cfg_client_id: self.cfg_client_id,
-                    cfg_keep_alive: keep_alive.into(),
+                    cfg_keep_alive: keep_alive,
                 };
                 ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
             }
@@ -727,7 +743,7 @@ pub struct EnhancedAuthHandle {
     writer: Writer<BytesPool>,
     auth_method: String,
     cfg_client_id: Option<String>,
-    cfg_keep_alive: KeepAlive,
+    cfg_keep_alive: KeepAliveConfig,
 }
 
 impl EnhancedAuthHandle {
@@ -794,12 +810,19 @@ impl EnhancedAuthHandle {
         match packet {
             Packet::ConnAck(connack) => {
                 self.session
-                    .incoming_connack(connack.clone(), self.cfg_keep_alive);
+                    .incoming_connack(connack.clone(), self.cfg_keep_alive.into());
 
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
                     let auth_tx = self.session.ch.auth_tx.clone();
                     self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    let cfg_pingresp_timeout = match self.cfg_keep_alive {
+                        KeepAliveConfig::Duration {
+                            ping_after,
+                            response_time,
+                        } => Some(Duration::from_secs(u64::from(response_time.get()))),
+                        KeepAliveConfig::Infinite => None,
+                    };
                     let connection = Connection {
                         session: self.session,
                         reader_pool: self.reader_pool,
@@ -807,6 +830,7 @@ impl EnhancedAuthHandle {
                         reader: self.reader,
                         writer: self.writer,
                         cfg_client_id: self.cfg_client_id,
+                        cfg_pingresp_timeout,
                     };
                     ConnectEnhancedAuthResult::Success(
                         connection,
@@ -857,6 +881,7 @@ pub struct Connection {
     reader: Reader<BytesPool>,
     writer: Writer<BytesPool>,
     cfg_client_id: Option<String>,
+    cfg_pingresp_timeout: Option<Duration>,
 }
 
 impl Connection {
@@ -916,9 +941,10 @@ impl Connection {
                             disconnect = true;
                             self.session.client_disconnect(disconnect_);
                         }
-                        if let Packet::PingResp(_) = &packet_ {
-                            // Remove ping response timer as we have successfully received a PINGRESP.
-                            pingresp_timer = None;
+                        if let Packet::PingReq(_) = &packet_
+                            && let Some(pingresp_timeout) = self.cfg_pingresp_timeout
+                        {
+                            pingresp_timer = Some(Timer::new(pingresp_timeout));
                         }
                         writer.write(&packet_, ProtocolVersion::V5).await?;
                         if disconnect {
@@ -961,7 +987,8 @@ impl Connection {
                     Packet::Publish(publish) => self.session.incoming_publish(publish),
 
                     Packet::PingResp(_) => {
-                        pingresp_timer = Some(Timer::new(Duration::from_secs(5)));
+                        // Remove ping response timer as we have successfully received a PINGRESP.
+                        pingresp_timer = None;
                     }
 
                     packet => {
