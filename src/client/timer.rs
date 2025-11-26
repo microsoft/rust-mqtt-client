@@ -33,10 +33,6 @@ impl Timer {
     pub fn deadline(&self) -> tokio::time::Instant {
         self.inner.as_ref().deadline()
     }
-
-    pub fn is_elapsed(&self) -> bool {
-        self.inner.as_ref().is_elapsed()
-    }
 }
 
 impl Future for Timer {
