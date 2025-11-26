@@ -439,7 +439,7 @@ impl ConnectHandle {
     /// - `username`: Optional username for authentication.
     /// - `password`: Optional password for authentication.
     /// - `properties`: Properties to include in the CONNECT packet.
-    /// - `timeout`: Optional timeout for the MQTT CONNECT operation.
+    /// - `response_timeout`: Optional timeout for the MQTT CONNECT operation.
     #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect(
         mut self,
@@ -534,7 +534,7 @@ impl ConnectHandle {
     /// - `password`: Optional password for authentication.
     /// - `properties`: Properties to include in the CONNECT packet.
     /// - `authentication_info`: Initial authentication information for enhanced authentication.
-    /// - `timeout`: Optional timeout for the MQTT CONNECT operation.
+    /// - `response_timeout`: Optional timeout for the MQTT CONNECT operation.
     #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect_enhanced_auth(
         mut self,
