@@ -3,11 +3,11 @@
 
 use azure_mqtt::client::{
     Client, ClientOptions, ConnectResult, Connection, ConnectionTransportConfig,
-    ConnectionTransportType, ManualAcknowledgement, Receiver, new_client,
+    ConnectionTransportType, KeepAliveConfig, ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::packet::{
-    ConnectProperties, KeepAlive, PubAckProperties, PubCompProperties, PubRecProperties,
-    PublishProperties, QoS, RetainHandling, SubscribeProperties,
+    ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
+    QoS, RetainHandling, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -34,11 +34,12 @@ async fn main() {
             timeout: None,
         },
         false,
-        KeepAlive::Infinite,
+        KeepAliveConfig::Infinite,
         None,
         None,
         None,
         ConnectProperties::default(),
+        None,
     ))
     .await
     .unwrap()

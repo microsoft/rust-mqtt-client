@@ -45,6 +45,8 @@ pub enum ConnectError {
     ),
     #[error("connection rejected by server: {0:?}")]
     Rejected(crate::packet::ConnAck),
+    #[error("timed out waiting for response packet")]
+    Timeout,
 }
 
 /// Indicates a protocol violation of the MQTT specification

@@ -21,7 +21,7 @@ use crate::client::{
         PublishRequestQoS1QoS2, ReauthRequest, SubscriptionRequest,
     },
     session::pkid::PkidPool,
-    session::timer::Timer,
+    timer::Timer,
     token::acknowledgement::buffered::{PubAckToken, PubCompToken, PubRelToken},
     token::completion::buffered::{
         CompletionNotifier, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
@@ -40,7 +40,6 @@ use crate::mqtt_proto::{
 };
 
 mod pkid;
-mod timer;
 
 /// Tracks data related to the MQTT session state
 pub(crate) struct Session<O>

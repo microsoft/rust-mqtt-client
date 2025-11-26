@@ -24,6 +24,19 @@ impl Timer {
             .as_mut()
             .reset(tokio::time::Instant::now() + self.duration);
     }
+
+    pub fn remaining_duration(&self) -> Duration {
+        let deadline = self.deadline();
+        deadline.saturating_duration_since(tokio::time::Instant::now())
+    }
+
+    pub fn deadline(&self) -> tokio::time::Instant {
+        self.inner.as_ref().deadline()
+    }
+
+    pub fn is_elapsed(&self) -> bool {
+        self.inner.as_ref().is_elapsed()
+    }
 }
 
 impl Future for Timer {
