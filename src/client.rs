@@ -951,6 +951,11 @@ impl Connection {
                             disconnect = true;
                             self.session.client_disconnect(disconnect_);
                         }
+                        if let Packet::PingReq(_) = &packet_
+                            && let Some(timeout) = self.cfg_pingresp_timeout
+                        {
+                            pingresp_timer = Some(Timer::new(timeout));
+                        }
                         writer.write(&packet_, ProtocolVersion::V5).await?;
                         if disconnect {
                             break;
@@ -1168,7 +1173,12 @@ where
     F: Future,
 {
     match timeout {
-        Some(timeout) => tokio::time::timeout(timeout, f).await,
+        Some(timeout) => {
+            // if timeout == Duration::ZERO {
+            //     return Err(tokio::time::error::Elapsed(()));
+            // }
+            tokio::time::timeout(timeout, f).await
+        }
         None => Ok(f.await),
     }
 }
