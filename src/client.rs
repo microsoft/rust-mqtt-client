@@ -237,7 +237,7 @@ pub enum KeepAliveConfig {
     Infinite,
     Duration {
         ping_after: NonZeroU16,
-        response_time: NonZeroU16,
+        response_timeout: Duration,
     },
 }
 
@@ -247,7 +247,7 @@ impl From<KeepAliveConfig> for KeepAlive {
             KeepAliveConfig::Infinite => KeepAlive::Infinite,
             KeepAliveConfig::Duration {
                 ping_after,
-                response_time,
+                response_timeout,
             } => KeepAlive::Duration(ping_after),
         }
     }
@@ -500,8 +500,8 @@ impl ConnectHandle {
         let cfg_pingresp_timeout = match keep_alive {
             KeepAliveConfig::Duration {
                 ping_after,
-                response_time,
-            } => Some(Duration::from_secs(u64::from(response_time.get()))),
+                response_timeout,
+            } => Some(response_timeout),
             KeepAliveConfig::Infinite => None,
         };
         ConnectResult::Success(
@@ -588,8 +588,8 @@ impl ConnectHandle {
                     let cfg_pingresp_timeout = match keep_alive {
                         KeepAliveConfig::Duration {
                             ping_after,
-                            response_time,
-                        } => Some(Duration::from_secs(u64::from(response_time.get()))),
+                            response_timeout,
+                        } => Some(response_timeout),
                         KeepAliveConfig::Infinite => None,
                     };
                     ConnectEnhancedAuthResult::Success(
@@ -824,8 +824,8 @@ impl EnhancedAuthHandle {
                     let cfg_pingresp_timeout = match self.cfg_keep_alive {
                         KeepAliveConfig::Duration {
                             ping_after,
-                            response_time,
-                        } => Some(Duration::from_secs(u64::from(response_time.get()))),
+                            response_timeout,
+                        } => Some(response_timeout),
                         KeepAliveConfig::Infinite => None,
                     };
                     let connection = Connection {

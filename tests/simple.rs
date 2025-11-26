@@ -48,7 +48,7 @@ async fn connect_connack_success() {
             false,
             KeepAliveConfig::Duration {
                 ping_after: keep_alive_time,
-                response_time: NonZeroU16::new(5).unwrap(),
+                response_timeout: Duration::from_secs(5),
             },
             None,
             None,
