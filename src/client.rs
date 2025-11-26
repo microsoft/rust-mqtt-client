@@ -8,7 +8,7 @@
 #![allow(dead_code)]
 #![allow(clippy::unused_async)]
 
-use std::{future::Future, io, pin::pin, time::Duration};
+use std::{future::Future, io, num::NonZeroU16, pin::pin, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use futures_util::future::{self, FutureExt as _};
@@ -26,6 +26,7 @@ use crate::client::{
         ReauthRequest, SubscriptionRequest,
     },
     session::{CompletedOperation, Session},
+    timer::Timer,
     token::{
         acknowledgement::{PubAckToken, PubRecToken},
         completion::buffered::completion_pair,
@@ -61,6 +62,7 @@ use crate::topic::{TopicFilter, TopicName};
 
 mod channel_data;
 mod session;
+mod timer;
 pub mod token;
 
 /// Creates the three components needed to run the MQTT client
@@ -227,6 +229,27 @@ impl ConnectionTransportTlsConfig {
 impl From<SslConnectorBuilder> for ConnectionTransportTlsConfig {
     fn from(connector: SslConnectorBuilder) -> Self {
         Self(connector)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KeepAliveConfig {
+    Infinite,
+    Duration {
+        ping_after: NonZeroU16,
+        response_timeout: Duration,
+    },
+}
+
+impl From<KeepAliveConfig> for KeepAlive {
+    fn from(value: KeepAliveConfig) -> Self {
+        match value {
+            KeepAliveConfig::Infinite => KeepAlive::Infinite,
+            KeepAliveConfig::Duration {
+                ping_after,
+                response_timeout,
+            } => KeepAlive::Duration(ping_after),
+        }
     }
 }
 
@@ -403,16 +426,31 @@ pub struct ConnectHandle {
 }
 
 impl ConnectHandle {
+    /// Connect to an MQTT server using standard authentication.
+    ///
+    /// Returns a [`ConnectResult`] indicating the status of the connection attempt,
+    /// and any further handles needed to operate the connection or re-attempt.
+    ///
+    /// # Arguments
+    /// - `connection_transport`: Configuration for the transport to use for the connection.
+    /// - `clean_start`: Whether to request a new MQTT session from the broker
+    /// - `keep_alive`: Keep-alive configuration for the connection.
+    /// - `will`: Optional Last Will and Testament to be sent on unexpected disconnect.
+    /// - `username`: Optional username for authentication.
+    /// - `password`: Optional password for authentication.
+    /// - `properties`: Properties to include in the CONNECT packet.
+    /// - `response_timeout`: Optional timeout for the MQTT CONNECT operation.
     #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect(
         mut self,
         connection_transport: ConnectionTransportConfig,
         clean_start: bool,
-        keep_alive: KeepAlive,
+        keep_alive: KeepAliveConfig,
         will: Option<Will>,
         username: Option<String>,
         password: Option<Bytes>,
         properties: ConnectProperties,
+        response_timeout: Option<Duration>,
     ) -> ConnectResult {
         let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
             Ok(streams) => streams,
@@ -425,7 +463,7 @@ impl ConnectHandle {
             .mqtt_connect(
                 &mut writer,
                 clean_start,
-                keep_alive,
+                keep_alive.into(),
                 will,
                 username,
                 password,
@@ -437,25 +475,35 @@ impl ConnectHandle {
             return ConnectResult::Failure(self, err);
         }
 
-        let connack = match mqtt_receive(&mut reader).await {
-            Ok(Packet::ConnAck(connack)) => {
+        let connack = match maybe_timeout(response_timeout, mqtt_receive(&mut reader)).await {
+            Ok(Ok(Packet::ConnAck(connack))) => {
                 if !connack.is_success() {
                     return ConnectResult::Failure(self, ConnectError::Rejected(connack.into()));
                 }
                 connack
             }
-            Ok(_) => {
+            Ok(Ok(_)) => {
                 return ConnectResult::Failure(
                     self,
                     ConnectError::Protocol(ProtocolError::UnexpectedPacket),
                 );
             }
-            Err(err) => return ConnectResult::Failure(self, err.into()),
+            Ok(Err(err)) => return ConnectResult::Failure(self, err.into()),
+            Err(_) => return ConnectResult::Failure(self, ConnectError::ResponseTimeout),
         };
-        self.session.incoming_connack(connack.clone(), keep_alive);
+
+        self.session
+            .incoming_connack(connack.clone(), keep_alive.into());
 
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
         self.session.ch.disconnect_rx = Some(disconnect_rx);
+        let cfg_pingresp_timeout = match keep_alive {
+            KeepAliveConfig::Duration {
+                ping_after,
+                response_timeout,
+            } => Some(response_timeout),
+            KeepAliveConfig::Infinite => None,
+        };
         ConnectResult::Success(
             Connection {
                 session: self.session,
@@ -464,23 +512,41 @@ impl ConnectHandle {
                 reader,
                 writer,
                 cfg_client_id: self.cfg_client_id,
+                cfg_pingresp_timeout,
             },
             connack.into(),
             DisconnectHandle(disconnect_tx),
         )
     }
 
+    /// Connect to an MQTT server using enhanced authentication.
+    ///
+    /// Returns a [`ConnectEnhancedAuthResult`] indicating the status of the connection attempt,
+    /// and any further handles needed to operate the connection, continue the authentication
+    /// process, or re-attempt.
+    ///
+    /// # Arguments
+    /// - `connection_transport`: Configuration for the transport to use for the connection.
+    /// - `clean_start`: Whether to request a new MQTT session from the broker
+    /// - `keep_alive`: Keep-alive configuration for the connection.
+    /// - `will`: Optional Last Will and Testament to be sent on unexpected disconnect.
+    /// - `username`: Optional username for authentication.
+    /// - `password`: Optional password for authentication.
+    /// - `properties`: Properties to include in the CONNECT packet.
+    /// - `authentication_info`: Initial authentication information for enhanced authentication.
+    /// - `response_timeout`: Optional timeout for the MQTT CONNECT operation.
     #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect_enhanced_auth(
         mut self,
         connection_transport: ConnectionTransportConfig,
         clean_start: bool,
-        keep_alive: KeepAlive,
+        keep_alive: KeepAliveConfig,
         will: Option<Will>,
         username: Option<String>,
         password: Option<Bytes>,
         properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
+        response_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
         let auth_method = authentication_info.method.clone();
         let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
@@ -491,7 +557,7 @@ impl ConnectHandle {
             .mqtt_connect(
                 &mut writer,
                 clean_start,
-                keep_alive,
+                keep_alive.into(),
                 will,
                 username,
                 password,
@@ -503,13 +569,29 @@ impl ConnectHandle {
             return ConnectEnhancedAuthResult::Failure(self, err);
         }
 
-        match mqtt_receive(&mut reader).await {
-            Ok(Packet::ConnAck(connack)) => {
-                self.session.incoming_connack(connack.clone(), keep_alive);
+        let packet = match maybe_timeout(response_timeout, mqtt_receive(&mut reader)).await {
+            Ok(Ok(packet)) => packet,
+            Ok(Err(err)) => return ConnectEnhancedAuthResult::Failure(self, err.into()),
+            Err(_) => {
+                return ConnectEnhancedAuthResult::Failure(self, ConnectError::ResponseTimeout);
+            }
+        };
+
+        match packet {
+            Packet::ConnAck(connack) => {
+                self.session
+                    .incoming_connack(connack.clone(), keep_alive.into());
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
                     let auth_tx = self.session.ch.auth_tx.clone();
                     self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    let cfg_pingresp_timeout = match keep_alive {
+                        KeepAliveConfig::Duration {
+                            ping_after,
+                            response_timeout,
+                        } => Some(response_timeout),
+                        KeepAliveConfig::Infinite => None,
+                    };
                     ConnectEnhancedAuthResult::Success(
                         Connection {
                             session: self.session,
@@ -518,6 +600,7 @@ impl ConnectHandle {
                             reader,
                             writer,
                             cfg_client_id: self.cfg_client_id,
+                            cfg_pingresp_timeout,
                         },
                         connack.into(),
                         DisconnectHandle(disconnect_tx),
@@ -531,7 +614,7 @@ impl ConnectHandle {
                 }
             }
 
-            Ok(Packet::Auth(auth)) => {
+            Packet::Auth(auth) => {
                 let auth_handle = EnhancedAuthHandle {
                     session: self.session,
                     reader_pool: self.reader_pool,
@@ -545,12 +628,10 @@ impl ConnectHandle {
                 ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
             }
 
-            Ok(_) => ConnectEnhancedAuthResult::Failure(
+            _ => ConnectEnhancedAuthResult::Failure(
                 self,
                 ConnectError::Protocol(ProtocolError::UnexpectedPacket),
             ),
-
-            Err(err) => ConnectEnhancedAuthResult::Failure(self, err.into()),
         }
     }
 
@@ -664,7 +745,7 @@ pub struct EnhancedAuthHandle {
     writer: Writer<BytesPool>,
     auth_method: String,
     cfg_client_id: Option<String>,
-    cfg_keep_alive: KeepAlive,
+    cfg_keep_alive: KeepAliveConfig,
 }
 
 impl EnhancedAuthHandle {
@@ -672,6 +753,7 @@ impl EnhancedAuthHandle {
         mut self,
         authentication_data: Option<Bytes>,
         properties: AuthProperties,
+        response_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
         // Send auth
         let auth = Packet::Auth(
@@ -705,9 +787,9 @@ impl EnhancedAuthHandle {
         }
 
         // Wait for next response
-        let packet = match mqtt_receive(&mut self.reader).await {
-            Ok(packet) => packet,
-            Err(err) => {
+        let packet = match maybe_timeout(response_timeout, mqtt_receive(&mut self.reader)).await {
+            Ok(Ok(packet)) => packet,
+            Ok(Err(err)) => {
                 let connect_handle = ConnectHandle {
                     session: self.session,
                     reader_pool: self.reader_pool,
@@ -716,17 +798,36 @@ impl EnhancedAuthHandle {
                 };
                 return ConnectEnhancedAuthResult::Failure(connect_handle, err.into());
             }
+            Err(_) => {
+                let connect_handle = ConnectHandle {
+                    session: self.session,
+                    reader_pool: self.reader_pool,
+                    writer_pool: self.writer_pool,
+                    cfg_client_id: self.cfg_client_id,
+                };
+                return ConnectEnhancedAuthResult::Failure(
+                    connect_handle,
+                    ConnectError::ResponseTimeout,
+                );
+            }
         };
 
         match packet {
             Packet::ConnAck(connack) => {
                 self.session
-                    .incoming_connack(connack.clone(), self.cfg_keep_alive);
+                    .incoming_connack(connack.clone(), self.cfg_keep_alive.into());
 
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
                     let auth_tx = self.session.ch.auth_tx.clone();
                     self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    let cfg_pingresp_timeout = match self.cfg_keep_alive {
+                        KeepAliveConfig::Duration {
+                            ping_after,
+                            response_timeout,
+                        } => Some(response_timeout),
+                        KeepAliveConfig::Infinite => None,
+                    };
                     let connection = Connection {
                         session: self.session,
                         reader_pool: self.reader_pool,
@@ -734,6 +835,7 @@ impl EnhancedAuthHandle {
                         reader: self.reader,
                         writer: self.writer,
                         cfg_client_id: self.cfg_client_id,
+                        cfg_pingresp_timeout,
                     };
                     ConnectEnhancedAuthResult::Success(
                         connection,
@@ -784,6 +886,7 @@ pub struct Connection {
     reader: Reader<BytesPool>,
     writer: Writer<BytesPool>,
     cfg_client_id: Option<String>,
+    cfg_pingresp_timeout: Option<Duration>,
 }
 
 impl Connection {
@@ -791,10 +894,11 @@ impl Connection {
     /// Packets will only be sent and received while this future is running.
     pub async fn run_until_disconnect(mut self) -> (ConnectHandle, DisconnectedEvent) {
         let event = match self.run_until_disconnect_inner().await {
-            Ok(GracefulDisconnect::Application) => DisconnectedEvent::ApplicationDisconnect,
-            Ok(GracefulDisconnect::Server(disconnect)) => {
+            Ok(InnerDisconnect::Application) => DisconnectedEvent::ApplicationDisconnect,
+            Ok(InnerDisconnect::Server(disconnect)) => {
                 DisconnectedEvent::ServerDisconnect(disconnect)
             }
+            Ok(InnerDisconnect::PingTimeout) => DisconnectedEvent::PingTimeout,
             Err(InnerConnectionError::Io(e)) => DisconnectedEvent::IoError(e),
             Err(InnerConnectionError::Protocol(e)) => DisconnectedEvent::ProtocolError(e),
         };
@@ -811,42 +915,57 @@ impl Connection {
 
     async fn run_until_disconnect_inner(
         &mut self,
-    ) -> Result<GracefulDisconnect, InnerConnectionError> {
+    ) -> Result<InnerDisconnect, InnerConnectionError> {
         let (reader, writer) = (&mut self.reader, &mut self.writer);
+        let mut pingresp_timer: Option<Timer> = None;
 
         loop {
             // Check for outgoing packets from the session or incoming packets from the reader.
             let next = {
                 let next_outgoing_packet_f = pin!(self.session.next_outgoing_packet());
                 let read_f = pin!(mqtt_receive(reader));
-                let f = future::select(next_outgoing_packet_f, read_f);
-                match f.await {
-                    future::Either::Left((packet, _)) => future::Either::Left(packet),
-                    future::Either::Right((Ok(raw_packet), _)) => {
+                let io_f = future::select(next_outgoing_packet_f, read_f);
+
+                // If there is a ping timer, use its remaining duration as a timeout for the I/O future.
+                let timeout = pingresp_timer.as_ref().map(Timer::remaining_duration);
+                match maybe_timeout(timeout, io_f).await {
+                    Ok(future::Either::Left((packet, _))) => {
+                        log::trace!("OUTGOING: {packet:?}");
+                        future::Either::Left(packet)
+                    }
+                    Ok(future::Either::Right((Ok(raw_packet), _))) => {
+                        log::trace!("INCOMING: {raw_packet:?}");
                         future::Either::Right(Ok(raw_packet))
                     }
-                    future::Either::Right((Err(err), _)) => future::Either::Right(Err(err)),
+                    Ok(future::Either::Right((Err(err), _))) => future::Either::Right(Err(err)),
+                    Err(_) => return Ok(InnerDisconnect::PingTimeout),
                 }
             };
             match next {
                 // Outgoing packet from session
-                future::Either::Left(mut packet) => {
+                future::Either::Left(packet) => {
                     let mut disconnect = false;
-                    while let Some(packet_) = packet {
+                    let mut op_packet = Some(packet);
+                    while let Some(packet_) = op_packet {
                         if let Packet::Disconnect(disconnect_) = &packet_ {
                             disconnect = true;
                             self.session.client_disconnect(disconnect_);
+                        }
+                        if let Packet::PingReq(_) = &packet_
+                            && let Some(timeout) = self.cfg_pingresp_timeout
+                        {
+                            pingresp_timer = Some(Timer::new(timeout));
                         }
                         writer.write(&packet_, ProtocolVersion::V5).await?;
                         if disconnect {
                             break;
                         }
-                        packet = self.session.next_outgoing_packet().now_or_never().flatten();
+                        op_packet = self.session.next_outgoing_packet().now_or_never();
                     }
                     writer.flush().await?;
                     // If we wrote a DISCONNECT packet, also close the connection.
                     if disconnect {
-                        return Ok(GracefulDisconnect::Application);
+                        return Ok(InnerDisconnect::Application);
                     }
                 }
 
@@ -872,12 +991,15 @@ impl Connection {
 
                     Packet::Disconnect(disconnect) => {
                         self.session.server_disconnect(&disconnect);
-                        return Ok(GracefulDisconnect::Server(disconnect.into()));
+                        return Ok(InnerDisconnect::Server(disconnect.into()));
                     }
 
                     Packet::Publish(publish) => self.session.incoming_publish(publish),
 
-                    Packet::PingResp(_) => (),
+                    Packet::PingResp(_) => {
+                        // Remove ping response timer as we have successfully received a PINGRESP.
+                        pingresp_timer = None;
+                    }
 
                     packet => {
                         let err = ProtocolError::UnexpectedPacket.into();
@@ -992,6 +1114,7 @@ pub enum DisconnectedEvent {
     ServerDisconnect(Disconnect),
     IoError(io::Error),
     ProtocolError(ProtocolError),
+    PingTimeout,
 }
 
 /// Internal error type for propagating connection errors
@@ -1012,9 +1135,10 @@ impl From<InnerConnectionError> for ConnectError {
 }
 
 /// Internal enum for distinguishing disconnect types
-enum GracefulDisconnect {
+enum InnerDisconnect {
     Application,
     Server(Disconnect),
+    PingTimeout,
 }
 
 pub enum ManualAcknowledgement {

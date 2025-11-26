@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use azure_mqtt::client::{
     ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
-    DisconnectedEvent, new_client,
+    DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use azure_mqtt::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
 };
-use azure_mqtt::packet::{ConnAck, ConnectProperties, KeepAlive};
+use azure_mqtt::packet::{ConnAck, ConnectProperties};
 use azure_mqtt::topic::TopicName;
 use bytes::Bytes;
 use futures_util::future::FutureExt;
@@ -48,11 +48,12 @@ async fn publish() {
                 timeout: None,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAliveConfig::Infinite,
             None,
             None,
             None,
             ConnectProperties::default(),
+            None,
         )
         .await
     else {
@@ -164,11 +165,12 @@ async fn publish() {
                 timeout: None,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAliveConfig::Infinite,
             None,
             None,
             None,
             ConnectProperties::default(),
+            None,
         )
         .await
     else {
@@ -246,11 +248,12 @@ async fn publish() {
                 timeout: None,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAliveConfig::Infinite,
             None,
             None,
             None,
             ConnectProperties::default(),
+            None,
         )
         .await
     else {
@@ -306,11 +309,12 @@ async fn wait_for_packet_id_available() {
                 timeout: None,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAliveConfig::Infinite,
             None,
             None,
             None,
             ConnectProperties::default(),
+            None,
         )
         .await
     else {
@@ -422,11 +426,12 @@ async fn wait_for_packet_id_available() {
                 timeout: None,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAliveConfig::Infinite,
             None,
             None,
             None,
             ConnectProperties::default(),
+            None,
         )
         .await
     else {
@@ -510,11 +515,12 @@ async fn wait_for_packet_id_available() {
                 timeout: None,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAliveConfig::Infinite,
             None,
             None,
             None,
             ConnectProperties::default(),
+            None,
         )
         .await
     else {

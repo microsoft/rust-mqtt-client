@@ -7,13 +7,13 @@ use std::time::Duration;
 use azure_mqtt::client::token::acknowledgement::PubAckToken;
 use azure_mqtt::client::{
     ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
-    DisconnectedEvent, ManualAcknowledgement, Receiver, new_client,
+    DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement, Receiver, new_client,
 };
 use azure_mqtt::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
     topic,
 };
-use azure_mqtt::packet::{ConnAck, ConnectProperties, KeepAlive, PubAckProperties, Publish};
+use azure_mqtt::packet::{ConnAck, ConnectProperties, PubAckProperties, Publish};
 use bytes::Bytes;
 use futures_util::future::{Either, FutureExt, select};
 use matches::assert_matches;
@@ -49,11 +49,12 @@ async fn puback() {
                 timeout: None,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAliveConfig::Infinite,
             None,
             None,
             None,
             ConnectProperties::default(),
+            None,
         )
         .await
     else {
@@ -187,11 +188,12 @@ async fn puback() {
                 timeout: None,
             },
             false,
-            KeepAlive::Infinite,
+            KeepAliveConfig::Infinite,
             None,
             None,
             None,
             ConnectProperties::default(),
+            None,
         )
         .await
     else {

@@ -7,11 +7,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use azure_mqtt::client::{
     Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
-    ConnectionTransportType, ManualAcknowledgement, Receiver, new_client,
+    ConnectionTransportType, KeepAliveConfig, ManualAcknowledgement, Receiver, new_client,
 };
-use azure_mqtt::packet::{
-    ConnectProperties, KeepAlive, Publish, QoS, RetainHandling, SubscribeProperties,
-};
+use azure_mqtt::packet::{ConnectProperties, Publish, QoS, RetainHandling, SubscribeProperties};
 use azure_mqtt::topic::TopicFilter;
 
 const CLIENT_ID: &str = "my_client";
@@ -89,11 +87,12 @@ async fn mqtt_run(
                     timeout: None,
                 },
                 false,
-                KeepAlive::Infinite,
+                KeepAliveConfig::Infinite,
                 None,
                 None,
                 None,
                 ConnectProperties::default(),
+                None,
             )
             .await
         {

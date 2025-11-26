@@ -3,10 +3,10 @@
 
 use azure_mqtt::client::{
     Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
-    ConnectionTransportType, Receiver, new_client,
+    ConnectionTransportType, KeepAliveConfig, Receiver, new_client,
 };
 use azure_mqtt::packet::{
-    ConnectProperties, DeliveryQoS, KeepAlive, QoS, RetainHandling, SubscribeProperties,
+    ConnectProperties, DeliveryQoS, QoS, RetainHandling, SubscribeProperties,
 };
 use azure_mqtt::topic::TopicFilter;
 
@@ -59,11 +59,12 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                     timeout: None,
                 },
                 false,
-                KeepAlive::Infinite,
+                KeepAliveConfig::Infinite,
                 None,
                 None,
                 None,
                 ConnectProperties::default(),
+                None,
             )
             .await
         {

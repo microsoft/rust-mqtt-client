@@ -21,7 +21,7 @@ use crate::client::{
         PublishRequestQoS1QoS2, ReauthRequest, SubscriptionRequest,
     },
     session::pkid::PkidPool,
-    session::timer::Timer,
+    timer::Timer,
     token::acknowledgement::buffered::{PubAckToken, PubCompToken, PubRelToken},
     token::completion::buffered::{
         CompletionNotifier, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
@@ -40,7 +40,6 @@ use crate::mqtt_proto::{
 };
 
 mod pkid;
-mod timer;
 
 /// Tracks data related to the MQTT session state
 pub(crate) struct Session<O>
@@ -116,7 +115,8 @@ where
     }
 
     /// Returns the next outgoing MQTT packet to be sent over the network
-    pub async fn next_outgoing_packet(&mut self) -> Option<Packet<O::Shared>> {
+    //pub async fn next_outgoing_packet(&mut self) -> Option<Packet<O::Shared>> {
+    pub async fn next_outgoing_packet(&mut self) -> Packet<O::Shared> {
         // TODO: Now that sending CONNECT is handled outside of `Session::next_outgoing_packet`,
         // it will only ever be called after `incoming_connack(ConnAck)` has been called, right?
         assert!(self.is_connected());
@@ -311,7 +311,7 @@ where
             pingreq_timer.reset();
         }
 
-        Some(packet)
+        packet
     }
 
     /// Returns the next outgoing MQTT packet request to be sent over the network

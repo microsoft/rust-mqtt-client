@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use azure_mqtt::client::{
     ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
-    DisconnectedEvent, new_client,
+    DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use azure_mqtt::mqtt_proto::{self, ConnectReasonCode, Packet};
-use azure_mqtt::packet::{ConnAck, ConnectProperties, KeepAlive};
+use azure_mqtt::packet::{ConnAck, ConnectProperties};
 use matches::assert_matches;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -46,11 +46,15 @@ async fn connect_connack_success() {
                 timeout: None,
             },
             false,
-            KeepAlive::Duration(keep_alive_time),
+            KeepAliveConfig::Duration {
+                ping_after: keep_alive_time,
+                response_timeout: Duration::from_secs(5),
+            },
             None,
             None,
             None,
             ConnectProperties::default(),
+            Some(Duration::from_secs(5)),
         )
         .await
     else {
@@ -72,6 +76,9 @@ async fn connect_connack_success() {
 
     let server_connect = outgoing_packets_rx.recv().await.unwrap();
     assert_matches!(server_connect, Packet::PingReq(mqtt_proto::PingReq));
+    incoming_packets_tx
+        .send(Packet::PingResp(mqtt_proto::PingResp))
+        .unwrap();
 
     // Server EOF
     drop(incoming_packets_tx);
