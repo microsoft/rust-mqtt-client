@@ -11,7 +11,7 @@
 use std::{future::Future, io, num::NonZeroU16, pin::pin, time::Duration};
 
 use bytes::{Bytes, BytesMut};
-use futures_util::future::{self, FutureExt as _};
+use futures_util::future;
 use openssl::{
     pkey::{PKey, Private},
     ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVersion},
@@ -924,8 +924,12 @@ impl Connection {
                 // If there is a ping timer, use its remaining duration as a timeout for the I/O future.
                 let timeout = pingresp_timer.as_ref().map(Timer::remaining_duration);
                 match maybe_timeout(timeout, io_f).await {
-                    Ok(future::Either::Left((packet, _))) => future::Either::Left(packet),
+                    Ok(future::Either::Left((packet, _))) => {
+                        log::debug!("OUTGOING: {packet:?}");
+                        future::Either::Left(packet)
+                    }
                     Ok(future::Either::Right((Ok(raw_packet), _))) => {
+                        log::debug!("INCOMING: {raw_packet:?}");
                         future::Either::Right(Ok(raw_packet))
                     }
                     Ok(future::Either::Right((Err(err), _))) => future::Either::Right(Err(err)),
@@ -934,24 +938,21 @@ impl Connection {
             };
             match next {
                 // Outgoing packet from session
-                future::Either::Left(mut packet) => {
+                future::Either::Left(packet) => {
                     let mut disconnect = false;
-                    while let Some(packet_) = packet {
-                        if let Packet::Disconnect(disconnect_) = &packet_ {
-                            disconnect = true;
-                            self.session.client_disconnect(disconnect_);
-                        }
-                        if let Packet::PingReq(_) = &packet_
-                            && let Some(pingresp_timeout) = self.cfg_pingresp_timeout
-                        {
-                            pingresp_timer = Some(Timer::new(pingresp_timeout));
-                        }
-                        writer.write(&packet_, ProtocolVersion::V5).await?;
-                        if disconnect {
-                            break;
-                        }
-                        packet = self.session.next_outgoing_packet().now_or_never().flatten();
+
+                    if let Packet::Disconnect(disconnect_) = &packet {
+                        disconnect = true;
+                        self.session.client_disconnect(disconnect_);
                     }
+                    if let Packet::PingReq(_) = &packet
+                        && let Some(pingresp_timeout) = self.cfg_pingresp_timeout
+                    {
+                        pingresp_timer = Some(Timer::new(pingresp_timeout));
+                    }
+
+                    writer.write(&packet, ProtocolVersion::V5).await?;
+
                     writer.flush().await?;
                     // If we wrote a DISCONNECT packet, also close the connection.
                     if disconnect {
