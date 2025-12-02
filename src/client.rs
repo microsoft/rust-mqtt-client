@@ -51,7 +51,7 @@ use crate::mqtt_proto::{
 use crate::packet::{
     Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
     DisconnectProperties, KeepAlive, PacketIdentifier, Publish, PublishProperties, QoS,
-    RetainHandling, SubscribeProperties, UnsubscribeProperties, Will,
+    RetainOptions, SubscribeProperties, UnsubscribeProperties, Will,
 };
 use crate::topic::{TopicFilter, TopicName};
 
@@ -352,8 +352,7 @@ impl Client {
         topic_filter: TopicFilter,
         max_qos: QoS,
         no_local: bool,
-        retain_as_published: bool,
-        retain_handling: RetainHandling,
+        retain_options: RetainOptions,
         properties: SubscribeProperties,
     ) -> Result<SubscribeCompletionToken, DetachedError> {
         let (notifier, token) = completion_pair();
@@ -362,8 +361,8 @@ impl Client {
             maximum_qos: max_qos.into(),
             other_properties: mqtt_proto::SubscribeOptionsOtherProperties {
                 no_local,
-                retain_as_published,
-                retain_handling,
+                retain_as_published: retain_options.retain_as_published,
+                retain_handling: retain_options.retain_handling,
             },
         };
 

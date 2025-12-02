@@ -7,7 +7,7 @@ use azure_mqtt::client::{
 };
 use azure_mqtt::packet::{
     ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
-    QoS, RetainHandling, SubscribeProperties,
+    QoS, RetainOptions, SubscribeProperties,
 };
 use azure_mqtt::topic::{TopicFilter, TopicName};
 
@@ -70,8 +70,7 @@ async fn program(client: Client) {
             TopicFilter::new("test/topic").unwrap(),
             QoS::AtLeastOnce,
             false,
-            false,
-            RetainHandling::DoNotSend,
+            RetainOptions::default(),
             subscribe_properties,
         )
         .await
