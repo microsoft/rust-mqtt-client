@@ -201,6 +201,21 @@ where
     }
 }
 
+#[derive(Clone)]
+pub struct RetainOptions {
+    pub retain_as_published: bool,
+    pub retain_handling: RetainHandling,
+}
+
+impl Default for RetainOptions {
+    fn default() -> Self {
+        RetainOptions {
+            retain_as_published: true,
+            retain_handling: RetainHandling::Send,
+        }
+    }
+}
+
 //////////////////// Packets ////////////////////
 
 /// CONNACK packet

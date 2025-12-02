@@ -5,9 +5,7 @@ use azure_mqtt::client::{
     Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
     ConnectionTransportType, KeepAliveConfig, Receiver, new_client,
 };
-use azure_mqtt::packet::{
-    ConnectProperties, DeliveryQoS, QoS, RetainHandling, SubscribeProperties,
-};
+use azure_mqtt::packet::{ConnectProperties, DeliveryQoS, QoS, RetainOptions, SubscribeProperties};
 use azure_mqtt::topic::TopicFilter;
 
 const DOWNSTREAM_CLIENT_ID: &str = "downstream_client";
@@ -91,8 +89,7 @@ async fn message_relay(mut ds_receiver: Receiver, ds_client: Client, us_client: 
             TopicFilter::new(DOWNSTREAM_SUB_FILTER).unwrap(),
             QoS::AtLeastOnce,
             false,
-            false,
-            RetainHandling::DoNotSend,
+            RetainOptions::default(),
             SubscribeProperties::default(),
         )
         .await

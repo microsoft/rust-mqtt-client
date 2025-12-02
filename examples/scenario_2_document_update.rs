@@ -9,7 +9,7 @@ use azure_mqtt::client::{
     Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
     ConnectionTransportType, KeepAliveConfig, ManualAcknowledgement, Receiver, new_client,
 };
-use azure_mqtt::packet::{ConnectProperties, Publish, QoS, RetainHandling, SubscribeProperties};
+use azure_mqtt::packet::{ConnectProperties, Publish, QoS, RetainOptions, SubscribeProperties};
 use azure_mqtt::topic::TopicFilter;
 
 const CLIENT_ID: &str = "my_client";
@@ -138,8 +138,7 @@ async fn maintain_document(
             TopicFilter::new(GET_FILTER).unwrap(),
             QoS::AtLeastOnce,
             false,
-            false,
-            RetainHandling::DoNotSend,
+            RetainOptions::default(),
             SubscribeProperties::default(),
         )
         .await
@@ -158,8 +157,7 @@ async fn maintain_document(
                 TopicFilter::new(UPDATE_FILTER).unwrap(),
                 QoS::AtLeastOnce,
                 false,
-                false,
-                RetainHandling::DoNotSend,
+                RetainOptions::default(),
                 SubscribeProperties::default(),
             )
             .await
