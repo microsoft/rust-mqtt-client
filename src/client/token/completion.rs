@@ -10,7 +10,7 @@ use thiserror::Error;
 #[derive(Clone, PartialEq, Debug, Error)]
 pub enum CompletionError {
     #[error("Communication channels with the client have been closed")]
-    Detatched,
+    Detached,
     #[error("The operation was cancelled")]
     Cancelled,
 }
@@ -49,7 +49,7 @@ macro_rules! make_completion_token_ty {
                         std::task::Poll::Ready(Ok(($map_fn)(value)))
                     }
                     std::task::Poll::Ready(Err(_)) => {
-                        std::task::Poll::Ready(Err($crate::client::token::completion::CompletionError::Detatched))
+                        std::task::Poll::Ready(Err($crate::client::token::completion::CompletionError::Detached))
                     }
                     std::task::Poll::Pending => std::task::Poll::Pending,
                 }
@@ -160,7 +160,7 @@ pub(crate) mod buffered {
         ) -> Poll<Self::Output> {
             match Pin::new(&mut self.0).poll(cx) {
                 Poll::Ready(Ok(value)) => Poll::Ready(value),
-                Poll::Ready(Err(_)) => Poll::Ready(Err(CompletionError::Detatched)),
+                Poll::Ready(Err(_)) => Poll::Ready(Err(CompletionError::Detached)),
                 Poll::Pending => Poll::Pending,
             }
         }
@@ -271,6 +271,6 @@ mod test {
         drop(notifier);
 
         let res = token.await;
-        assert_eq!(res, Err(CompletionError::Detatched));
+        assert_eq!(res, Err(CompletionError::Detached));
     }
 }
