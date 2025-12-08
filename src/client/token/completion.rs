@@ -11,8 +11,8 @@ use thiserror::Error;
 pub enum CompletionError {
     #[error("Communication channels with the client have been closed")]
     Detached,
-    #[error("The operation was cancelled")]
-    Cancelled,
+    #[error("The operation was canceled")]
+    Canceled,
 }
 
 // TODO: can we make this only available in the crate?
@@ -184,7 +184,7 @@ pub(crate) mod buffered {
         /// Issue a cancellation to the associated token(s).
         /// If all the token(s) have been dropped, an error is returned.
         pub fn cancel(self) -> Result<(), String> {
-            match self.0.send(Err(CompletionError::Cancelled)) {
+            match self.0.send(Err(CompletionError::Canceled)) {
                 Ok(()) => Ok(()),
                 Err(Ok(_)) => unreachable!(),
                 Err(Err(_)) => Err("Token dropped".to_string()),
@@ -224,7 +224,7 @@ mod test {
         notifier.cancel().unwrap();
 
         let res = token.await;
-        assert_eq!(res, Err(CompletionError::Cancelled));
+        assert_eq!(res, Err(CompletionError::Canceled));
     }
 
     #[tokio::test]
@@ -249,7 +249,7 @@ mod test {
         notifier.cancel().unwrap();
 
         let res = handle.await.unwrap();
-        assert_eq!(res, Err(CompletionError::Cancelled));
+        assert_eq!(res, Err(CompletionError::Canceled));
     }
 
     #[tokio::test]
