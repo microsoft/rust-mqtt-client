@@ -37,7 +37,7 @@ use crate::client::{
         reauth::ReauthToken,
     },
 };
-use crate::error::{ConnectError, DetachedError, ProtocolError};
+use crate::error::{ConnectError, DetachedError, ProtocolError, ProtocolErrorRepr};
 use crate::io::{Reader, Writer};
 use crate::mqtt_proto::{
     self,
@@ -484,7 +484,7 @@ impl ConnectHandle {
             Ok(Ok(_)) => {
                 return ConnectResult::Failure(
                     self,
-                    ConnectError::Protocol(ProtocolError::UnexpectedPacket),
+                    ConnectError::Protocol(ProtocolErrorRepr::UnexpectedPacket.into()),
                 );
             }
             Ok(Err(err)) => return ConnectResult::Failure(self, err.into()),
@@ -629,7 +629,7 @@ impl ConnectHandle {
 
             _ => ConnectEnhancedAuthResult::Failure(
                 self,
-                ConnectError::Protocol(ProtocolError::UnexpectedPacket),
+                ConnectError::Protocol(ProtocolErrorRepr::UnexpectedPacket.into()),
             ),
         }
     }
@@ -870,7 +870,7 @@ impl EnhancedAuthHandle {
                 };
                 ConnectEnhancedAuthResult::Failure(
                     connect_handle,
-                    ConnectError::Protocol(ProtocolError::UnexpectedPacket),
+                    ConnectError::Protocol(ProtocolErrorRepr::UnexpectedPacket.into()),
                 )
             }
         }
@@ -1001,7 +1001,7 @@ impl Connection {
                     }
 
                     packet => {
-                        let err = ProtocolError::UnexpectedPacket.into();
+                        let err = ProtocolError::from(ProtocolErrorRepr::UnexpectedPacket).into();
                         self.session.transport_disconnect(&err);
                         return Err(err);
                     }
@@ -1186,7 +1186,7 @@ async fn mqtt_receive(
         &mut raw_packet.rest,
         ProtocolVersion::V5,
     )
-    .map_err(ProtocolError::from)?;
+    .map_err(|e| ProtocolError::from(ProtocolErrorRepr::from(e)))?;
     Ok(packet)
 }
 

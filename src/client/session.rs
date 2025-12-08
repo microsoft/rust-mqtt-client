@@ -31,7 +31,7 @@ use crate::client::{
     },
     token::reauth::buffered::ReauthToken,
 };
-use crate::error::ProtocolError;
+use crate::error::{ProtocolError, ProtocolErrorRepr};
 use crate::mqtt_proto::{
     Auth, AuthenticateReasonCode, ByteStr, ConnAck, ConnectReasonCode, Disconnect, KeepAlive,
     Packet, PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel,
@@ -389,7 +389,7 @@ where
                 self.pkid_pool.release_pkid(suback.packet_identifier);
                 let Some(notifier) = self.inflight.subscribe.remove(&suback.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(suback);
             }
@@ -400,7 +400,7 @@ where
                     .unsubscribe
                     .remove(&unsuback.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(unsuback);
             }
@@ -411,7 +411,7 @@ where
                     .publish_qos1
                     .shift_remove(&puback.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(puback);
             }
@@ -433,7 +433,7 @@ where
                     .publish_qos2
                     .shift_remove(&pubrec.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
 
                 _ = notifier.complete((pubrec, token));
@@ -441,7 +441,7 @@ where
             CompletedOperation::PubRec(pubrel) => {
                 let Some((_, notifier)) = self.inflight.pubrec.remove(&pubrel.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 let token = PubCompToken::new(pubrel.packet_identifier, self.ch.ack_tx.clone());
                 _ = notifier.complete((pubrel, token));
@@ -453,7 +453,7 @@ where
                     .pubrel
                     .shift_remove(&pubcomp.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(pubcomp);
             }
@@ -586,14 +586,14 @@ where
             // TODO: Validate authentication method from CONNACK
             AuthenticateReasonCode::Success => {
                 let Some(notifier) = self.inflight.auth.take() else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(ReauthResult::Success(auth));
             }
             AuthenticateReasonCode::ContinueAuthentication => {
                 //pass on, do not stop tracking
                 let Some(notifier) = self.inflight.auth.take() else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 let token = ReauthToken {
                     method: auth
@@ -608,7 +608,7 @@ where
             }
             AuthenticateReasonCode::ReAuthenticate => {
                 // AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server
-                return Err(ProtocolError::UnexpectedPacket);
+                return Err(ProtocolErrorRepr::UnexpectedPacket)?;
             }
         }
         Ok(())
