@@ -24,14 +24,13 @@ use crate::client::{
     timer::Timer,
     token::acknowledgement::buffered::{PubAckToken, PubCompToken, PubRelToken},
     token::completion::buffered::{
-        CompletionNotifier, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
-        PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
-        PublishQoS2CompletionNotifier, ReauthCompletionNotifier, SubscribeCompletionNotifier,
-        UnsubscribeCompletionNotifier,
+        PubRecAcceptCompletionNotifier, PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
+        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, ReauthCompletionNotifier,
+        SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
     },
     token::reauth::buffered::ReauthToken,
 };
-use crate::error::ProtocolError;
+use crate::error::{ProtocolError, ProtocolErrorRepr};
 use crate::mqtt_proto::{
     Auth, AuthenticateReasonCode, ByteStr, ConnAck, ConnectReasonCode, Disconnect, KeepAlive,
     Packet, PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel,
@@ -389,7 +388,7 @@ where
                 self.pkid_pool.release_pkid(suback.packet_identifier);
                 let Some(notifier) = self.inflight.subscribe.remove(&suback.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(suback);
             }
@@ -400,7 +399,7 @@ where
                     .unsubscribe
                     .remove(&unsuback.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(unsuback);
             }
@@ -411,7 +410,7 @@ where
                     .publish_qos1
                     .shift_remove(&puback.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(puback);
             }
@@ -433,7 +432,7 @@ where
                     .publish_qos2
                     .shift_remove(&pubrec.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
 
                 _ = notifier.complete((pubrec, token));
@@ -441,7 +440,7 @@ where
             CompletedOperation::PubRec(pubrel) => {
                 let Some((_, notifier)) = self.inflight.pubrec.remove(&pubrel.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 let token = PubCompToken::new(pubrel.packet_identifier, self.ch.ack_tx.clone());
                 _ = notifier.complete((pubrel, token));
@@ -453,7 +452,7 @@ where
                     .pubrel
                     .shift_remove(&pubcomp.packet_identifier)
                 else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(pubcomp);
             }
@@ -586,14 +585,14 @@ where
             // TODO: Validate authentication method from CONNACK
             AuthenticateReasonCode::Success => {
                 let Some(notifier) = self.inflight.auth.take() else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 _ = notifier.complete(ReauthResult::Success(auth));
             }
             AuthenticateReasonCode::ContinueAuthentication => {
                 //pass on, do not stop tracking
                 let Some(notifier) = self.inflight.auth.take() else {
-                    return Err(ProtocolError::UnexpectedPacket);
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
                 let token = ReauthToken {
                     method: auth
@@ -608,7 +607,7 @@ where
             }
             AuthenticateReasonCode::ReAuthenticate => {
                 // AuthenticateReasonCode::ReAuthenticate (0x19) is not possible to be sent by the server
-                return Err(ProtocolError::UnexpectedPacket);
+                return Err(ProtocolErrorRepr::UnexpectedPacket)?;
             }
         }
         Ok(())
@@ -623,16 +622,19 @@ where
         self.pingreq_timer = None;
         // Remove and cancel all in-flight SUBSCRIBEs
         for (pkid, notifier) in self.inflight.subscribe.drain() {
-            let _ = notifier.cancel();
+            let _ = notifier.cancel("Client disconnected");
             self.pkid_pool.release_pkid(pkid);
         }
         // Remove and cancel all in-flight UNSUBSCRIBEs
         for (pkid, notifier) in self.inflight.unsubscribe.drain() {
-            let _ = notifier.cancel();
+            let _ = notifier.cancel("Client disconnected");
             self.pkid_pool.release_pkid(pkid);
         }
         // Remove and cancel any in-flight AUTH
-        self.inflight.auth.take().map(CompletionNotifier::cancel);
+        self.inflight
+            .auth
+            .take()
+            .map(|n| n.cancel("Client disconnected"));
 
         // Build list of packets to replay
         self.inflight.packets_to_replay.clear();
@@ -674,21 +676,21 @@ where
     fn session_expired(&mut self) {
         // Remove and cancel all in-flight QoS 1 PUBLISHes
         for (pkid, (_, notifier)) in self.inflight.publish_qos1.drain(..) {
-            let _ = notifier.cancel();
+            let _ = notifier.cancel("MQTT session expired");
             self.pkid_pool.release_pkid(pkid);
         }
         // Remove and cancel all in-flight QoS 2 PUBLISHes
         for (pkid, (_, notifier)) in self.inflight.publish_qos2.drain(..) {
-            let _ = notifier.cancel();
+            let _ = notifier.cancel("MQTT session expired");
             self.pkid_pool.release_pkid(pkid);
         }
         // Remove and cancel all in-flight PUBREC
         for (pkid, (_, notifier)) in self.inflight.pubrec.drain() {
-            let _ = notifier.cancel();
+            let _ = notifier.cancel("MQTT session expired");
         }
         // Remove and cancel all in-flight PUBREL
         for (pkid, (_, notifier)) in self.inflight.pubrel.drain(..) {
-            let _ = notifier.cancel();
+            let _ = notifier.cancel("MQTT session expired");
         }
         self.inflight.packets_to_replay.clear();
 
