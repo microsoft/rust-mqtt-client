@@ -60,8 +60,8 @@ async fn connect_connack_success() {
     else {
         panic!("expected successful connect")
     };
-    let server_connect = outgoing_packets_rx.recv().await.unwrap();
-    assert_matches!(server_connect, Packet::Connect(mqtt_proto::Connect { .. }));
+    let outgoing_packet = outgoing_packets_rx.recv().await.unwrap();
+    assert_matches!(outgoing_packet, Packet::Connect(mqtt_proto::Connect { .. }));
     assert_matches!(connack, ConnAck { .. });
 
     let mut connection = pin!(connection.run_until_disconnect());
@@ -74,8 +74,8 @@ async fn connect_connack_success() {
     )
     .await;
 
-    let server_connect = outgoing_packets_rx.recv().await.unwrap();
-    assert_matches!(server_connect, Packet::PingReq(mqtt_proto::PingReq));
+    let outgoing_packet = outgoing_packets_rx.recv().await.unwrap();
+    assert_matches!(outgoing_packet, Packet::PingReq(mqtt_proto::PingReq));
     incoming_packets_tx
         .send(Packet::PingResp(mqtt_proto::PingResp))
         .unwrap();
