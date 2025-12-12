@@ -212,8 +212,7 @@ async fn auth_reauth() {
         )
         .await
         .unwrap();
-    // TODO: What to do with this new `reauth_token` ? It seems to not be useful for anything, since `reauth_handle.reauth` will return a new one.
-    let ReauthResult::Continue(incoming_auth, _reauth_token) =
+    let ReauthResult::Continue(incoming_auth, reauth_token) =
         run_with_connection(&mut connection, reauth_token)
             .await
             .unwrap()
@@ -255,8 +254,8 @@ async fn auth_reauth() {
         }))
         .unwrap();
 
-    let reauth_token = reauth_handle
-        .reauth(
+    let reauth_token = reauth_token
+        .continue_reauth(
             Some(Bytes::from_static(b"some client data reauth 2")),
             Default::default(),
         )
@@ -273,7 +272,7 @@ async fn auth_reauth() {
     assert_matches!(
         outgoing_packet,
         Packet::Auth(mqtt_proto::Auth {
-            reason_code: AuthenticateReasonCode::ReAuthenticate,
+            reason_code: AuthenticateReasonCode::ContinueAuthentication,
             authentication: Some(Authentication {
                 method,
                 data: Some(data),
