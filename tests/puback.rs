@@ -4,20 +4,22 @@
 use std::pin::pin;
 use std::time::Duration;
 
-use azure_mqtt::client::token::acknowledgement::PubAckToken;
 use azure_mqtt::client::{
     ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
-    DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement, Receiver, new_client,
+    DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement, new_client,
 };
 use azure_mqtt::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
     topic,
 };
-use azure_mqtt::packet::{ConnAck, ConnectProperties, PubAckProperties, Publish};
+use azure_mqtt::packet::{ConnAck, ConnectProperties};
 use bytes::Bytes;
-use futures_util::future::{Either, FutureExt, select};
+use futures_util::future::FutureExt as _;
 use matches::assert_matches;
 use tokio::sync::mpsc::unbounded_channel;
+
+mod common;
+use common::{accept_publish, receive_publish};
 
 #[tokio::test(start_paused = true)]
 async fn puback() {
@@ -247,37 +249,4 @@ async fn puback() {
         }))) if packet_identifier.get() == 8
     );
     assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
-}
-
-async fn run_with_connection<F>(connection: impl Future + Unpin, f: F) -> Option<F::Output>
-where
-    F: Future + Unpin,
-{
-    match select(f, connection).await {
-        Either::Left((result, _)) => Some(result),
-        Either::Right(_) => None,
-    }
-}
-
-async fn receive_publish(
-    connection: impl Future + Unpin,
-    receiver: &mut Receiver,
-) -> (Publish, ManualAcknowledgement) {
-    let f = pin!(receiver.recv());
-    match run_with_connection(connection, f).await {
-        Some(Some((publish, manual_ack))) => (publish, manual_ack),
-        _ => panic!("did not receive expected PUBLISH and ack token"),
-    }
-}
-
-async fn accept_publish(
-    connection: impl Future + Unpin,
-    ack_token: PubAckToken,
-    properties: PubAckProperties,
-) {
-    let f = pin!(ack_token.accept(properties));
-    match run_with_connection(connection, f).await {
-        Some(_) => (),
-        _ => panic!("did not manage to ack PUBLISH"),
-    }
 }
