@@ -11,13 +11,16 @@ clean:
 .PHONY: test
 test:
 	cargo test --lib
-	cargo test --features '__integration' --test '*'
-	cargo clippy \
-		--features '__integration' \
-		--tests \
-		--examples \
-		-- \
-		--deny=warnings
+	set -euo pipefail; \
+	for feature_set in '__integration' 'websockets,__integration'; do \
+		cargo test --features "$$feature_set" --test '*' && \
+		cargo clippy \
+			--features "$$feature_set" \
+			--tests \
+			--examples \
+			-- \
+			--deny=warnings; \
+	done
 
 
 .PHONY: check

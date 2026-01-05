@@ -150,6 +150,7 @@ pub enum ConnectionTransportType {
         port: u16,
         config: ConnectionTransportTlsConfig,
     },
+    #[cfg(feature = "websockets")]
     Ws {
         request: async_tungstenite::tungstenite::handshake::client::Request,
         tls_config: ConnectionTransportTlsConfig,
@@ -673,6 +674,7 @@ impl ConnectHandle {
                 .await??
             }
 
+            #[cfg(feature = "websockets")]
             ConnectionTransportType::Ws {
                 request,
                 tls_config,
