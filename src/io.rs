@@ -20,6 +20,7 @@ pub mod tokio_tcp;
 
 pub mod tokio_tls;
 
+#[cfg(feature = "websockets")]
 pub mod tokio_ws;
 
 mod writer;
