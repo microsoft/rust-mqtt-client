@@ -11,9 +11,9 @@ clean:
 .PHONY: test
 test:
 	cargo test --lib
-	set -euo pipefail; \
+	set -eu; \
 	for feature_set in '__integration' 'websockets,__integration'; do \
-		cargo test --features "$$feature_set" --test '*' && \
+		cargo test --features "$$feature_set" --test '*'; \
 		cargo clippy \
 			--features "$$feature_set" \
 			--tests \
