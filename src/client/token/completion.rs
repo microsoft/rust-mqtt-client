@@ -17,9 +17,17 @@ pub enum CompletionError {
 
 // TODO: can we make this only available in the crate?
 macro_rules! make_completion_token_ty {
-    ($vis:vis struct $token_ty:ident $( < $($ty_param_name:ident : $ty_param_bound:path ),* > )? (CompletionToken< $element_ty:ty >)) => {
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $token_ty:ident
+        $( < $($ty_param_name:ident : $ty_param_bound:path ),* > )?
+        (CompletionToken< $element_ty:ty >)
+    ) => {
+        $(#[$meta])*
         #[derive(Debug)]
-        $vis struct $token_ty $(< $($ty_param_name : $ty_param_bound),* >)? (pub(crate) crate::client::token::completion::buffered::CompletionToken<$element_ty>);
+        $vis struct $token_ty $(< $($ty_param_name : $ty_param_bound),* >)? (
+            pub(crate) crate::client::token::completion::buffered::CompletionToken<$element_ty>
+        );
 
         impl $(< $($ty_param_name : $ty_param_bound),* >)? std::future::Future for $token_ty $(< $($ty_param_name ),* >)? {
             type Output = Result<$element_ty, $crate::client::token::completion::CompletionError>;
@@ -33,7 +41,12 @@ macro_rules! make_completion_token_ty {
         }
     };
 
-    ($vis:vis struct $token_ty:ident (CompletionToken< $original_element_ty:ty > -> $element_ty:ty $map_fn:block )) => {
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $token_ty:ident
+        (CompletionToken< $original_element_ty:ty > -> $element_ty:ty $map_fn:block )
+    ) => {
+        $(#[$meta])*
         #[derive(Debug)]
         $vis struct $token_ty(pub(crate) buffered::CompletionToken<$original_element_ty>);
 
@@ -58,11 +71,22 @@ macro_rules! make_completion_token_ty {
     };
 }
 
-make_completion_token_ty!(pub struct PublishQoS0CompletionToken(CompletionToken<()>));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a QoS 0 PUBLISH operation
+    /// (i.e. when the PUBLISH has been sent out onto the network).
+    pub struct PublishQoS0CompletionToken(CompletionToken<()>)
+);
 
-make_completion_token_ty!(pub struct PublishQoS1CompletionToken(CompletionToken<crate::mqtt_proto::PubAck<Bytes>> -> crate::packet::PubAck { Into::into }));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a QoS 1 PUBLISH operation
+    /// (i.e. when the PUBACK has been received from the server).
+    pub struct PublishQoS1CompletionToken(CompletionToken<crate::mqtt_proto::PubAck<Bytes>> -> crate::packet::PubAck { Into::into })
+);
 
-make_completion_token_ty!(pub struct PublishQoS2CompletionToken(
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a QoS 2 PUBLISH operation
+    /// (i.e. when the PUBREC has been received from the server).
+    pub struct PublishQoS2CompletionToken(
     CompletionToken<(
         crate::mqtt_proto::PubRec<Bytes>,
         Option<crate::client::token::acknowledgement::buffered::PubRelToken<Bytes>>,
@@ -71,10 +95,13 @@ make_completion_token_ty!(pub struct PublishQoS2CompletionToken(
         Option<crate::client::token::acknowledgement::PubRelToken>,
     ) {
         |(pubrec, token): (_, Option<_>)| (crate::packet::PubRec::from(pubrec), token.map(crate::client::token::acknowledgement::PubRelToken))
-    }
-));
+    })
+);
 
-make_completion_token_ty!(pub struct PubRecAcceptCompletionToken(
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a PUBREC acceptance operation
+    /// (i.e. when the PUBREL has been received from the server).
+    pub struct PubRecAcceptCompletionToken(
     CompletionToken<(
         crate::mqtt_proto::PubRel<Bytes>,
         crate::client::token::acknowledgement::buffered::PubCompToken<Bytes>,
@@ -83,22 +110,48 @@ make_completion_token_ty!(pub struct PubRecAcceptCompletionToken(
         crate::client::token::acknowledgement::PubCompToken,
     ) {
         |(pubrel, pubcomp_token)| (crate::packet::PubRel::from(pubrel), crate::client::token::acknowledgement::PubCompToken(pubcomp_token))
-    }
-));
+    })
+);
 
-make_completion_token_ty!(pub struct PubRecRejectCompletionToken(CompletionToken<()>));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a PUBREC rejection operation
+    /// (i.e. when the PUBREC has been sent out onto the network).
+    pub struct PubRecRejectCompletionToken(CompletionToken<()>));
 
-make_completion_token_ty!(pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<Bytes>> -> crate::packet::PubComp { Into::into }));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a PUBREL operation
+    /// (i.e. when the PUBCOMP has been received from the server).
+    pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<Bytes>> -> crate::packet::PubComp { Into::into })
+);
 
-make_completion_token_ty!(pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<Bytes>> -> crate::packet::SubAck { Into::into }));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a SUBSCRIBE operation.
+    /// (i.e. when the SUBACK has been received from the server).
+    pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<Bytes>> -> crate::packet::SubAck { Into::into })
+);
 
-make_completion_token_ty!(pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<Bytes>> -> crate::packet::UnsubAck { Into::into }));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of an UNSUBSCRIBE operation.
+    /// (i.e. when the UNSUBACK has been received from the server).
+    pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<Bytes>> -> crate::packet::UnsubAck { Into::into })
+);
 
-make_completion_token_ty!(pub struct ReauthCompletionToken(CompletionToken<crate::client::buffered::ReauthResult<Bytes>> -> crate::client::ReauthResult { Into::into }));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a re-authentication operation.
+    /// (i.e. when the AUTH response has been received from the server).
+    pub struct ReauthCompletionToken(CompletionToken<crate::client::buffered::ReauthResult<Bytes>> -> crate::client::ReauthResult { Into::into }));
 
-make_completion_token_ty!(pub struct PubAckCompletionToken(CompletionToken<()>));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a PUBACK operation.
+    /// (i.e. when the PUBACK has been sent out onto the network).
+    pub struct PubAckCompletionToken(CompletionToken<()>)
+);
 
-make_completion_token_ty!(pub struct PubCompConfirmCompletionToken(CompletionToken<()>));
+make_completion_token_ty!(
+    /// Token that can be awaited for the eventual completion of a PUBCOMP operation.
+    /// (i.e. when the PUBCOMP has been sent out onto the network).
+    pub struct PubCompConfirmCompletionToken(CompletionToken<()>)
+);
 
 pub(crate) mod buffered {
     use std::future::Future;
@@ -128,9 +181,21 @@ pub(crate) mod buffered {
         PubAckCompletionToken, PubCompConfirmCompletionToken, PubRecRejectCompletionToken,
     };
 
-    make_completion_token_ty!(pub struct ReauthCompletionToken<S: Shared>(CompletionToken<ReauthResult<S>>));
-    make_completion_token_ty!(pub struct PubRecAcceptCompletionToken<S: Shared>(CompletionToken<(PubRel<S>, PubCompToken<S>)>));
-    make_completion_token_ty!(pub struct PubRelConfirmCompletionToken<S: Shared>(CompletionToken<PubComp<S>>));
+    make_completion_token_ty!(
+        /// Token that can be awaited for the eventual completion of a re-authentication operation.
+        /// (i.e. when the AUTH response has been received from the server).
+        pub struct ReauthCompletionToken<S: Shared>(CompletionToken<ReauthResult<S>>)
+    );
+    make_completion_token_ty!(
+        /// Token that can be awaited for the eventual completion of a PUBREC acceptance operation
+        /// (i.e. when the PUBREL has been received from the server).
+        pub struct PubRecAcceptCompletionToken<S: Shared>(CompletionToken<(PubRel<S>, PubCompToken<S>)>)
+    );
+    make_completion_token_ty!(
+        /// Token that can be awaited for the eventual completion of a PUBREL confirm operation.
+        /// (i.e. when the PUBCOMP has been received from the server).
+        pub struct PubRelConfirmCompletionToken<S: Shared>(CompletionToken<PubComp<S>>)
+    );
 
     // Aliases for completion notifier types.
     // For internal use where we'd prefer to avoid the mix of user-facing and internal packet types.
