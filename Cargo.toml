@@ -60,10 +60,19 @@ websockets = ["dep:async-tungstenite"]
 # Internal feature used for integration tests
 __integration = []
 
-[lints.rust]
+[lints]
+workspace = true
+
+[workspace]
+members = [
+    ".",
+    "ffi",
+]
+
+[workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 default_trait_access = "allow"
