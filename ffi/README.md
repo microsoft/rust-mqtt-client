@@ -49,6 +49,14 @@ This background thread approach has its own disadvantages but we believe the tra
 
 ## Future plans
 
+- Eventually the `azure_mqtt_ffi.py` script should be published as a Python package.
+
+- It is an open question of how the FFI library `libazure_mqtt_ffi.so` should be shipped. Taking the specific case of the Python package, the ideal case would be to ship the Rust source code inside the Python wheel and then wire it up to be compiled at `pip install` time, but the downside of this is that it requires the user to have C compiler AND Rust compiler AND devel packages of openssl etc.
+
+  The alternative is to ship the precompiled library, but the downside of this is that the precompiled library will be specific to one glibc and one openssl and so on. We would have to ship multiple packages for each combination of glibc and openssl etc that we care about, or at least pick combinations that represent the distros we care to support.
+
+  For the short term the plan is to do the latter, and limit ourselves to just the glibc + openssl 3 combination.
+
 - The C header is currently hand-written. It could be auto-generated from the Rust source using a tool like `cbindgen`. However this might create problems for some languages, eg Python's `cffi` library supports only a subset of C that the current hand-written header caters to (no unions, no `#include`s, etc), so it might not be feasible.
 
 - Some functions take `Foo *` and do not consume it, so the FFI caller is allowed to use the `Foo` for future API calls. Other functions take `Foo *` and consume it, so the FFI caller must not reuse the `Foo` or release it. FFI values are opaque so the C interface has to put them behind pointers, which then creates this ambiguity in the function signature. There doesn't seem to be a way around this other than documenting the behavior for each function in the C header and then being careful to follow it in every language wrapper.
@@ -62,5 +70,7 @@ This background thread approach has its own disadvantages but we believe the tra
   This is not necessarily feasible though, because it depends on the language making it possible to "leak" the `char *` at the time the FFI function is called, and then knowing that it can be released only at some later time when the Rust side is done with it. Thus the FFI BufferPool would need a way to signal to the language side when the Rust side is done with a buffer permanently.
 
   Also the "complex" API doesn't exist yet. But it is likely to be a copy-paste of the "simple" API for the most part. In fact some of the "simple" API is a wrapper around the "complex" API already, just the "complex" API isn't publicly exported.
+
+  An alternative is to expose `BufferPool::take_owned` in the FFI interface, so that the language side can allocate a buffer from the Rust side, write its string / payload into it, and then hand it off to the FFI API. This way the Rust side would own the buffer and thus it would be automatically be released when it's used up. This approach can work with the default `BufferPool` so it wouldn't require an FFI-specific `BufferPool`.
 
 - Currently the `Client` / `Receiver` communication uses tokio channels, which means functions like `client_publish_qos0` need to spin up a singe-use tokio runtime to send the request over the channel. It could be useful to use unbounded channels here since the unbounded sender does not require a tokio runtime. It comes with the obvious disadvantage of being unbounded and thus not applying backpressure, but it is possible to implement backpressure manually by counting the number of elements in the channel queue (MQ does this for example) so it's not a concern.

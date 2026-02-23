@@ -1,9 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{
-    ffi::c_char,
-};
+use std::ffi::c_char;
 
 use bytes::Bytes;
 
@@ -52,15 +50,14 @@ pub struct NewClient {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn new_client(options: ClientOptions) -> NewClient {
-    let client_id =
-        if options.client_id.is_null() {
-            None
-        }
-        else {
-            let client_id = unsafe { std::ffi::CStr::from_ptr(options.client_id) };
-            Some(client_id.to_string_lossy().into_owned())
-        };
-    let max_packet_identifier = rust::packet::PacketIdentifier::new(options.max_packet_identifier).unwrap_or(rust::packet::PacketIdentifier::MAX);
+    let client_id = if options.client_id.is_null() {
+        None
+    } else {
+        let client_id = unsafe { std::ffi::CStr::from_ptr(options.client_id) };
+        Some(client_id.to_string_lossy().into_owned())
+    };
+    let max_packet_identifier = rust::packet::PacketIdentifier::new(options.max_packet_identifier)
+        .unwrap_or(rust::packet::PacketIdentifier::MAX);
     let options = rust::client::ClientOptions {
         client_id,
         max_packet_identifier,
@@ -88,7 +85,10 @@ pub struct ConnectionTransportConfigTcp {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_handle_connect_tcp(connect_handle: ConnectHandlePtr, connection_transport: ConnectionTransportConfigTcp) -> bool {
+pub unsafe extern "C" fn connect_handle_connect_tcp(
+    connect_handle: ConnectHandlePtr,
+    connection_transport: ConnectionTransportConfigTcp,
+) -> bool {
     let connect_handle = unsafe { std::ptr::read(connect_handle) };
     let connection_transport = {
         let hostname = unsafe { std::ffi::CStr::from_ptr(connection_transport.hostname) };
@@ -106,18 +106,23 @@ pub unsafe extern "C" fn connect_handle_connect_tcp(connect_handle: ConnectHandl
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         let result = runtime.block_on(async {
-            let result = connect_handle.connect(
-                connection_transport,
-                false,
-                rust::client::KeepAliveConfig::Infinite,
-                None,
-                None,
-                None,
-                rust::packet::ConnectProperties::default(),
-                None,
-            ).await;
+            let result = connect_handle
+                .connect(
+                    connection_transport,
+                    false,
+                    rust::client::KeepAliveConfig::Infinite,
+                    None,
+                    None,
+                    None,
+                    rust::packet::ConnectProperties::default(),
+                    None,
+                )
+                .await;
             match result {
                 rust::client::ConnectResult::Success(connection, _, _) => {
                     println!("Success");
@@ -125,13 +130,13 @@ pub unsafe extern "C" fn connect_handle_connect_tcp(connect_handle: ConnectHandl
                     _ = connection.run_until_disconnect().await;
                     // TODO: return .await result
                     Ok(())
-                },
+                }
                 rust::client::ConnectResult::Failure(_, err) => {
                     println!("Failure: {err}");
                     tx.send(false);
                     // TODO: return actual err
                     Err(())
-                },
+                }
             }
         });
         println!("bg thread ended with {result:?}");
@@ -141,7 +146,12 @@ pub unsafe extern "C" fn connect_handle_connect_tcp(connect_handle: ConnectHandl
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn client_publish_qos0(client: *const rust::client::Client, topic_name: *const c_char, payload: *const u8, payload_len: usize) {
+pub unsafe extern "C" fn client_publish_qos0(
+    client: *const rust::client::Client,
+    topic_name: *const c_char,
+    payload: *const u8,
+    payload_len: usize,
+) {
     let client = unsafe { &*client };
     let topic_name = {
         let topic_name = unsafe { std::ffi::CStr::from_ptr(topic_name) };
@@ -152,8 +162,15 @@ pub unsafe extern "C" fn client_publish_qos0(client: *const rust::client::Client
         let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) };
         Bytes::copy_from_slice(payload)
     };
-    println!("received client at 0x{:016x}", <*const rust::client::Client>::addr(client));
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-    let result = runtime.block_on(client.publish_qos0(topic_name, payload, false, Default::default()));
+    println!(
+        "received client at 0x{:016x}",
+        <*const rust::client::Client>::addr(client)
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let result =
+        runtime.block_on(client.publish_qos0(topic_name, payload, false, Default::default()));
     println!("publish result: {result:?}");
 }

@@ -225,7 +225,7 @@ where
 
 impl<S> ReadableStream for WebSocketStreamRead<S>
 where
-    S: Send,
+    S: Send + Sync,
     WebSocketStream<S>: AsyncRead,
 {
     fn read<'a, 'buf>(
@@ -239,7 +239,7 @@ where
 
 impl<S> WritableStream for WebSocketStreamWrite<S>
 where
-    S: Send,
+    S: Send + Sync,
     WebSocketStream<S>: AsyncWrite,
 {
     fn write_vectored<'a, 'buf>(
