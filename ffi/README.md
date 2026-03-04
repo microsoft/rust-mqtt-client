@@ -44,7 +44,7 @@ This background thread approach has its own disadvantages but we believe the tra
 
 - A large number of clients leads to a large number of background threads. However we do not expect there to be a large number of clients.
 
-- Communicating with a background thread requires the overhead of message passing using channels. However this overhead is already there because even with the Rust client library there are channels used to communicate between the `Client` / `Receiver` and the `Session`. So we are use the same channels for this cross-thread communication also.
+- Communicating with a background thread requires the overhead of message passing using channels. However this overhead is already there because even with the Rust client library there are channels used to communicate between the `Client` / `Receiver` and the `Session`. So we use the same channels for this cross-thread communication also.
 
 
 ## Future plans
@@ -53,9 +53,9 @@ This background thread approach has its own disadvantages but we believe the tra
 
 - It is an open question of how the FFI library `libazure_mqtt_ffi.so` should be shipped. Taking the specific case of the Python package, the ideal case would be to ship the Rust source code inside the Python wheel and then wire it up to be compiled at `pip install` time, but the downside of this is that it requires the user to have C compiler AND Rust compiler AND devel packages of openssl etc.
 
-  The alternative is to ship the precompiled library, but the downside of this is that the precompiled library will be specific to one glibc and one openssl and so on. We would have to ship multiple packages for each combination of glibc and openssl etc that we care about, or at least pick combinations that represent the distros we care to support.
+  The alternative is to ship the precompiled library, but the downside of this is that the precompiled library will be specific to one libc and one openssl and so on. We would have to ship multiple packages for each combination of libc and openssl etc that we care about, or at least pick combinations that represent the distros we care to support.
 
-  For the short term the plan is to do the latter, and limit ourselves to just the glibc + openssl 3 combination.
+  For the short term the plan is to do the latter, and limit ourselves to just whatever works on Azure Linux or Ubuntu, ie the combination of their glibc version + openssl version.
 
 - The C header is currently hand-written. It could be auto-generated from the Rust source using a tool like `cbindgen`. However this might create problems for some languages, eg Python's `cffi` library supports only a subset of C that the current hand-written header caters to (no unions, no `#include`s, etc), so it might not be feasible.
 
