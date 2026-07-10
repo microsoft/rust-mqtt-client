@@ -29,19 +29,10 @@ futures-sink = { version = "0.3.31", default-features = false }
 futures-util = { version = "0.3.31", default-features = false, features = [
     "std", # for futures_util::future::Shared
 ] }
-hkdf = { version = "0.12", default-features = false }
-hmac = { version = "0.12", default-features = false, features = [
-    "reset", # for `hmac::Hmac::finalize_reset`
-] }
-indexmap = { version = "2", default-features = false, features = ["std"] }
-# for kTLS support
-libc = { version = "0.2.171", default-features = false }
+indexmap = { version = "2.12", default-features = false, features = ["std"] }
 log = {version = "0.4.8", default-features = false }
-nix = { version = "0.30", default-features = false, features = ["net", "process", "socket", "zerocopy"] }
 # >= 0.10.72 to clear known RustSec advisories (verified via `cargo deny check advisories`).
 openssl = { version = "0.10.72", default-features = false }
-parking_lot = { version = "0.12", default-features = false }
-sha2 = { version = "0.10", default-features = false }
 thiserror = { version = "2.0.7", default-features = false }
 # >= 1.38.2: RUSTSEC-2025-0023 (broadcast channel unsoundness).
 tokio = { version = "1.38.2", default-features = false, features = ["io-util", "net", "sync", "time"] }
