@@ -5,6 +5,8 @@ use std::num::NonZero;
 use std::pin::pin;
 use std::time::Duration;
 
+use bytes::Bytes;
+use matches::assert_matches;
 use ms_mqtt_client::client::{
     ClientOptions, ConnectEnhancedAuthResult, ConnectionTransportConfig, ConnectionTransportType,
     KeepAliveConfig, ReauthResult, new_client,
@@ -13,8 +15,6 @@ use ms_mqtt_client::mqtt_proto::{
     self, AuthenticateReasonCode, Authentication, ConnectOtherProperties, ConnectReasonCode, Packet,
 };
 use ms_mqtt_client::packet::{Auth, AuthReason, AuthenticationInfo, ConnAck};
-use bytes::Bytes;
-use matches::assert_matches;
 use tokio::sync::mpsc::unbounded_channel;
 
 mod common;

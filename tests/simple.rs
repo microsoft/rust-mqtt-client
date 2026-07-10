@@ -5,13 +5,13 @@ use std::num::NonZeroU16;
 use std::pin::pin;
 use std::time::Duration;
 
+use matches::assert_matches;
 use ms_mqtt_client::client::{
     ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
     DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use ms_mqtt_client::mqtt_proto::{self, ConnectReasonCode, Packet};
 use ms_mqtt_client::packet::{ConnAck, ConnectProperties};
-use matches::assert_matches;
 use tokio::sync::mpsc::unbounded_channel;
 
 #[tokio::test(start_paused = true)]

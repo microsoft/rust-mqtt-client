@@ -4,6 +4,9 @@
 use std::pin::pin;
 use std::time::Duration;
 
+use bytes::Bytes;
+use futures_util::future::FutureExt as _;
+use matches::assert_matches;
 use ms_mqtt_client::client::{
     ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
     DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement, new_client,
@@ -13,9 +16,6 @@ use ms_mqtt_client::mqtt_proto::{
     topic,
 };
 use ms_mqtt_client::packet::{ConnAck, ConnectProperties};
-use bytes::Bytes;
-use futures_util::future::FutureExt as _;
-use matches::assert_matches;
 use tokio::sync::mpsc::unbounded_channel;
 
 mod common;

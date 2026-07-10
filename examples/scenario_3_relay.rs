@@ -5,7 +5,9 @@ use ms_mqtt_client::client::{
     Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
     ConnectionTransportType, KeepAliveConfig, Receiver, new_client,
 };
-use ms_mqtt_client::packet::{ConnectProperties, DeliveryQoS, QoS, RetainOptions, SubscribeProperties};
+use ms_mqtt_client::packet::{
+    ConnectProperties, DeliveryQoS, QoS, RetainOptions, SubscribeProperties,
+};
 use ms_mqtt_client::topic::TopicFilter;
 
 const DOWNSTREAM_CLIENT_ID: &str = "downstream_client";
