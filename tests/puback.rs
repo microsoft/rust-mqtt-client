@@ -5,14 +5,15 @@ use std::pin::pin;
 use std::time::Duration;
 
 use azure_mqtt::client::{
-    ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
-    DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement, new_client,
+    ClientOptions, ConnectResult, DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement,
+    new_client,
 };
 use azure_mqtt::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
     topic,
 };
 use azure_mqtt::packet::{ConnAck, ConnectProperties};
+use azure_mqtt::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use bytes::Bytes;
 use futures_util::future::FutureExt as _;
 use matches::assert_matches;
@@ -49,6 +50,8 @@ async fn puback() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Infinite,
@@ -188,6 +191,8 @@ async fn puback() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Infinite,

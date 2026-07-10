@@ -6,11 +6,11 @@ use std::pin::pin;
 use std::time::Duration;
 
 use azure_mqtt::client::{
-    ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
-    DisconnectedEvent, KeepAliveConfig, new_client,
+    ClientOptions, ConnectResult, DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use azure_mqtt::mqtt_proto::{self, ConnectReasonCode, Packet};
 use azure_mqtt::packet::{ConnAck, ConnectProperties};
+use azure_mqtt::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use matches::assert_matches;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -44,6 +44,8 @@ async fn connect_connack_success() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Duration {

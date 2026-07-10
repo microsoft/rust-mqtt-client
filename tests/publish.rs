@@ -5,14 +5,14 @@ use std::pin::pin;
 use std::time::Duration;
 
 use azure_mqtt::client::{
-    ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
-    DisconnectedEvent, KeepAliveConfig, new_client,
+    ClientOptions, ConnectResult, DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use azure_mqtt::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
 };
 use azure_mqtt::packet::{ConnAck, ConnectProperties};
 use azure_mqtt::topic::TopicName;
+use azure_mqtt::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use bytes::Bytes;
 use futures_util::future::FutureExt;
 use matches::assert_matches;
@@ -46,6 +46,8 @@ async fn publish() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Infinite,
@@ -163,6 +165,8 @@ async fn publish() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Infinite,
@@ -246,6 +250,8 @@ async fn publish() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Infinite,
@@ -307,6 +313,8 @@ async fn wait_for_packet_id_available() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Infinite,
@@ -424,6 +432,8 @@ async fn wait_for_packet_id_available() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Infinite,
@@ -513,6 +523,8 @@ async fn wait_for_packet_id_available() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Infinite,

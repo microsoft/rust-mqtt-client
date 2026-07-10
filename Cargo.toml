@@ -23,18 +23,9 @@ futures-sink = { version = "0.3", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = [
     "std", # for futures_util::future::Shared
 ] }
-hkdf = { version = "0.12", default-features = false }
-hmac = { version = "0.12", default-features = false, features = [
-    "reset", # for `hmac::Hmac::finalize_reset`
-] }
 indexmap = { version = "2.12", default-features = false, features = ["std"] }
-# for kTLS support
-libc = { version = "0.2.151", default-features = false }
 log = {version = "0.4", default-features = false }
-nix = { version = "0.30", default-features = false, features = ["net", "process", "socket", "zerocopy"] }
 openssl = { version = "0.10", default-features = false }
-parking_lot = { version = "0.12", default-features = false }
-sha2 = { version = "0.10", default-features = false }
 test-case = { version = "3", default-features = false }
 thiserror = { version = "2", default-features = false }
 tokio = { version = "1.38", default-features = false, features = ["io-util", "net", "sync", "time"] }

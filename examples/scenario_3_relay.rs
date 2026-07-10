@@ -2,11 +2,11 @@
 // Licensed under the MIT License.
 
 use azure_mqtt::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
-    ConnectionTransportType, KeepAliveConfig, Receiver, new_client,
+    Client, ClientOptions, ConnectHandle, ConnectResult, KeepAliveConfig, Receiver, new_client,
 };
 use azure_mqtt::packet::{ConnectProperties, DeliveryQoS, QoS, RetainOptions, SubscribeProperties};
 use azure_mqtt::topic::TopicFilter;
+use azure_mqtt::transport::{ConnectionTransportConfig, ConnectionTransportType};
 
 const DOWNSTREAM_CLIENT_ID: &str = "downstream_client";
 const UPSTREAM_CLIENT_ID: &str = "upstream_client";
@@ -55,6 +55,8 @@ async fn mqtt_run(mut connect_handle: ConnectHandle) {
                         port: PORT,
                     },
                     timeout: None,
+                    proxy: None,
+                    tcp_nodelay: false,
                 },
                 false,
                 KeepAliveConfig::Infinite,

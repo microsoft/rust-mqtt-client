@@ -6,13 +6,13 @@ use std::pin::pin;
 use std::time::Duration;
 
 use azure_mqtt::client::{
-    ClientOptions, ConnectEnhancedAuthResult, ConnectionTransportConfig, ConnectionTransportType,
-    KeepAliveConfig, ReauthResult, new_client,
+    ClientOptions, ConnectEnhancedAuthResult, KeepAliveConfig, ReauthResult, new_client,
 };
 use azure_mqtt::mqtt_proto::{
     self, AuthenticateReasonCode, Authentication, ConnectOtherProperties, ConnectReasonCode, Packet,
 };
 use azure_mqtt::packet::{Auth, AuthReason, AuthenticationInfo, ConnAck};
+use azure_mqtt::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use bytes::Bytes;
 use matches::assert_matches;
 use tokio::sync::mpsc::unbounded_channel;
@@ -54,6 +54,8 @@ async fn auth_reauth() {
                     outgoing_packets: outgoing_packets_tx,
                 },
                 timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
             },
             false,
             KeepAliveConfig::Duration {
