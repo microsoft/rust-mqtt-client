@@ -4,15 +4,15 @@
 use std::pin::pin;
 use std::time::Duration;
 
-use azure_mqtt::client::{
+use ms_mqtt_client::client::{
     ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
     DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement, new_client,
 };
-use azure_mqtt::mqtt_proto::{
+use ms_mqtt_client::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
     topic,
 };
-use azure_mqtt::packet::{ConnAck, ConnectProperties};
+use ms_mqtt_client::packet::{ConnAck, ConnectProperties};
 use bytes::Bytes;
 use futures_util::future::FutureExt as _;
 use matches::assert_matches;

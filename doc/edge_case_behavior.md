@@ -10,8 +10,8 @@
 | PUBCOMP       | Enter session, wait for reconnect and<br>deliver upon PUBREL redelivery | Enter session, wait for reconnect and<br>deliver upon PUBREL redelivery | N/A | N/A | Considered complete
 | SUBSCRIBE     | Add to session message queue | Add to session message queue | Stays in session message queue | N/A | Issue CompletionError
 | UNSUBSCRIBE   | Add to session message queue | Add to session message queue | Stays in session message queue | N/A | Issue CompletionError
-| CONNECT       | ? | N/A | N/A | N/A | N/A
-| DISCONNECT    | ? |
+| CONNECT       | Only possible while not connected (consumes `ConnectHandle`) | N/A | N/A | N/A | N/A
+| DISCONNECT    | Only possible while connected (via `DisconnectHandle`) | N/A | N/A | N/A | N/A
 
 
 
@@ -21,20 +21,18 @@
 * CompletionToken can be provided as soon as the request goes into the channel
 
 ### Questions
-- What happens if you connect while already connected? Where does that fail?
-- What happens if you disconnect while already disconnected? Does it matter what state you're in?
 - How to handle combo order queueing of PUBACK/PUBREC/PUBREL?
 
 ### Implementation Considerations
-- Can the channel function as the session message queue?
-    - This would require multiple channels and might be a little weird in terms of PKID assignment, but potentially more efficient
-    - Would need a distinct channels for:
-        - QoS 0 PUBLISH (no PKID, not subject to broker receive maximum)
-        - QoS 1 PUBLISH + QoS 2 PUBLISH + SUBSCRIBE + UNSUBSCRIBE (shared PKID ordering, subject to broker receive maximum)
-        - PUBACK + PUBREC + PUBREL + PUBCOMP (need immediately for PKID tracking, ordering [if applicable] is non-linear)
-        - Unclear how CONNECT/DISCONNECT would be handled (maybe the PUBACK/PUBREC/PUBREL/PUBCOMP immediate channel)
-    - If not, channel should probably be size 1 to minimize strange behavior and size, since the real queues are inside the EventLoop
-    - The way the EventLoop pulls on the various channels would need to be biased to prevent starvation
+- The channels function as the session message queue (this design was adopted). There are distinct channels for:
+    - QoS 0 PUBLISH (no PKID, not subject to broker receive maximum) — `publish_qos0_queue_size`
+    - QoS 1 PUBLISH + QoS 2 PUBLISH (shared PKID ordering, subject to broker receive maximum) — `publish_qos1_qos2_queue_size`
+    - SUBSCRIBE + UNSUBSCRIBE
+    - Acknowledgements (PUBACK / PUBREC / PUBREL / PUBCOMP)
+    - AUTH (reauthentication)
+    - Incoming PUBLISHes use an unbounded channel, since messages read off the network must go somewhere.
+- The control-packet channels are size 1 to avoid buffering packets not yet owned by the internal session state; the real queues live inside the `Connection`.
+- The way the `Connection` pulls on the various channels is biased to allow prioritization and prevent starvation.
 - Session message queue size
     - Can it be configured to be smaller than the broker receive maximum?
         - Should be allowed - receive maximum only governs the number of in-flight messages

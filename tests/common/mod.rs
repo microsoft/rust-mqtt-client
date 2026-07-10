@@ -5,9 +5,9 @@
 
 use std::pin::pin;
 
-use azure_mqtt::client::token::acknowledgement::PubAckToken;
-use azure_mqtt::client::{ManualAcknowledgement, Receiver};
-use azure_mqtt::packet::{PubAckProperties, Publish};
+use ms_mqtt_client::client::token::acknowledgement::PubAckToken;
+use ms_mqtt_client::client::{ManualAcknowledgement, Receiver};
+use ms_mqtt_client::packet::{PubAckProperties, Publish};
 use futures_util::future::{Either, select};
 
 pub(crate) async fn run_with_connection<F>(
