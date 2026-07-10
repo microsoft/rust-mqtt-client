@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use azure_mqtt::client::{
+use ms_mqtt_client::client::{
     Client, ClientOptions, ConnectResult, Connection, ConnectionTransportConfig,
     ConnectionTransportType, KeepAliveConfig, ManualAcknowledgement, Receiver, new_client,
 };
-use azure_mqtt::packet::{
+use ms_mqtt_client::packet::{
     ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
     QoS, RetainOptions, SubscribeProperties,
 };
-use azure_mqtt::topic::{TopicFilter, TopicName};
+use ms_mqtt_client::topic::{TopicFilter, TopicName};
 
 const CLIENT_ID: &str = "my_client";
 const HOSTNAME: &str = "localhost";

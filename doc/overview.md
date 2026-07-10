@@ -1,42 +1,52 @@
 # MQTT Client Overview
 
-In-progress MQTT crate has three components which collectively provide client functionality:
-    - `EventLoop` / `Connection` (semantics pending)
-    - `Client`
-    - `Receiver`
-
-## EventLoop / Connection
-
-Basically, a "do work" loop that keeps the client connection running.
-
-We are still discussing the exact granularity and final form of event reporting as we assess implementation needs.
+The MQTT crate has three components which collectively provide client functionality.
+They are created together by the `new_client` factory function:
 
 ```rust
-loop {
-    match event_loop.poll().await {
-        Event::Connected => {
-            //stuff
-        }
-        Event::DesiredDisconnect => {
-            // stuff
-        }
-        Event::KeepAliveExpired => {
-            //stuff
-        }
-        ...
+let (client, connect_handle, receiver) = new_client(options);
+```
+
+- `ConnectHandle` / `Connection` — establishes and drives the network connection
+- `Client` — sends outgoing operations (publish/subscribe/unsubscribe)
+- `Receiver` — receives incoming Publishes
+
+## ConnectHandle / Connection
+
+The connection lifecycle is expressed through ownership rather than an event-polling loop.
+A `ConnectHandle` establishes a connection, and the resulting `Connection` is a future that
+must be actively driven to send and receive packets.
+
+```rust
+match connect_handle.connect(/* transport, clean_start, keep_alive, ... */).await {
+    ConnectResult::Success(connection, connack, disconnect_handle) => {
+        // `connection` must be driven to keep the client running.
+        // Returns a fresh `ConnectHandle` (for reconnecting) and the reason for disconnect.
+        let (connect_handle, event) = connection.run_until_disconnect().await;
+    }
+    ConnectResult::Failure(connect_handle, err) => {
+        // `connect_handle` is returned so the connection can be re-attempted.
     }
 }
 ```
 
-## "Client"
+`connect` consumes the `ConnectHandle`, and `run_until_disconnect` consumes the `Connection` and
+hands back a `ConnectHandle`. This makes illegal states — such as connecting while already
+connected — unrepresentable. An application-initiated disconnect is triggered via the
+`DisconnectHandle` returned by `connect`. Enhanced authentication uses `connect_enhanced_auth`,
+which additionally returns a `ReauthHandle` for later re-authentication.
+
+## Client
 
 Used for sending outgoing data:
 - Publish
 - Subscribe
 - Unsubscribe
-- Reauthorize
 
-Currently also triggers connect/disconnect, but this functionality may be moved to EventLoop/Connection
+The `Client` is cheap and cloneable, so it can be shared across many tasks or threads that
+multiplex their operations over the single shared connection. Re-authentication is handled
+separately via the `ReauthHandle` (see above), since an AUTH packet is only valid on a
+connection established with a matching authentication method.
 
 ### Simple
 ```rust
@@ -44,18 +54,20 @@ Currently also triggers connect/disconnect, but this functionality may be moved 
 client.publish_qos1(
     TopicName::new("test/topic").unwrap(),  // Topic
     "Hello, MQTT!".into(),                  // Payload (bytes)
+    false,                                  // Retain
     PublishProperties::default()            // Properties
 ).await.unwrap();
 ```
 
 ### Result Reporting + Completion Tokens
-Result reporting will have a tiered approach that looks something like this:
+Result reporting uses a tiered approach that looks like this:
 
 ### QoS1
 ```rust
-let client_result: Result<CompletionToken<PubAck>, ClientError> = client.publish_qos1(
+let client_result: Result<PublishQoS1CompletionToken, DetachedError> = client.publish_qos1(
     TopicName::new("test/topic").unwrap(), // Topic
     "Hello, MQTT!".into(),                  // Payload (bytes)
+    false,                                  // Retain
     PublishProperties::default()            // Properties
 ).await;
 let completion_token = client_result.unwrap();
@@ -78,9 +90,10 @@ match pub_ack.as_result() {
 
 ### QoS2
 ```rust
-let client_result: Result<CompletionToken<PubRec>, ClientError> = client.publish_qos2(
+let client_result: Result<PublishQoS2CompletionToken, DetachedError> = client.publish_qos2(
     TopicName::new("test/topic").unwrap(), // Topic
     "Hello, MQTT!".into(),                  // Payload (bytes)
+    false,                                  // Retain
     PublishProperties::default()            // Properties
 ).await;
 let completion_token = client_result.unwrap();
@@ -93,11 +106,11 @@ if pub_rec.is_success() {
     
     // Manually acknowledge the PUBREC, or could simply drop the pubrel_token
     if let Some(pubrel_token) = pubrel_token {
-        let completion_token = pubrel_token.confirm().await.unwrap();
+        let completion_token = pubrel_token.confirm(PubRelProperties::default()).await.unwrap();
         let pubcomp = completion_token.await.unwrap();
     }
 } else {
-    println!("Publish failed: {}", pub_ack.reason);
+    println!("Publish failed: {}", pub_rec.reason);
     // pubrel_token will be None, there is no need to use it
 }
 ```
@@ -112,41 +125,37 @@ Incoming channel/stream that receives incoming Publishes, along with an optional
 
 ### Automatic acknowledgement
 ```rust
-loop {
-    while let Some((publish, _)) = receiver.recv().await {
-        println!("Received publish");
-    }
+while let Some((publish, _)) = receiver.recv().await {
+    println!("Received publish");
 }
 ```
 
 ### Manual acknowledgement
 ```rust
-loop {
-    while let Some((publish, ack_handle)) = receiver.recv().await {
-        println!("Received publish");
+while let Some((publish, ack_handle)) = receiver.recv().await {
+    println!("Received publish");
 
-        match ack_handle {
-            AckHandle::QoS0 => {
-                println!("Publish does not require acknowledgment (QoS 0)");
-            }
-            AckHandle::QoS1(puback_token) => {
-                let ct = puback_token.accept(PubAckProperties::default()).await.unwrap();
-                ct.await.unwrap();
-                println!("Publish acknowledged! (QoS 1)");
-            }
-            AckHandle::QoS2(pubrec_token) => {
-                let ct = pubrec_token.accept(PubRecProperties::default()).await.unwrap();
-                let (pubrel, pubcomp_token) = ct.await.unwrap();
-                let ct = pubcomp_token.confirm(PubCompProperties::default()).await.unwrap();
-                ct.await.unwrap();
-                println!("Publish acknowledged! (QoS 2)");
-            }
+    match ack_handle {
+        ManualAcknowledgement::QoS0 => {
+            println!("Publish does not require acknowledgment (QoS 0)");
+        }
+        ManualAcknowledgement::QoS1(puback_token) => {
+            let ct = puback_token.accept(PubAckProperties::default()).await.unwrap();
+            ct.await.unwrap();
+            println!("Publish acknowledged! (QoS 1)");
+        }
+        ManualAcknowledgement::QoS2(pubrec_token) => {
+            let ct = pubrec_token.accept(PubRecProperties::default()).await.unwrap();
+            let (pubrel, pubcomp_token) = ct.await.unwrap();
+            let ct = pubcomp_token.confirm(PubCompProperties::default()).await.unwrap();
+            ct.await.unwrap();
+            println!("Publish acknowledged! (QoS 2)");
         }
     }
 }
 ```
 
-If dropped without explicit acknowledgement by the user, the `AckHandle` will trigger acknowledgement process on drop in order to not break ordering rules and respect the MQTT specification requirement of acknowledging all received messages.
+If dropped without explicit acknowledgement by the user, the `ManualAcknowledgement` will trigger the acknowledgement process on drop in order to not break ordering rules and respect the MQTT specification requirement of acknowledging all received messages.
 
 ### Redelivery / connection epoch
 
