@@ -4,6 +4,8 @@ A low-level MQTT 5 client library that prioritizes **correctness** — upholding
 
 It is built to facilitate demanding, long-lived applications such as edge and IoT services, message relays, and higher-level SDKs — systems that need many concurrent components to share a single reliable connection and to reason precisely about the fate of every operation.
 
+The client id designed to be compatible with any MQTT broker, such as Mosquitto MQTT Broker or Azure Event Grid MQTT Broker.
+
 ## Design
 
 - **Three independent components.** `new_client()` returns a `Client` (outgoing operations), a `ConnectHandle`/`Connection` (connection lifecycle and I/O), and a `Receiver` (incoming publishes). Each can be owned by a different task, so concerns stay cleanly separated.
