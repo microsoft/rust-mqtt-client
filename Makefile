@@ -23,6 +23,19 @@ test:
 	done
 
 
+.PHONY: coverage
+coverage:
+	cargo llvm-cov clean --workspace
+	cargo llvm-cov --no-report --lib
+	set -eu; \
+	# Run tests with different feature sets to get coverage for all code paths.
+	for feature_set in '__integration' 'websockets,__integration'; do \
+		cargo llvm-cov --no-report --features "$$feature_set" --test '*'; \
+	done
+	cargo llvm-cov report --html
+	cargo llvm-cov report --summary-only
+
+
 .PHONY: check
 check:
 	cargo fmt --verbose --all --check
