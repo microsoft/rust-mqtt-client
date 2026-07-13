@@ -26,14 +26,16 @@ pub mod tokio_ws;
 mod writer;
 pub use writer::Writer;
 
-pub(crate) trait ReadableStream: Send {
+// TODO(rustup): Remove `Sync` bounds when `std::sync::Exclusive` becomes stable.
+
+pub(crate) trait ReadableStream: Send + Sync {
     fn read<'a>(
         &'a mut self,
         buf: &'a mut [MaybeUninit<u8>],
     ) -> Pin<Box<dyn Future<Output = io::Result<usize>> + Send + 'a>>;
 }
 
-pub(crate) trait WritableStream: Send {
+pub(crate) trait WritableStream: Send + Sync {
     fn write_vectored<'a, 'buf>(
         &'a mut self,
         bufs: &'a [IoSlice<'buf>],

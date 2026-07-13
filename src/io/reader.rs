@@ -13,7 +13,7 @@ pub struct Reader<BP>
 where
     BP: BufferPool,
 {
-    inner: Box<dyn ReadableStream + Send>,
+    inner: Box<dyn ReadableStream>,
     buf: BP::Owned,
 }
 
@@ -114,7 +114,7 @@ mod tests {
 
     impl<R> ReadableStream for Cursor<R>
     where
-        R: AsRef<[u8]> + Send,
+        R: AsRef<[u8]> + Send + Sync,
     {
         fn read<'a>(
             &'a mut self,

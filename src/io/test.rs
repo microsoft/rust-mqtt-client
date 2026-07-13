@@ -22,6 +22,7 @@ pub fn connect<BP>(
 ) -> (Reader<BP>, Writer<BP>)
 where
     BP: BufferPool,
+    BP::Owned: Send + Sync,
 {
     let read_buf = reader_pool.take_empty_owned();
     let reader = Reader::new(
@@ -58,6 +59,7 @@ where
 impl<BP> ReadableStream for TestStreamRead<BP>
 where
     BP: BufferPool,
+    BP::Owned: Send + Sync,
 {
     fn read<'a>(
         &'a mut self,
@@ -120,6 +122,7 @@ where
 impl<BP> WritableStream for TestStreamWrite<BP>
 where
     BP: BufferPool,
+    BP::Owned: Send + Sync,
 {
     fn write_vectored<'a, 'buf>(
         &'a mut self,

@@ -12,7 +12,7 @@ pub struct Writer<BP>
 where
     BP: BufferPool,
 {
-    inner: Box<dyn WritableStream + Send>,
+    inner: Box<dyn WritableStream>,
     buf: EitherAccumulator<BP>,
 }
 
