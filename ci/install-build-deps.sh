@@ -9,3 +9,8 @@ cargo install \
     --version '^0.6' \
     --locked \
     cargo-llvm-cov
+
+cargo install \
+    --version '^0.18' \
+    --locked \
+    cargo-deny
