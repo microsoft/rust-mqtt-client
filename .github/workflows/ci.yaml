@@ -1,33 +1,127 @@
 name: 'CI'
 
 on:
-- 'pull_request'
-- 'push'
+  workflow_dispatch:
+  pull_request:
+  push:
+
+# Only allow one run per branch at a time; cancel superseded runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  # Static analysis on the pinned dev toolchain (rust-toolchain.toml). Lint
+  # results are toolchain-specific, so fmt/clippy run here only -- never across
+  # the test matrix, where a newer stable could fail on freshly-added lints.
   check:
+    name: Check (pinned toolchain)
     runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
 
     steps:
     - uses: 'actions/checkout@v7'
-    - name: Install build deps
-      run: |
-        ./ci/install-build-deps.sh
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        # Swatinem/rust-cache (below) handles caching, including target/,
+        # which this action's built-in cache does not.
+        cache: false
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: check
+
+    # Install cargo subcommands AFTER the cache restore: Swatinem/rust-cache
+    # caches ~/.cargo/bin, so a warm cache makes this a no-op.
+    - name: Install cargo tooling
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-machete,cargo-deny
+
     - name: Check
-      run:
-        make -j check
+      run: make -j check
 
+  # Full test suite across the supported toolchains: the MSRV declared in
+  # Cargo.toml's `rust-version` and the latest stable.
   test:
+    name: Test (rust ${{ matrix.rust }})
     runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep "1.88" in sync with `rust-version` in Cargo.toml when bumping MSRV.
+        rust: ["1.88", "stable"]
 
     steps:
     - uses: 'actions/checkout@v7'
-    - name: Install build deps
-      run: |
-        ./ci/install-build-deps.sh
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+
+    - name: Install Rust ${{ matrix.rust }}
+      run: rustup toolchain install ${{ matrix.rust }} --profile minimal
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: test-${{ matrix.rust }}
+
+    # RUSTUP_TOOLCHAIN overrides the rust-toolchain.toml pin for this step,
+    # selecting the matrix toolchain without deleting the pin file.
     - name: Test
-      run:
-        make -j test
+      env:
+        RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+      run: make -j test
+
+  # Coverage on the pinned toolchain. Separate from `test` because LLVM
+  # instrumentation produces a different target/ (cache-incompatible) and
+  # slows the build; measuring on one canonical toolchain keeps the trend
+  # consistent across PRs.
+  coverage:
+    name: Coverage (pinned toolchain)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 20
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        # Distinct from the `test` keys: instrumented builds must not share
+        # target/ with them.
+        shared-key: coverage
+
+    - name: Install cargo tooling
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov
+
+    - name: Coverage
+      run: make coverage
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v7
+      with:
+        name: coverage-report
+        path: target/llvm-cov/html
+        if-no-files-found: error
+        retention-days: 10
