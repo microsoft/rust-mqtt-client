@@ -25,7 +25,12 @@ name: 'PR'
 on:
   workflow_dispatch:
   pull_request:
+  # Scoped to the default branch on purpose: `pull_request` already validates
+  # every feature branch, so an unrestricted `push` would run each PR twice
+  # (once per event). Keeping `push` on `main` validates the post-merge result
+  # and drives the README build badge (which tracks `main`).
   push:
+    branches: [main]
 
 # Only allow one run per branch at a time; cancel superseded runs.
 concurrency:
