@@ -63,6 +63,9 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         cache: false
+        # No `-D warnings`: this workflow runs tests across moving toolchains,
+        # and a newer compiler's freshly-added warnings must not fail the run.
+        rustflags: ''
 
     - name: Install Rust ${{ matrix.rust }}
       run: rustup toolchain install ${{ matrix.rust }} --profile minimal
@@ -105,6 +108,8 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         cache: false
+        # No `-D warnings` (see the `test` job above).
+        rustflags: ''
 
     # Nightly is needed only to run the unstable `-Z direct-minimal-versions`
     # resolver (minimal leg only); it never compiles code.

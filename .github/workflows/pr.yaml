@@ -61,6 +61,11 @@ jobs:
         # Swatinem/rust-cache (below) handles caching, including target/,
         # which this action's built-in cache does not.
         cache: false
+        # Don't let the action inject its default `RUSTFLAGS=-D warnings`.
+        # Warning-denial is intentionally confined to `make check`'s clippy on
+        # the pinned toolchain; denying warnings across the toolchain matrix
+        # would let a newer compiler's freshly-added lints fail unrelated PRs.
+        rustflags: ''
 
     - name: Cache cargo build artifacts
       uses: Swatinem/rust-cache@v2
@@ -116,6 +121,8 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         cache: false
+        # No `-D warnings` on the toolchain matrix (see the `check` job).
+        rustflags: ''
 
     # Nightly is needed only to run the unstable `-Z direct-minimal-versions`
     # resolver (minimal legs only); it never compiles our code -- the build and
@@ -163,6 +170,8 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         cache: false
+        # No `-D warnings` on the toolchain matrix (see the `check` job).
+        rustflags: ''
 
     - name: Cache cargo build artifacts
       uses: Swatinem/rust-cache@v2
