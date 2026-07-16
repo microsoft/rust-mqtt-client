@@ -40,3 +40,4 @@ coverage:
 check:
 	cargo fmt --verbose --all --check
 	cargo machete
+	cargo deny check	# TODO: split out advisory checks from bans/licenses/sources when CI is more fleshed out

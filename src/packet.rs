@@ -1919,7 +1919,7 @@ mod test {
     use std::num::{NonZeroU16, NonZeroU32};
 
     use bytes::Bytes;
-    use paste::paste;
+    use pastey::paste;
 
     use crate::mqtt_proto::topic;
     use crate::packet::KeepAlive;
