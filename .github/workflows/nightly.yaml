@@ -1,3 +1,23 @@
+# Nightly: scheduled, non-blocking checks. Complements the `pr.yaml` gate.
+#
+# Guiding principles (kept consistent with `pr.yaml`):
+#
+#   1. Gate vs. nightly. This workflow owns everything that can go red because
+#      the *outside world moved* rather than because our code changed -- so it
+#      must not gate PRs. That includes: toolchains beyond MSRV+stable (beta and
+#      nightly, to get early warning of future breakage) and security-advisory
+#      scans (the RustSec DB updates daily, independent of our source). Since a
+#      scheduled run has no PR to turn red, the `notify` job opens a tracking
+#      issue on failure. Deterministic, code-caused checks belong in the gate,
+#      not here.
+#
+#   2. Static analysis vs. running tests. Same split as the gate: static
+#      analysis is a single-toolchain concern and is NOT re-run per toolchain
+#      here. What this workflow adds is running the tests against *more*
+#      versions than the gate can hold stable -- extra toolchains, plus
+#      advisory scans against both the latest and minimal dependency
+#      resolutions.
+
 name: 'Nightly'
 
 on:
@@ -62,10 +82,21 @@ jobs:
   # Re-check the security advisory database against its latest state. The DB
   # updates daily independent of our code, so this belongs on a schedule rather
   # than the PR gate.
+  #
+  # Run against both dependency resolutions:
+  # - `latest`  : are the newest compatible versions free of known advisories?
+  # - `minimal` : do our declared *lower bounds* drag a floor-pinning consumer
+  #   onto a version with a known vulnerability? The default (latest) scan
+  #   can't answer this -- it checks the most-likely-patched end of our ranges.
   advisories:
-    name: Security advisories
+    name: Security advisories (${{ matrix.deps }} deps)
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        deps: ["latest", "minimal"]
 
     steps:
     - uses: 'actions/checkout@v7'
@@ -75,10 +106,20 @@ jobs:
       with:
         cache: false
 
+    # Nightly is needed only to run the unstable `-Z direct-minimal-versions`
+    # resolver (minimal leg only); it never compiles code.
+    - name: Install nightly Rust (for the minimal-versions resolver)
+      if: matrix.deps == 'minimal'
+      run: rustup toolchain install nightly --profile minimal
+
     - name: Install cargo tooling
       uses: taiki-e/install-action@v2
       with:
         tool: cargo-deny
+
+    - name: Resolve direct dependencies to their minimum versions
+      if: matrix.deps == 'minimal'
+      run: cargo +nightly generate-lockfile -Z direct-minimal-versions
 
     - name: Check advisories
       run: cargo deny check advisories
