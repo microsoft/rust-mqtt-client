@@ -1,4 +1,4 @@
-name: 'CI'
+name: 'PR'
 
 on:
   workflow_dispatch:
@@ -51,7 +51,8 @@ jobs:
       run: make -j check
 
   # Full test suite across the supported toolchains: the MSRV declared in
-  # Cargo.toml's `rust-version` and the latest stable.
+  # Cargo.toml's `rust-version` and the latest stable. `beta`/`nightly` are
+  # exercised separately by the scheduled `nightly.yaml` workflow.
   test:
     name: Test (rust ${{ matrix.rust }})
     runs-on: 'ubuntu-24.04'

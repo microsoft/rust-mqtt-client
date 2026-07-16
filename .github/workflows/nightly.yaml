@@ -1,0 +1,117 @@
+name: 'Nightly'
+
+on:
+  schedule:
+    - cron: '0 11 * * *'   # 11:00 UTC (04:00 PT) daily. Scheduled runs fire on the default branch only.
+  workflow_dispatch:
+
+# Only one scheduled run at a time.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Test across the moving toolchains the PR gate can't hold stable. The MSRV
+  # (1.88) is included because dependency versions float (Cargo.lock is not
+  # committed): a dependency can raise its own MSRV and break our 1.88 build
+  # with no code change on our side -- something the PR gate only catches when
+  # a PR happens to run. `nightly` is allowed to fail (continue-on-error) --
+  # it's an early-warning signal, not a gate -- so a broken nightly compiler
+  # won't trip the failure notification.
+  test:
+    name: Test (rust ${{ matrix.rust }})
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 15
+    continue-on-error: ${{ matrix.rust == 'nightly' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep "1.88" in sync with `rust-version` in Cargo.toml when bumping MSRV.
+        rust: ["1.88", "stable", "beta", "nightly"]
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+
+    - name: Install Rust ${{ matrix.rust }}
+      run: rustup toolchain install ${{ matrix.rust }} --profile minimal
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: nightly-test-${{ matrix.rust }}
+
+    # RUSTUP_TOOLCHAIN overrides the rust-toolchain.toml pin, selecting the
+    # matrix toolchain without deleting the pin file.
+    - name: Test
+      env:
+        RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+      run: make -j test
+
+  # Re-check the security advisory database against its latest state. The DB
+  # updates daily independent of our code, so this belongs on a schedule rather
+  # than the PR gate.
+  advisories:
+    name: Security advisories
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+
+    - name: Install cargo tooling
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-deny
+
+    - name: Check advisories
+      run: cargo deny check advisories
+
+  # Scheduled runs have no PR to turn red and no author watching, so surface
+  # failures by opening (or updating) a tracking issue. nightly-toolchain
+  # failures are neutralized by continue-on-error above and won't reach here.
+  notify:
+    name: Report failure
+    needs: [test, advisories]
+    if: failure()
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+    - name: Open or update tracking issue
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        title="Nightly workflow failed"
+        body="The scheduled nightly workflow failed. Run: ${RUN_URL}"
+        number="$(
+          gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --json number,title \
+            --jq "[.[] | select(.title == \"${title}\")][0].number // empty"
+        )"
+        if [ -n "${number}" ]; then
+          gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+        else
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+        fi
