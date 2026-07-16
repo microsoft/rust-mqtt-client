@@ -1,5 +1,17 @@
 # Microsoft MQTT client
 
+[![Build](https://img.shields.io/github/actions/workflow/status/Azure/mqtt-client/pr.yaml?branch=main&label=build)](https://github.com/Azure/mqtt-client/actions/workflows/pr.yaml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](Cargo.toml)
+
+<!-- TODO: add the following badges once the crate is published to crates.io
+     (they render grey/404 until then), and switch the MSRV badge from the
+     static one above to the dynamic endpoint that reads `rust-version`:
+[![crates.io](https://img.shields.io/crates/v/ms-mqtt-client.svg)](https://crates.io/crates/ms-mqtt-client)
+[![docs.rs](https://docs.rs/ms-mqtt-client/badge.svg)](https://docs.rs/ms-mqtt-client)
+[![MSRV](https://img.shields.io/crates/msrv/ms-mqtt-client.svg)](Cargo.toml)
+-->
+
 A low-level MQTT 5 client library that prioritizes **correctness** — upholding the protocol's ordering, delivery, and state rules — and **control** — giving the application, rather than the library, the final say over connection lifecycle, task structure, and message handling.
 
 It is built to facilitate demanding, long-lived applications such as edge and IoT services, message relays, and higher-level SDKs — systems that need many concurrent components to share a single reliable connection and to reason precisely about the fate of every operation.
