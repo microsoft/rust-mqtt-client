@@ -1,0 +1,197 @@
+# PR gate: the blocking, pre-merge checks. Runs on every pull request and push.
+#
+# Guiding principles (kept consistent with `nightly.yaml`):
+#
+#   1. Gate vs. nightly. This workflow tests only what a *code change* can
+#      break -- checks that are deterministic with respect to our own source.
+#      A failure here should always be actionable by the PR author. Anything
+#      that can go red because the *outside world moved* (new compiler
+#      releases, freshly published advisories, dependency drift on unpinned
+#      transitive versions) lives in `nightly.yaml` instead, so it never blocks
+#      an unrelated PR. Concretely: MSRV + stable are gated; beta/nightly
+#      toolchains and advisory-DB scans are not.
+#
+#   2. Static analysis vs. running tests. All static analysis (rustfmt, clippy,
+#      cargo-deny, cargo-machete -- via `make check`) runs on the SINGLE pinned
+#      toolchain from rust-toolchain.toml. Lint/format output is
+#      toolchain-specific, so pinning keeps it reproducible and prevents a
+#      newer compiler's freshly-added lints from failing unrelated PRs. Running
+#      the tests, by contrast, must validate every version we promise to
+#      support, so `make test` runs across a matrix of toolchains (and
+#      dependency resolutions).
+
+name: 'PR'
+
+on:
+  workflow_dispatch:
+  pull_request:
+  # Scoped to the default branch on purpose: `pull_request` already validates
+  # every feature branch, so an unrestricted `push` would run each PR twice
+  # (once per event). Keeping `push` on `main` validates the post-merge result
+  # and drives the README build badge (which tracks `main`).
+  push:
+    branches: [main]
+
+# Only allow one run per branch at a time; cancel superseded runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Static analysis on the pinned dev toolchain (rust-toolchain.toml). Lint
+  # results are toolchain-specific, so fmt/clippy run here only -- never across
+  # the test matrix, where a newer stable could fail on freshly-added lints.
+  check:
+    name: Check (pinned toolchain)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        # Swatinem/rust-cache (below) handles caching, including target/,
+        # which this action's built-in cache does not.
+        cache: false
+        # Don't let the action inject its default `RUSTFLAGS=-D warnings`.
+        # Warning-denial is intentionally confined to `make check`'s clippy on
+        # the pinned toolchain; denying warnings across the toolchain matrix
+        # would let a newer compiler's freshly-added lints fail unrelated PRs.
+        rustflags: ''
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: check
+
+    # Install cargo subcommands AFTER the cache restore: Swatinem/rust-cache
+    # caches ~/.cargo/bin, so a warm cache makes this a no-op.
+    - name: Install cargo tooling
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-machete,cargo-deny
+
+    - name: Check
+      run: make -j check
+
+  # Full test suite across the supported toolchains (the MSRV declared in
+  # Cargo.toml's `rust-version` and the latest stable) crossed with the
+  # dependency resolution (latest compatible vs. our declared minimums).
+  # `beta`/`nightly` toolchains are exercised separately by the scheduled
+  # `nightly.yaml` workflow.
+  #
+  # The `deps` axis:
+  # - `latest`  : newest compatible versions -- what we develop against.
+  # - `minimal` : our DIRECT dependencies resolved to the lowest version each
+  #   constraint permits (`-Z direct-minimal-versions`; transitive deps resolve
+  #   normally, avoiding the third-party under-declaration noise of full
+  #   `-Z minimal-versions`). Verifies the lower bounds we promise consumers
+  #   actually build/test. A failure means we used an API newer than a declared
+  #   floor -- a deterministic, code-caused regression -- so it belongs in the
+  #   gate. Endpoints only: versions between min and latest are assumed
+  #   compatible by SemVer and handled reactively if a dep violates it.
+  #
+  # The full 2x2 matters: MSRV+minimal is the strictest corner for old deps,
+  # while stable+minimal catches the (rarer) case of an old dependency version
+  # that fails to compile on a newer compiler.
+  test:
+    name: Test (rust ${{ matrix.rust }}, ${{ matrix.deps }} deps)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep "1.88" in sync with `rust-version` in Cargo.toml when bumping MSRV.
+        rust: ["1.88", "stable"]
+        deps: ["latest", "minimal"]
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+        # No `-D warnings` on the toolchain matrix (see the `check` job).
+        rustflags: ''
+
+    # Nightly is needed only to run the unstable `-Z direct-minimal-versions`
+    # resolver (minimal legs only); it never compiles our code -- the build and
+    # test run on the matrix toolchain below.
+    - name: Install nightly Rust (for the minimal-versions resolver)
+      if: matrix.deps == 'minimal'
+      run: rustup toolchain install nightly --profile minimal
+
+    - name: Install Rust ${{ matrix.rust }}
+      run: rustup toolchain install ${{ matrix.rust }} --profile minimal
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        # `deps` is part of the key: latest and minimal builds produce
+        # incompatible target/ artifacts and must not share a cache.
+        shared-key: test-${{ matrix.rust }}-${{ matrix.deps }}
+
+    - name: Resolve direct dependencies to their minimum versions
+      if: matrix.deps == 'minimal'
+      run: cargo +nightly generate-lockfile -Z direct-minimal-versions
+
+    # RUSTUP_TOOLCHAIN selects the matrix toolchain for the build/test without
+    # deleting the rust-toolchain.toml pin. On minimal legs it runs against the
+    # lockfile produced by the resolver step above.
+    - name: Test
+      env:
+        RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+      run: make -j test
+
+
+  # Coverage on the pinned toolchain. Separate from `test` because LLVM
+  # instrumentation produces a different target/ (cache-incompatible) and
+  # slows the build; measuring on one canonical toolchain keeps the trend
+  # consistent across PRs.
+  coverage:
+    name: Coverage (pinned toolchain)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 20
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+        # No `-D warnings` on the toolchain matrix (see the `check` job).
+        rustflags: ''
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        # Distinct from the `test` keys: instrumented builds must not share
+        # target/ with them.
+        shared-key: coverage
+
+    - name: Install cargo tooling
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov
+
+    - name: Coverage
+      run: make coverage
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v7
+      with:
+        name: coverage-report
+        path: target/llvm-cov/html
+        if-no-files-found: error
+        retention-days: 10

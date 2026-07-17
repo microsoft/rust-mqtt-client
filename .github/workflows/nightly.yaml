@@ -1,0 +1,163 @@
+# Nightly: scheduled, non-blocking checks. Complements the `pr.yaml` gate.
+#
+# Guiding principles (kept consistent with `pr.yaml`):
+#
+#   1. Gate vs. nightly. This workflow owns everything that can go red because
+#      the *outside world moved* rather than because our code changed -- so it
+#      must not gate PRs. That includes: toolchains beyond MSRV+stable (beta and
+#      nightly, to get early warning of future breakage) and security-advisory
+#      scans (the RustSec DB updates daily, independent of our source). Since a
+#      scheduled run has no PR to turn red, the `notify` job opens a tracking
+#      issue on failure. Deterministic, code-caused checks belong in the gate,
+#      not here.
+#
+#   2. Static analysis vs. running tests. Same split as the gate: static
+#      analysis is a single-toolchain concern and is NOT re-run per toolchain
+#      here. What this workflow adds is running the tests against *more*
+#      versions than the gate can hold stable -- extra toolchains, plus
+#      advisory scans against both the latest and minimal dependency
+#      resolutions.
+
+name: 'Nightly'
+
+on:
+  schedule:
+    - cron: '0 11 * * *'   # 11:00 UTC (04:00 PT) daily. Scheduled runs fire on the default branch only.
+  workflow_dispatch:
+
+# Only one scheduled run at a time.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Test across the moving toolchains the PR gate can't hold stable. The MSRV
+  # (1.88) is included because dependency versions float (Cargo.lock is not
+  # committed): a dependency can raise its own MSRV and break our 1.88 build
+  # with no code change on our side -- something the PR gate only catches when
+  # a PR happens to run. `nightly` is allowed to fail (continue-on-error) --
+  # it's an early-warning signal, not a gate -- so a broken nightly compiler
+  # won't trip the failure notification.
+  test:
+    name: Test (rust ${{ matrix.rust }})
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 15
+    continue-on-error: ${{ matrix.rust == 'nightly' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep "1.88" in sync with `rust-version` in Cargo.toml when bumping MSRV.
+        rust: ["1.88", "stable", "beta", "nightly"]
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+        # No `-D warnings`: this workflow runs tests across moving toolchains,
+        # and a newer compiler's freshly-added warnings must not fail the run.
+        rustflags: ''
+
+    - name: Install Rust ${{ matrix.rust }}
+      run: rustup toolchain install ${{ matrix.rust }} --profile minimal
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: nightly-test-${{ matrix.rust }}
+
+    # RUSTUP_TOOLCHAIN overrides the rust-toolchain.toml pin, selecting the
+    # matrix toolchain without deleting the pin file.
+    - name: Test
+      env:
+        RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+      run: make -j test
+
+  # Re-check the security advisory database against its latest state. The DB
+  # updates daily independent of our code, so this belongs on a schedule rather
+  # than the PR gate.
+  #
+  # Run against both dependency resolutions:
+  # - `latest`  : are the newest compatible versions free of known advisories?
+  # - `minimal` : do our declared *lower bounds* drag a floor-pinning consumer
+  #   onto a version with a known vulnerability? The default (latest) scan
+  #   can't answer this -- it checks the most-likely-patched end of our ranges.
+  advisories:
+    name: Security advisories (${{ matrix.deps }} deps)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        deps: ["latest", "minimal"]
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+        # No `-D warnings` (see the `test` job above).
+        rustflags: ''
+
+    # Nightly is needed only to run the unstable `-Z direct-minimal-versions`
+    # resolver (minimal leg only); it never compiles code.
+    - name: Install nightly Rust (for the minimal-versions resolver)
+      if: matrix.deps == 'minimal'
+      run: rustup toolchain install nightly --profile minimal
+
+    - name: Install cargo tooling
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-deny
+
+    - name: Resolve direct dependencies to their minimum versions
+      if: matrix.deps == 'minimal'
+      run: cargo +nightly generate-lockfile -Z direct-minimal-versions
+
+    - name: Check advisories
+      run: cargo deny check advisories
+
+  # Scheduled runs have no PR to turn red and no author watching, so surface
+  # failures by opening (or updating) a tracking issue. nightly-toolchain
+  # failures are neutralized by continue-on-error above and won't reach here.
+  notify:
+    name: Report failure
+    needs: [test, advisories]
+    if: failure()
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+    - name: Open or update tracking issue
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        title="Nightly workflow failed"
+        body="The scheduled nightly workflow failed. Run: ${RUN_URL}"
+        number="$(
+          gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --json number,title \
+            --jq "[.[] | select(.title == \"${title}\")][0].number // empty"
+        )"
+        if [ -n "${number}" ]; then
+          gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+        else
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+        fi
