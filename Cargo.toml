@@ -64,8 +64,12 @@ tokio = { version = "1.38.2", default-features = false, features = [
 
 [features]
 websockets = ["dep:async-tungstenite"]
-# Internal feature used for integration tests
+# Internal feature: exposes internal APIs for integration testing the crate.
+# NOT part of the public, semver-stable API; do not enable as a consumer.
 __integration = []
+# Internal feature: exposes the `crate::fuzz` entry points for the `fuzz/` crate.
+# NOT part of the public, semver-stable API; do not enable as a consumer.
+fuzzing = []
 
 [lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }

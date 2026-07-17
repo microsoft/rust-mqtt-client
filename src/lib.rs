@@ -25,6 +25,12 @@ pub mod error;
 pub mod packet;
 pub mod topic;
 
+// Fuzzing entry points. Gated behind the `fuzzing` feature and hidden from docs;
+// this is NOT part of the public, semver-stable API (see `Cargo.toml`).
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz;
+
 // NOTE: Any dispatching or connection management would be supplementary components.
 // I am in favor of providing them, but they are built on top of these core components and would be optional.
 // These core components have been designed to enable the future use of such additional components,
