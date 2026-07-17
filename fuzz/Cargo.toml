@@ -15,11 +15,12 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+bytes = "1"
 libfuzzer-sys = "0.4"
 
 [dependencies.ms-mqtt-client]
 path = ".."
-features = ["fuzzing"]
+features = ["__fuzzing"]
 
 # Prevent this crate from being pulled into the parent's build graph: the empty
 # `[workspace]` table makes `fuzz/` its own workspace root, so nightly-only
@@ -49,8 +50,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "topic_filter"
-path = "fuzz_targets/topic_filter.rs"
+name = "topics"
+path = "fuzz_targets/topics.rs"
 test = false
 doc = false
 bench = false

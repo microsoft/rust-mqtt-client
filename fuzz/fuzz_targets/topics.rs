@@ -9,8 +9,17 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use ms_mqtt_client::topic::{TopicFilter, TopicName};
 
 fuzz_target!(|input: (&str, &str)| {
     let (filter, topic) = input;
-    ms_mqtt_client::fuzz::topic_filter(filter, topic);
+
+    let Ok(filter) = TopicFilter::new(filter) else {
+        return;
+    };
+    let _ = filter.as_str();
+
+    if let Ok(topic) = TopicName::new(topic) {
+        let _ = filter.matches_topic_name(&topic);
+    }
 });
