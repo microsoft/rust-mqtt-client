@@ -79,7 +79,7 @@ jobs:
 
     # Persist the corpus across runs: restore the prior corpus, extend it this
     # run, save it back. This is what makes fuzzing compound over time rather
-    # than starting cold each run. (Until OSS-Fuzz owns the corpus.)
+    # than starting cold each run.
     - name: Restore/persist fuzz corpus
       uses: actions/cache@v4
       with:
