@@ -40,14 +40,14 @@ jobs:
   # continue-on-error) so the `notify` job files a tracking issue -- a crash is
   # a real, actionable, potentially security-relevant finding.
   #
-  # Budget: ~1 hour of fuzzing total to start, split as 20 min per target across
-  # the matrix (targets run in parallel, so wall time stays ~20 min). Bump
-  # `max_total_time` to invest more once the targets prove they find signal.
+  # Budget: 60 min per target. The targets run in parallel across the matrix
+  # (each on its own runner), so wall time stays ~60 min rather than 3x. Adjust
+  # `max_total_time` to invest more or less once the targets prove their signal.
   fuzz:
     name: Fuzz (${{ matrix.target }})
     runs-on: 'ubuntu-24.04'
-    # 20 min fuzzing + instrumented build + tool install, with margin.
-    timeout-minutes: 35
+    # 60 min fuzzing + instrumented build + tool install, with margin.
+    timeout-minutes: 75
 
     strategy:
       fail-fast: false
@@ -94,7 +94,7 @@ jobs:
         tool: cargo-fuzz
 
     - name: Fuzz
-      run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=1200
+      run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
 
     # On a crash, cargo-fuzz writes a minimized reproducer under
     # fuzz/artifacts/<target>/. Upload it so the exact crashing input is
