@@ -1,0 +1,142 @@
+# Fuzz: scheduled, non-blocking, coverage-guided fuzzing of the untrusted-input
+# decoders. Deliberately its OWN workflow rather than part of `pr.yaml` or
+# `nightly.yaml`, because fuzzing is a third category that fits neither:
+#
+#   - The PR gate owns DETERMINISTIC, code-caused checks. Fuzzing is
+#     non-deterministic and open-ended (no "pass" state), so it can't gate a PR.
+#     The gate only *compile-checks* the fuzz targets (the `fuzz` job there).
+#   - `nightly.yaml` owns things that go red because the *outside world moved*
+#     (new compilers, freshly-published advisories, dependency drift). A fuzz
+#     crash is the opposite: a bug in OUR decoder, i.e. CODE-caused. It's
+#     scheduled-not-gated only because it's non-deterministic and expensive.
+#
+# Keeping it separate also lets fuzzing evolve independently: its own schedule
+# and time budget (which is meant to grow), its own concurrency (a long run
+# must not be cancelled by, or hold up, the quick nightly checks), and a
+# purpose-built crash report (upload the minimized reproducer, distinct issue).
+
+name: 'Fuzz'
+
+on:
+  schedule:
+    # 12:00 UTC (05:00 PT) daily -- staggered an hour after `nightly.yaml` so the
+    # two scheduled workloads don't pile onto the same runner minute.
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+# One fuzzing run at a time; a newly-triggered run supersedes an in-flight one.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Bounded, coverage-guided fuzzing. A crash fails the job (NOT
+  # continue-on-error) so the `notify` job files a tracking issue -- a crash is
+  # a real, actionable, potentially security-relevant finding.
+  #
+  # Budget: ~1 hour of fuzzing total to start, split as 20 min per target across
+  # the matrix (targets run in parallel, so wall time stays ~20 min). Bump
+  # `max_total_time` to invest more once the targets prove they find signal.
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: 'ubuntu-24.04'
+    # 20 min fuzzing + instrumented build + tool install, with margin.
+    timeout-minutes: 35
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ["decode", "roundtrip", "topics"]
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+        rustflags: ''
+
+    # cargo-fuzz builds with unstable `-Z sanitizer` + SanitizerCoverage flags,
+    # so the instrumented target must be built on nightly (the library still
+    # targets the pinned toolchain everywhere else).
+    - name: Install nightly Rust
+      run: rustup toolchain install nightly --profile minimal
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        # `fuzz/` is its own workspace; the instrumented build is cache-
+        # incompatible with the gate's plain check, so key it separately.
+        workspaces: fuzz
+        shared-key: fuzz-${{ matrix.target }}
+
+    # Persist the corpus across runs: restore the prior corpus, extend it this
+    # run, save it back. This is what makes fuzzing compound over time rather
+    # than starting cold each run. (Until OSS-Fuzz owns the corpus.)
+    - name: Restore/persist fuzz corpus
+      uses: actions/cache@v4
+      with:
+        path: fuzz/corpus/${{ matrix.target }}
+        key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+        restore-keys: |
+          fuzz-corpus-${{ matrix.target }}-
+
+    - name: Install cargo-fuzz
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-fuzz
+
+    - name: Fuzz
+      run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=1200
+
+    # On a crash, cargo-fuzz writes a minimized reproducer under
+    # fuzz/artifacts/<target>/. Upload it so the exact crashing input is
+    # attached to the run for triage and can be committed as a regression test.
+    - name: Upload crash reproducer
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: fuzz-crash-${{ matrix.target }}
+        path: fuzz/artifacts/${{ matrix.target }}
+        if-no-files-found: ignore
+        retention-days: 30
+
+  # A crash has no PR to turn red and no author watching, so surface it by
+  # opening (or updating) a tracking issue. The minimized reproducer is attached
+  # to the run as an artifact (see the `fuzz` job's upload step).
+  notify:
+    name: Report crash
+    needs: [fuzz]
+    if: failure()
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+    - name: Open or update tracking issue
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        title="Fuzzing found a crash"
+        body="A scheduled fuzzing run failed, which usually means a target found a crashing input. The minimized reproducer is attached to the run as a \`fuzz-crash-*\` artifact. Run: ${RUN_URL}"
+        number="$(
+          gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --json number,title \
+            --jq "[.[] | select(.title == \"${title}\")][0].number // empty"
+        )"
+        if [ -n "${number}" ]; then
+          gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+        else
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+        fi

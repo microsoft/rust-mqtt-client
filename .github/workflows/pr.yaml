@@ -84,12 +84,12 @@ jobs:
 
   # Compile-guard for the fuzz targets. The `fuzz/` crate is a detached
   # workspace (its own `[workspace]`), so nothing else in this gate builds it --
-  # yet its targets reach into internal APIs exposed by the `__fuzzing` feature
-  # (`Packet::decode_full`, the buffer pool), so an ordinary refactor can
-  # silently break them. This job just keeps the harness compiling. It only
-  # *builds* (`cargo check`) -- actually running the fuzzer is non-deterministic
-  # and needs nightly, so that lives in `nightly.yaml`, not the gate. `cargo
-  # check` doesn't link the libFuzzer runtime, so it runs fine on the pinned
+  # yet its targets reach into internal APIs exposed by the `__fuzzing` feature,
+  # so an ordinary refactor can silently break them.
+  # This job just keeps the harness compiling. It only *builds* (`cargo check`)
+  # -- actually running the fuzzer is non-deterministic and runs as part of the
+  # dedicated fuzzing workflow (fuzz.yaml) not the gate. `cargo check`
+  # doesn't link the libFuzzer runtime, so it runs fine on the pinned
   # stable toolchain like the rest of this gate.
   fuzz:
     name: Fuzz targets compile (pinned toolchain)
