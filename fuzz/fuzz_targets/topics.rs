@@ -1,10 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Fuzz topic-name / topic-filter validation and wildcard matching.
+//! Fuzz target: topic name / topic filter validation and matching.
 //!
-//! Structured input: two arbitrary strings, interpreted as a topic filter and a topic name.
-//! Validation must never panic, and matching must always terminate.
+//! Purpose: prove topic handling is robust against arbitrary strings — whether hostile or merely
+//! malformed user input. Validation must never panic, and matching a validated filter against a
+//! validated name must always terminate and return a bool (no infinite loop or blow-up on
+//! adversarial wildcard patterns such as nested `+`/`#`, `$share/…`, or empty levels).
+//!
+//! Scope: the PUBLIC topic API — `TopicFilter::new` / `TopicName::new` validation and the
+//! `matches_topic_name` wildcard algorithm. Input is structured (two `&str`s produced via
+//! `arbitrary`), so this exercises the matching logic far more densely than the byte-level `decode`
+//! target reaches it. Packet framing is out of scope here (that is covered by `decode`).
 
 #![no_main]
 

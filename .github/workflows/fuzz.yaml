@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ["decode", "roundtrip", "topics"]
+        target: ["packet_decode", "packet_roundtrip", "topics"]
 
     steps:
     - uses: 'actions/checkout@v7'

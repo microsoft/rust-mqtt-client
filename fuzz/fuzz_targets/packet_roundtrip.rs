@@ -1,9 +1,19 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Decode → re-encode → re-decode round-trip oracle.
+//! Fuzz target: packet decode/encode round-trip oracle.
 //!
-//! Any bytes that decode to a valid packet must re-encode and decode again to an equal packet.
+//! Purpose: check that decoding and encoding agree. Any bytes that decode to a valid packet must
+//! re-encode and decode again to an EQUAL packet. This catches a bug class that "does not crash"
+//! cannot: decoder/encoder asymmetries, fields accepted on decode but mangled on encode, and state
+//! that silently changes across a round trip.
+//!
+//! Scope: the decode path AND the encode path (`Packet::encode`) — this is the only target that
+//! exercises the encoder, and it does so on the inputs that matter (packets an attacker could
+//! actually cause us to encode, i.e. ones derived from decoding untrusted bytes). Comparison is on
+//! the decoded `Packet` value, NOT the raw bytes, because the spec permits non-canonical encodings
+//! (e.g. over-long varints) that legitimately re-encode to a different byte sequence. Inputs that
+//! do not decode are skipped.
 
 #![no_main]
 

@@ -36,15 +36,15 @@ features = ["__fuzzing"]
 debug = 1
 
 [[bin]]
-name = "decode"
-path = "fuzz_targets/decode.rs"
+name = "packet_decode"
+path = "fuzz_targets/packet_decode.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "roundtrip"
-path = "fuzz_targets/roundtrip.rs"
+name = "packet_roundtrip"
+path = "fuzz_targets/packet_roundtrip.rs"
 test = false
 doc = false
 bench = false
