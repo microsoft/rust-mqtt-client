@@ -5,16 +5,16 @@
 
 // Low-level modules
 // TODO: Revisit the exposed API of these modules, and remove the linting suppressions as necessary
-#[cfg(not(feature = "__integration"))]
+#[cfg(not(any(feature = "__integration", feature = "__fuzzing")))]
 pub(crate) mod buffer_pool;
-#[cfg(feature = "__integration")]
+#[cfg(any(feature = "__integration", feature = "__fuzzing"))]
 pub mod buffer_pool;
 
 pub(crate) mod io;
 
-#[cfg(not(feature = "__integration"))]
+#[cfg(not(any(feature = "__integration", feature = "__fuzzing")))]
 pub(crate) mod mqtt_proto;
-#[cfg(feature = "__integration")]
+#[cfg(any(feature = "__integration", feature = "__fuzzing"))]
 pub mod mqtt_proto;
 
 mod opensslext;
