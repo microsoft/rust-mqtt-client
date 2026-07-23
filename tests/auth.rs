@@ -5,16 +5,16 @@ use std::num::NonZero;
 use std::pin::pin;
 use std::time::Duration;
 
-use azure_mqtt::client::{
-    ClientOptions, ConnectEnhancedAuthResult, KeepAliveConfig, ReauthResult, new_client,
-};
-use azure_mqtt::mqtt_proto::{
-    self, AuthenticateReasonCode, Authentication, ConnectOtherProperties, ConnectReasonCode, Packet,
-};
-use azure_mqtt::packet::{Auth, AuthReason, AuthenticationInfo, ConnAck};
-use azure_mqtt::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use bytes::Bytes;
 use matches::assert_matches;
+use ms_mqtt_client::client::{
+    ClientOptions, ConnectEnhancedAuthResult, KeepAliveConfig, ReauthResult, new_client,
+};
+use ms_mqtt_client::mqtt_proto::{
+    self, AuthenticateReasonCode, Authentication, ConnectOtherProperties, ConnectReasonCode, Packet,
+};
+use ms_mqtt_client::packet::{Auth, AuthReason, AuthenticationInfo, ConnAck};
+use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::unbounded_channel;
 
 mod common;

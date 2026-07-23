@@ -1,0 +1,57 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[package]
+name = "ms-mqtt-client-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# Cargo ignores everything under `[package.metadata]`; it's a free-form area for
+# external tools. `cargo-fuzz = true` is the marker `cargo fuzz init` writes and the
+# cargo-fuzz tool looks for to recognize this as a fuzz crate. It has no effect on a
+# plain `cargo build`.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bytes = "1"
+libfuzzer-sys = "0.4"
+
+[dependencies.ms-mqtt-client]
+path = ".."
+features = ["__fuzzing"]
+
+# Prevent this crate from being pulled into the parent's build graph: the empty
+# `[workspace]` table makes `fuzz/` its own workspace root, so nightly-only
+# cargo-fuzz tooling, the libfuzzer runtime, and sanitizer RUSTFLAGS never leak
+# into the shipped crate's stable build (`make check` / the PR gate).
+[workspace]
+
+# cargo-fuzz builds targets in release mode for throughput, which normally strips
+# debuginfo. `debug = 1` adds line-table debuginfo only (not full level-2 symbols),
+# so crash backtraces and sanitizer reports resolve to source `file:line` without
+# the compile-time/size cost of a full debug build.
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "packet_decode"
+path = "fuzz_targets/packet_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "packet_roundtrip"
+path = "fuzz_targets/packet_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "topics"
+path = "fuzz_targets/topics.rs"
+test = false
+doc = false
+bench = false

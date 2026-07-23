@@ -1,0 +1,8 @@
+# Fuzzing artifacts. Corpora and crash reproducers are regenerated locally and
+# by continuous fuzzing; only hand-curated seeds (committed explicitly) belong
+# in the repo.
+target/
+corpus/
+artifacts/
+coverage/
+Cargo.lock

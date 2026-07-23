@@ -5,13 +5,13 @@ use std::time::Duration;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use azure_mqtt::client::{
+use ms_mqtt_client::client::{
     Client, ClientOptions, ConnectHandle, ConnectResult, KeepAliveConfig, ManualAcknowledgement,
     Receiver, new_client,
 };
-use azure_mqtt::packet::{ConnectProperties, Publish, QoS, RetainOptions, SubscribeProperties};
-use azure_mqtt::topic::TopicFilter;
-use azure_mqtt::transport::{ConnectionTransportConfig, ConnectionTransportType};
+use ms_mqtt_client::packet::{ConnectProperties, Publish, QoS, RetainOptions, SubscribeProperties};
+use ms_mqtt_client::topic::TopicFilter;
+use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 
 const CLIENT_ID: &str = "my_client";
 const HOSTNAME: &str = "localhost";
