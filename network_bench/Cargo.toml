@@ -1,0 +1,33 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[package]
+name = "ms-mqtt-client-network-bench"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+bytes = "1"
+tokio = { version = "1.38.2", default-features = false, features = [
+    "macros",
+    "rt-multi-thread",
+    "time",
+] }
+
+[dependencies.ms-mqtt-client]
+path = ".."
+
+# Prevent this crate from being pulled into the parent's build graph: the empty
+# `[workspace]` table makes `network_bench/` its own workspace root, so the harness's
+# dependencies (and any future ones like histogram/CLI/broker-orchestration crates) never
+# leak into the shipped crate's stable build (`make check` / the PR gate) or its
+# minimal-versions resolution.
+[workspace]
+
+[[bin]]
+name = "network_bench"
+path = "src/main.rs"
+test = false
+doc = false
+bench = false

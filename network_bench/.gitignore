@@ -1,0 +1,4 @@
+# Build artifacts and the resolved lockfile for this detached bench crate are
+# regenerated locally.
+target/
+Cargo.lock

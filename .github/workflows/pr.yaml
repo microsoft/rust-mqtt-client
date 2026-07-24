@@ -118,6 +118,41 @@ jobs:
     - name: Check fuzz targets
       run: cargo check --manifest-path fuzz/Cargo.toml
 
+  # Compile-guard for the network benchmark harness. Like `fuzz/`, the
+  # `network_bench/` crate is a detached workspace (its own `[workspace]`), so
+  # nothing else in this gate builds it -- yet it consumes the client's public
+  # transport API, so an ordinary refactor (e.g. the transport rework) can
+  # silently break it.
+  # This job just keeps the harness compiling. It only *builds* (`cargo check`)
+  # -- actually running it requires a live broker and a tuned host, which is a
+  # manual, out-of-CI activity (see network_bench/src/main.rs).
+  network-bench:
+    name: Network bench compiles (pinned toolchain)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+        # No `-D warnings`: the bench crate isn't held to the library's
+        # warning-denial policy (see the `check` job).
+        rustflags: ''
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        # `network_bench/` is a separate workspace with its own target/, so
+        # point the cache at it explicitly and key it apart from other builds.
+        workspaces: network_bench
+        shared-key: network-bench
+
+    - name: Check network bench
+      run: cargo check --manifest-path network_bench/Cargo.toml
+
   # Full test suite across the supported toolchains (the MSRV declared in
   # Cargo.toml's `rust-version` and the latest stable) crossed with the
   # dependency resolution (latest compatible vs. our declared minimums).
