@@ -66,8 +66,17 @@ jobs:
     # cargo-fuzz builds with unstable `-Z sanitizer` + SanitizerCoverage flags,
     # so the instrumented target must be built on nightly (the library still
     # targets the pinned toolchain everywhere else).
+    #
+    # Explicitly add the glibc target: cargo-fuzz otherwise builds for the
+    # runner's default host triple, which can resolve to a musl target. musl
+    # links libc statically (`crt-static`), and ASan is incompatible with a
+    # statically linked libc ("sanitizer is incompatible with statically linked
+    # libc"); `--profile minimal` also ships std only for the host, so a musl
+    # build fails with "can't find crate for `core`". Pinning glibc avoids both.
     - name: Install nightly Rust
-      run: rustup toolchain install nightly --profile minimal
+      run: |
+        rustup toolchain install nightly --profile minimal
+        rustup target add x86_64-unknown-linux-gnu --toolchain nightly
 
     - name: Cache cargo build artifacts
       uses: Swatinem/rust-cache@v2
@@ -93,8 +102,11 @@ jobs:
       with:
         tool: cargo-fuzz
 
+    # `--target x86_64-unknown-linux-gnu` pins the glibc target so the ASan-
+    # instrumented build never falls back to a static-libc musl target (see the
+    # nightly-install step for the failure modes that would cause).
     - name: Fuzz
-      run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
+      run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=3600
 
     # On a crash, cargo-fuzz writes a minimized reproducer under
     # fuzz/artifacts/<target>/. Upload it so the exact crashing input is
