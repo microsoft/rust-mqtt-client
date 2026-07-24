@@ -121,8 +121,7 @@ jobs:
   # Compile-guard for the network benchmark harness. Like `fuzz/`, the
   # `network_bench/` crate is a detached workspace (its own `[workspace]`), so
   # nothing else in this gate builds it -- yet it consumes the client's public
-  # transport API, so an ordinary refactor (e.g. the transport rework) can
-  # silently break it.
+  # transport API, so an ordinary refactor can silently break it.
   # This job just keeps the harness compiling. It only *builds* (`cargo check`)
   # -- actually running it requires a live broker and a tuned host, which is a
   # manual, out-of-CI activity (see network_bench/src/main.rs).
