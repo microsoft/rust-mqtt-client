@@ -20,8 +20,6 @@
 //! - `throughput` — many ops in flight (`INFLIGHT`). Sensitive to the crypto/copy data path. Use a
 //!   large payload (and TLS) to stress per-byte CPU and copy costs. Watch CPU, not just msg/s
 //!   (see below).
-//! - `echo` — subscribe to the publish topic and measure full publish -> broker -> receive latency.
-//!   Exercises both the writer and reader paths.
 //!
 //! # Isolating confounders (run these OUTSIDE the harness)
 //!
@@ -53,7 +51,7 @@
 //!   TCP_NODELAY  1/0 — applied only if the client API exposes it (currently ignored)
 //!
 //! Workload:
-//!   MODE         latency | throughput | echo          (default: latency)
+//!   MODE         latency | throughput                 (default: latency)
 //!   QOS          0 | 1                                 (default: 1; QoS 2 not implemented)
 //!   TOPIC        topic to publish/subscribe            (default: perf/harness/<pid>)
 //!   PAYLOAD_BYTES payload size in bytes                (default: 64)

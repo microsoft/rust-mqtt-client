@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use ms_mqtt_client::client::{Client, Receiver};
-use ms_mqtt_client::packet::{PublishProperties, QoS, RetainOptions, SubscribeProperties};
-use ms_mqtt_client::topic::{TopicFilter, TopicName};
+use ms_mqtt_client::packet::PublishProperties;
+use ms_mqtt_client::topic::TopicName;
 use tokio::task::JoinSet;
 
 use crate::config::{Config, Mode};
@@ -18,13 +18,12 @@ use crate::report::Report;
 
 pub(crate) async fn run_workload(
     client: Client,
-    receiver: Receiver,
+    _receiver: Receiver,
     cfg: &Config,
 ) -> Result<Report, String> {
     let (latencies_ns, wall) = match cfg.mode {
         Mode::Latency => run_latency(&client, cfg).await?,
         Mode::Throughput => run_throughput(&client, cfg).await?,
-        Mode::Echo => run_echo(&client, receiver, cfg).await?,
     };
 
     Ok(Report {
@@ -76,49 +75,6 @@ async fn run_throughput(client: &Client, cfg: &Config) -> Result<(Vec<u64>, Dura
     let mut latencies = Vec::with_capacity(cfg.count);
     let start = Instant::now();
     pipeline(client, cfg, cfg.count, Some(&mut latencies)).await?;
-    let wall = start.elapsed();
-    Ok((latencies, wall))
-}
-
-/// Full-path latency: publish to a topic we are subscribed to and measure until it is received.
-async fn run_echo(
-    client: &Client,
-    mut receiver: Receiver,
-    cfg: &Config,
-) -> Result<(Vec<u64>, Duration), String> {
-    let filter =
-        TopicFilter::new(cfg.topic.as_str()).map_err(|e| format!("invalid TOPIC filter: {e:?}"))?;
-    let token = client
-        .subscribe(
-            filter,
-            qos_enum(cfg.qos),
-            false,
-            RetainOptions::default(),
-            SubscribeProperties::default(),
-        )
-        .await
-        .map_err(|_| "subscribe rejected: client detached".to_string())?;
-    token.await.map_err(|e| format!("SUBACK failed: {e}"))?;
-
-    for _ in 0..cfg.warmup {
-        publish_once(client, cfg.qos, &cfg.topic, cfg.payload.clone()).await?;
-        receiver
-            .recv()
-            .await
-            .ok_or_else(|| "receiver closed during warmup".to_string())?;
-    }
-
-    let mut latencies = Vec::with_capacity(cfg.count);
-    let start = Instant::now();
-    for _ in 0..cfg.count {
-        let op_start = Instant::now();
-        publish_once(client, cfg.qos, &cfg.topic, cfg.payload.clone()).await?;
-        receiver
-            .recv()
-            .await
-            .ok_or_else(|| "receiver closed during measurement".to_string())?;
-        latencies.push(elapsed_ns(op_start));
-    }
     let wall = start.elapsed();
     Ok((latencies, wall))
 }
@@ -182,13 +138,6 @@ async fn publish_once(client: &Client, qos: u8, topic: &str, payload: Bytes) -> 
         _ => return Err("QoS 2 is not implemented by this harness".to_string()),
     }
     Ok(())
-}
-
-fn qos_enum(qos: u8) -> QoS {
-    match qos {
-        0 => QoS::AtMostOnce,
-        _ => QoS::AtLeastOnce,
-    }
 }
 
 fn elapsed_ns(start: Instant) -> u64 {

@@ -16,7 +16,6 @@ use ms_mqtt_client::client::{
 pub(crate) enum Mode {
     Latency,
     Throughput,
-    Echo,
 }
 
 impl Mode {
@@ -24,7 +23,6 @@ impl Mode {
         match self {
             Mode::Latency => "latency",
             Mode::Throughput => "throughput",
-            Mode::Echo => "echo",
         }
     }
 }
@@ -66,10 +64,9 @@ impl Config {
         let mode = match env_str("MODE", "latency").to_ascii_lowercase().as_str() {
             "latency" => Mode::Latency,
             "throughput" => Mode::Throughput,
-            "echo" => Mode::Echo,
             other => {
                 return Err(format!(
-                    "unknown MODE '{other}' (expected latency|throughput|echo)"
+                    "unknown MODE '{other}' (expected latency|throughput)"
                 ));
             }
         };
@@ -211,7 +208,7 @@ Connection:
   CA_FILE, CERT_FILE, KEY_FILE, CONNECT_TIMEOUT_SECS, KEEPALIVE_SECS
 
 Workload:
-  MODE(latency|throughput|echo), QOS(0|1), TOPIC, PAYLOAD_BYTES,
+  MODE(latency|throughput), QOS(0|1), TOPIC, PAYLOAD_BYTES,
   COUNT, WARMUP, INFLIGHT, INTERVAL_US, LABEL
 
 Examples:
@@ -222,9 +219,6 @@ Examples:
   MODE=throughput QOS=0 PAYLOAD_BYTES=131072 INFLIGHT=64 COUNT=20000 \\
     TRANSPORT=tls PORT=8883 CA_FILE=ca.pem CERT_FILE=client.pem KEY_FILE=client.key \\
     HOST=broker cargo run --release
-
-  # Full publish->receive path latency
-  MODE=echo QOS=1 PAYLOAD_BYTES=256 COUNT=20000 HOST=broker cargo run --release
 
 Tip: measure CPU-per-message with `/usr/bin/time -v` and inject RTT on loopback with `tc netem`.
 "
