@@ -1,0 +1,28 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[package]
+name = "bench_peer"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# Intentionally NO dependency on `ms-mqtt-client`: this peer hand-rolls the minimal MQTT 5 wire
+# bytes it needs so its behavior is invariant across client builds. That build-invariance is the
+# whole point — it lets the client under test be measured in isolation without the peer becoming a
+# confound. Keep it that way.
+[dependencies]
+tokio = { version = "1.38.2", default-features = false, features = [
+    "io-util",
+    "net",
+    "rt-multi-thread",
+    "macros",
+    "time",
+] }
+
+[[bin]]
+name = "bench_peer"
+path = "src/main.rs"
+test = false
+doc = false
+bench = false

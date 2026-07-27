@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Output: latency percentiles and throughput, rendered as a human summary plus a single
+//! Output: latency/jitter percentiles and throughput, rendered as a human summary plus a single
 //! machine-readable `RESULT ` line. This is the module that grows when adding metrics or
 //! output formats.
 
@@ -16,6 +16,8 @@ pub(crate) struct Report {
     pub(crate) payload_bytes: usize,
     pub(crate) inflight: usize,
     pub(crate) interval_us: u64,
+    /// What the percentile numbers represent for this mode ("op latency" vs "inter-arrival").
+    pub(crate) latency_kind: &'static str,
     pub(crate) count: usize,
     pub(crate) wall: Duration,
     pub(crate) latencies_ns: Vec<u64>,
@@ -60,19 +62,23 @@ impl Report {
         println!("wall time:    {wall_s:.3} s");
         println!("throughput:   {msgs_per_s:.1} msg/s   {mb_per_s:.2} MiB/s (payload only)");
         println!(
-            "latency (us): min={min:.1}  p50={p50:.1}  p90={p90:.1}  p99={p99:.1}  \
-             p99.9={p999:.1}  max={max:.1}  mean={mean:.1}"
+            "{kind} (us): min={min:.1}  p50={p50:.1}  p90={p90:.1}  p99={p99:.1}  \
+             p99.9={p999:.1}  max={max:.1}  mean={mean:.1}",
+            kind = self.latency_kind
         );
         println!("note:         measure CPU-per-msg externally, e.g. `/usr/bin/time -v ...`");
         println!("=============================");
 
-        // Machine-readable line for scraping / diffing across runs.
+        // Machine-readable line for scraping / diffing across runs. Raw-string pieces keep the JSON
+        // quotes literal; `concat!` joins them at compile time into one format template.
         println!(
-            "RESULT {{\"label\":\"{}\",\"mode\":\"{}\",\"transport\":\"{}\",\"qos\":{},\
-             \"payload_bytes\":{},\"inflight\":{},\"interval_us\":{},\"count\":{},\
-             \"wall_s\":{:.6},\"msgs_per_s\":{:.3},\"mib_per_s\":{:.3},\
-             \"lat_us\":{{\"min\":{:.3},\"p50\":{:.3},\"p90\":{:.3},\"p99\":{:.3},\
-             \"p999\":{:.3},\"max\":{:.3},\"mean\":{:.3}}}}}",
+            concat!(
+                r#"RESULT {{"label":"{}","mode":"{}","transport":"{}","qos":{},"#,
+                r#""payload_bytes":{},"inflight":{},"interval_us":{},"count":{},"#,
+                r#""wall_s":{:.6},"msgs_per_s":{:.3},"mib_per_s":{:.3},"lat_kind":"{}","#,
+                r#""lat_us":{{"min":{:.3},"p50":{:.3},"p90":{:.3},"p99":{:.3},"#,
+                r#""p999":{:.3},"max":{:.3},"mean":{:.3}}}}}"#,
+            ),
             self.label,
             self.mode,
             self.transport,
@@ -84,6 +90,7 @@ impl Report {
             wall_s,
             msgs_per_s,
             mb_per_s,
+            self.latency_kind,
             min,
             p50,
             p90,

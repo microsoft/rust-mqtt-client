@@ -18,12 +18,13 @@ use crate::report::Report;
 
 pub(crate) async fn run_workload(
     client: Client,
-    _receiver: Receiver,
+    receiver: Receiver,
     cfg: &Config,
 ) -> Result<Report, String> {
     let (latencies_ns, wall) = match cfg.mode {
         Mode::Latency => run_latency(&client, cfg).await?,
         Mode::Throughput => run_throughput(&client, cfg).await?,
+        Mode::Inbound => run_inbound(receiver, cfg).await?,
     };
 
     Ok(Report {
@@ -39,6 +40,10 @@ pub(crate) async fn run_workload(
             1
         },
         interval_us: cfg.interval_us,
+        latency_kind: match cfg.mode {
+            Mode::Inbound => "inter-arrival",
+            _ => "op latency",
+        },
         count: latencies_ns.len(),
         wall,
         latencies_ns,
@@ -77,6 +82,33 @@ async fn run_throughput(client: &Client, cfg: &Config) -> Result<(Vec<u64>, Dura
     pipeline(client, cfg, cfg.count, Some(&mut latencies)).await?;
     let wall = start.elapsed();
     Ok((latencies, wall))
+}
+
+/// Inbound receive throughput: drain the `Receiver` and record inter-arrival gaps. The producer is
+/// an external peer (`bench_peer ROLE=feed`), so this measures only the client's receive path
+/// (read → decode → deliver), not broker behavior.
+async fn run_inbound(mut receiver: Receiver, cfg: &Config) -> Result<(Vec<u64>, Duration), String> {
+    for _ in 0..cfg.warmup {
+        receiver
+            .recv()
+            .await
+            .ok_or_else(|| "receiver closed during warmup".to_string())?;
+    }
+
+    let mut gaps = Vec::with_capacity(cfg.count);
+    let start = Instant::now();
+    let mut last = start;
+    for _ in 0..cfg.count {
+        receiver
+            .recv()
+            .await
+            .ok_or_else(|| "receiver closed during measurement".to_string())?;
+        let now = Instant::now();
+        gaps.push(u64::try_from(now.duration_since(last).as_nanos()).unwrap_or(u64::MAX));
+        last = now;
+    }
+    let wall = start.elapsed();
+    Ok((gaps, wall))
 }
 
 /// Runs `n` publishes with at most `cfg.inflight` outstanding, optionally recording per-op latency.

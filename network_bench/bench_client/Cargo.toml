@@ -1,0 +1,26 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[package]
+name = "bench_client"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+bytes = "1"
+tokio = { version = "1.38.2", default-features = false, features = [
+    "macros",
+    "rt-multi-thread",
+    "time",
+] }
+
+[dependencies.ms-mqtt-client]
+path = "../.."
+
+[[bin]]
+name = "bench_client"
+path = "src/main.rs"
+test = false
+doc = false
+bench = false

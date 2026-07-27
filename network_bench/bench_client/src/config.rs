@@ -16,6 +16,7 @@ use ms_mqtt_client::client::{
 pub(crate) enum Mode {
     Latency,
     Throughput,
+    Inbound,
 }
 
 impl Mode {
@@ -23,6 +24,7 @@ impl Mode {
         match self {
             Mode::Latency => "latency",
             Mode::Throughput => "throughput",
+            Mode::Inbound => "inbound",
         }
     }
 }
@@ -64,9 +66,10 @@ impl Config {
         let mode = match env_str("MODE", "latency").to_ascii_lowercase().as_str() {
             "latency" => Mode::Latency,
             "throughput" => Mode::Throughput,
+            "inbound" => Mode::Inbound,
             other => {
                 return Err(format!(
-                    "unknown MODE '{other}' (expected latency|throughput)"
+                    "unknown MODE '{other}' (expected latency|throughput|inbound)"
                 ));
             }
         };
@@ -199,27 +202,32 @@ pub(crate) fn print_usage() {
     // essentials here.
     print!(
         "\
-network_bench — MQTT transport performance harness (env-var driven)
+bench_client — MQTT transport performance harness (env-var driven)
 
-Run against the SAME broker on two builds and compare the `RESULT ...` JSON lines.
+Run against the SAME peer on two builds and compare the `RESULT ...` JSON lines.
 
 Connection:
   HOST, PORT, TRANSPORT(tcp|tls), CLIENT_ID, USERNAME, PASSWORD,
   CA_FILE, CERT_FILE, KEY_FILE, CONNECT_TIMEOUT_SECS, KEEPALIVE_SECS
 
 Workload:
-  MODE(latency|throughput), QOS(0|1), TOPIC, PAYLOAD_BYTES,
+  MODE(latency|throughput|inbound), QOS(0|1), TOPIC, PAYLOAD_BYTES,
   COUNT, WARMUP, INFLIGHT, INTERVAL_US, LABEL
 
 Examples:
   # Small-payload round-trip latency on a hot socket (nodelay/Nagle sensitive)
-  MODE=latency QOS=1 PAYLOAD_BYTES=32 COUNT=50000 HOST=broker cargo run --release
+  MODE=latency QOS=1 PAYLOAD_BYTES=32 COUNT=50000 HOST=peer cargo run -p bench_client --release
 
   # Large-payload sustained throughput over TLS (crypto/copy path sensitive)
   MODE=throughput QOS=0 PAYLOAD_BYTES=131072 INFLIGHT=64 COUNT=20000 \\
     TRANSPORT=tls PORT=8883 CA_FILE=ca.pem CERT_FILE=client.pem KEY_FILE=client.key \\
-    HOST=broker cargo run --release
+    HOST=peer cargo run -p bench_client --release
 
+  # Inbound receive throughput (start `bench_peer ROLE=feed` first, aim HOST/PORT at it)
+  MODE=inbound PAYLOAD_BYTES=256 COUNT=100000 HOST=127.0.0.1 PORT=1883 cargo run -p bench_client --release
+
+Note: the client-isolating workloads run against bench_peer, not a real broker
+  (ROLE=feed for inbound; ROLE=sink for latency/throughput). See `cargo run -p bench_peer -- --help`.
 Tip: measure CPU-per-message with `/usr/bin/time -v` and inject RTT on loopback with `tc netem`.
 "
     );

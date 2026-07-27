@@ -118,15 +118,14 @@ jobs:
     - name: Check fuzz targets
       run: cargo check --manifest-path fuzz/Cargo.toml
 
-  # Compile-guard for the network benchmark harness. Like `fuzz/`, the
-  # `network_bench/` crate is a detached workspace (its own `[workspace]`), so
-  # nothing else in this gate builds it -- yet it consumes the client's public
-  # transport API, so an ordinary refactor can silently break it.
-  # This job just keeps the harness compiling. It only *builds* (`cargo check`)
-  # -- actually running it requires a live broker and a tuned host, which is a
-  # manual, out-of-CI activity (see network_bench/src/main.rs).
-  network-bench:
-    name: Network bench compiles (pinned toolchain)
+  # Compile-guard for the benchmark tooling workspace (network_bench/): the instrumented client
+  # harness (`bench_client`) and the controlled peer (`bench_peer`). Like `fuzz/`, it's a detached
+  # workspace (its own `[workspace]`), so nothing else in this gate builds it. `bench_client`
+  # consumes the client's public transport API (a refactor can break it); `bench_peer` is
+  # independent (hand-rolled MQTT, no dep on ms-mqtt-client). It only *builds* (`cargo check`) --
+  # running requires a peer and a tuned host, a manual out-of-CI activity (see network_bench/).
+  bench:
+    name: Bench tooling compiles (pinned toolchain)
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
 
@@ -137,7 +136,7 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         cache: false
-        # No `-D warnings`: the bench crate isn't held to the library's
+        # No `-D warnings`: the bench crates aren't held to the library's
         # warning-denial policy (see the `check` job).
         rustflags: ''
 
@@ -147,9 +146,9 @@ jobs:
         # `network_bench/` is a separate workspace with its own target/, so
         # point the cache at it explicitly and key it apart from other builds.
         workspaces: network_bench
-        shared-key: network-bench
+        shared-key: bench
 
-    - name: Check network bench
+    - name: Check bench tooling
       run: cargo check --manifest-path network_bench/Cargo.toml
 
   # Full test suite across the supported toolchains (the MSRV declared in

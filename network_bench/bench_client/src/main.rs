@@ -20,6 +20,9 @@
 //! - `throughput` — many ops in flight (`INFLIGHT`). Sensitive to the crypto/copy data path. Use a
 //!   large payload (and TLS) to stress per-byte CPU and copy costs. Watch CPU, not just msg/s
 //!   (see below).
+//! - `inbound` — measures the client's *receive* throughput. An external peer (`bench_peer
+//!   ROLE=feed`) firehoses PUBLISHes at the client; this drains the `Receiver` and reports receive
+//!   throughput plus inter-arrival jitter, isolating the read/decode path from broker behavior.
 //!
 //! # Isolating confounders (run these OUTSIDE the harness)
 //!
@@ -33,8 +36,9 @@
 //!
 //! # Usage
 //!
-//! All configuration is via environment variables. From this crate directory, run
-//! `cargo run --release -- --help` (or `HELP=1 cargo run --release`) to print this list.
+//! All configuration is via environment variables. From the `network_bench/` workspace, run
+//! `cargo run -p bench_client --release -- --help` (or `HELP=1 cargo run -p bench_client --release`)
+//! to print this list.
 //!
 //! Connection:
 //!   HOST         broker hostname                       (default: localhost)
@@ -51,7 +55,7 @@
 //!   TCP_NODELAY  1/0 — applied only if the client API exposes it (currently ignored)
 //!
 //! Workload:
-//!   MODE         latency | throughput                 (default: latency)
+//!   MODE         latency | throughput | inbound       (default: latency)
 //!   QOS          0 | 1                                 (default: 1; QoS 2 not implemented)
 //!   TOPIC        topic to publish/subscribe            (default: perf/harness/<pid>)
 //!   PAYLOAD_BYTES payload size in bytes                (default: 64)
@@ -157,23 +161,17 @@ async fn run(cfg: Config) -> Result<(), String> {
 
     eprintln!("connected; running '{}' workload...", cfg.mode.as_str());
 
-    // Drive the connection future concurrently with the workload; the workload awaits completion
-    // tokens/received messages, which only make progress while the connection is polled.
-    let workload = run_workload(client, receiver, &cfg);
-    tokio::pin!(workload);
-    let conn_fut = connection.run_until_disconnect();
-    tokio::pin!(conn_fut);
+    // Drive the connection on its own task so the reader and the workload run concurrently.
+    // This matters for `inbound`: the incoming-publish channel is unbounded, so a reader
+    // co-scheduled with the consumer in a single `select!` task can starve it under a firehose
+    // and grow memory without bound.
+    let conn_task = tokio::spawn(async move { connection.run_until_disconnect().await });
 
-    let report = tokio::select! {
-        _ = &mut conn_fut => {
-            return Err("connection ended before the workload completed".to_string());
-        }
-        result = &mut workload => result?,
-    };
+    let report = run_workload(client, receiver, &cfg).await?;
 
-    // Clean shutdown: request DISCONNECT and let the connection future flush it.
+    // Clean shutdown: request DISCONNECT and let the connection task flush it.
     let _ = disconnect_handle.disconnect(&DisconnectProperties::default());
-    let _ = conn_fut.await;
+    let _ = conn_task.await;
 
     report.print();
     Ok(())
