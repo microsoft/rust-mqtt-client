@@ -11,28 +11,41 @@
 //!
 //! Roles (`ROLE` env var):
 //! - `feed` — inbound test: after CONNACK, firehose pre-encoded QoS 0 PUBLISH frames at the client
-//!   as fast as possible (or paced to `RATE`), draining anything the client sends. The client's
-//!   receive path (read → decode → deliver) is the only bottleneck, so its throughput is measured.
+//!   as fast as possible (or paced to `RATE`), draining anything the client sends.
 //! - `sink` — outbound test: after CONNACK, drain the client's PUBLISHes; for QoS 1, reply with a
-//!   PUBACK echoing the packet identifier. Removes broker ack latency/rate from the client's send
-//!   measurement.
+//!   PUBACK echoing the packet identifier.
 //!
-//! TCP only for now (a TLS-terminating variant is the planned next step).
+//! Transport: plaintext TCP by default, or TLS termination with `TLS=1` (needs `CERT_FILE`/
+//! `KEY_FILE`; see `gen-test-certs.sh`).
+//!
+//! IMPORTANT TLS caveat: with plaintext the peer just writes pre-encoded bytes and is trivially
+//! faster than the client, so throughput is client-bound. Under TLS the peer must **encrypt live**
+//! (TLS records can't be pre-encoded or replayed), so it is no longer trivially faster —
+//! single-session TLS throughput is bounded by `min(peer encrypt, client decrypt)`. For the
+//! crypto-cost signal, prefer CLIENT CPU-per-message (`/usr/bin/time -v` on bench_client), which
+//! stays un-confounded, and use `latency` mode for TLS round-trip.
 //!
 //! Env:
 //!   ROLE          feed | sink                 (default: feed)
 //!   BIND          listen address              (default: 127.0.0.1)
-//!   PORT          listen port                 (default: 1883)
+//!   PORT          listen port                 (default: 1883, use 8883 for TLS by convention)
+//!   TLS           1 = terminate TLS           (default: 0)
+//!   CERT_FILE     PEM server cert chain        (required if TLS=1)
+//!   KEY_FILE      PEM server private key       (required if TLS=1)
 //!   TOPIC         topic in pushed PUBLISHes   (feed; default: bench/inbound)
 //!   PAYLOAD_BYTES pushed payload size         (feed; default: 64)
 //!   BATCH         PUBLISH frames per write    (feed; default: 64)
 //!   RATE          target msgs/sec, 0 = max    (feed; default: 0)
 
 use std::io;
+use std::pin::Pin;
+use std::sync::Arc;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, split};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Duration, Instant, sleep_until};
+use tokio_openssl::SslStream;
 
 // Minimal canned MQTT 5 control packets.
 // CONNACK: connect-ack flags 0x00 (no session present), reason 0x00 (success), property length 0.
@@ -50,6 +63,9 @@ struct Config {
     role: Role,
     bind: String,
     port: u16,
+    tls: bool,
+    cert_file: Option<String>,
+    key_file: Option<String>,
     topic: String,
     payload: Vec<u8>,
     batch: usize,
@@ -63,11 +79,20 @@ impl Config {
             "sink" => Role::Sink,
             other => return Err(format!("unknown ROLE '{other}' (expected feed|sink)")),
         };
+        let tls = matches!(env_str("TLS", "0").as_str(), "1" | "true");
+        let cert_file = std::env::var("CERT_FILE").ok().filter(|s| !s.is_empty());
+        let key_file = std::env::var("KEY_FILE").ok().filter(|s| !s.is_empty());
+        if tls && (cert_file.is_none() || key_file.is_none()) {
+            return Err("TLS=1 requires CERT_FILE and KEY_FILE".to_string());
+        }
         let payload_bytes = env_usize("PAYLOAD_BYTES", 64);
         Ok(Self {
             role,
             bind: env_str("BIND", "127.0.0.1"),
             port: env_u64("PORT", 1883) as u16,
+            tls,
+            cert_file,
+            key_file,
             topic: env_str("TOPIC", "bench/inbound"),
             payload: vec![b'x'; payload_bytes],
             batch: env_usize("BATCH", 64).max(1),
@@ -97,22 +122,42 @@ async fn main() {
 
 async fn run(cfg: Config) -> io::Result<()> {
     let listener = TcpListener::bind((cfg.bind.as_str(), cfg.port)).await?;
+
+    let acceptor = if cfg.tls {
+        let cert = cfg.cert_file.as_deref().unwrap();
+        let key = cfg.key_file.as_deref().unwrap();
+        Some(Arc::new(build_acceptor(cert, key).map_err(|e| {
+            io::Error::other(format!("TLS setup failed: {e}"))
+        })?))
+    } else {
+        None
+    };
+
     let role = match cfg.role {
         Role::Feed => "feed",
         Role::Sink => "sink",
     };
-    eprintln!("bench_peer[{role}] listening on {}:{}", cfg.bind, cfg.port);
+    eprintln!(
+        "bench_peer[{role}] listening on {}:{} ({})",
+        cfg.bind,
+        cfg.port,
+        if cfg.tls { "tls" } else { "tcp" }
+    );
 
-    let cfg = std::sync::Arc::new(cfg);
+    let cfg = Arc::new(cfg);
     loop {
-        let (stream, addr) = listener.accept().await?;
-        stream.set_nodelay(true)?;
+        let (tcp, addr) = listener.accept().await?;
+        tcp.set_nodelay(true)?;
         eprintln!("bench_peer: client connected from {addr}");
         let cfg = cfg.clone();
+        let acceptor = acceptor.clone();
         tokio::spawn(async move {
-            let result = match cfg.role {
-                Role::Feed => handle_feed(stream, &cfg).await,
-                Role::Sink => handle_sink(stream).await,
+            let result = match acceptor {
+                Some(acceptor) => match tls_accept(&acceptor, tcp).await {
+                    Ok(stream) => serve(stream, &cfg).await,
+                    Err(e) => Err(e),
+                },
+                None => serve(tcp, &cfg).await,
             };
             match result {
                 Ok(()) => eprintln!("bench_peer: connection closed"),
@@ -122,9 +167,45 @@ async fn run(cfg: Config) -> io::Result<()> {
     }
 }
 
+/// Builds a TLS server acceptor from a PEM cert chain and private key.
+fn build_acceptor(
+    cert_file: &str,
+    key_file: &str,
+) -> Result<SslAcceptor, openssl::error::ErrorStack> {
+    let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
+    builder.set_private_key_file(key_file, SslFiletype::PEM)?;
+    builder.set_certificate_chain_file(cert_file)?;
+    Ok(builder.build())
+}
+
+/// Completes the server-side TLS handshake over an accepted TCP connection.
+async fn tls_accept(acceptor: &SslAcceptor, tcp: TcpStream) -> io::Result<SslStream<TcpStream>> {
+    let ssl = openssl::ssl::Ssl::new(acceptor.context()).map_err(io::Error::other)?;
+    let mut stream = SslStream::new(ssl, tcp).map_err(io::Error::other)?;
+    Pin::new(&mut stream)
+        .accept()
+        .await
+        .map_err(|e| io::Error::other(format!("TLS handshake failed: {e}")))?;
+    Ok(stream)
+}
+
+/// Dispatches an established byte stream (TCP or TLS) to the configured role.
+async fn serve<S>(stream: S, cfg: &Config) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    match cfg.role {
+        Role::Feed => handle_feed(stream, cfg).await,
+        Role::Sink => handle_sink(stream).await,
+    }
+}
+
 /// Inbound test: after the handshake, firehose pre-encoded PUBLISH frames at the client.
-async fn handle_feed(stream: TcpStream, cfg: &Config) -> io::Result<()> {
-    let (rd, mut wr) = stream.into_split();
+async fn handle_feed<S>(stream: S, cfg: &Config) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (rd, mut wr) = split(stream);
     let mut reader = BufReader::new(rd);
     let _connect = read_packet(&mut reader).await?; // consume CONNECT
     wr.write_all(&CONNACK).await?;
@@ -141,7 +222,8 @@ async fn handle_feed(stream: TcpStream, cfg: &Config) -> io::Result<()> {
         }
     });
 
-    // Pre-encode one PUBLISH and a batch of them, so the hot loop is just `write`.
+    // Pre-encode one PUBLISH and a batch of them, so the hot loop is just `write` (plus TLS
+    // encryption when enabled).
     let frame = build_publish(&cfg.topic, &cfg.payload);
     let mut batch = Vec::with_capacity(frame.len() * cfg.batch);
     for _ in 0..cfg.batch {
@@ -170,8 +252,11 @@ async fn handle_feed(stream: TcpStream, cfg: &Config) -> io::Result<()> {
 }
 
 /// Outbound test: after the handshake, drain the client's PUBLISHes and PUBACK QoS 1 messages.
-async fn handle_sink(stream: TcpStream) -> io::Result<()> {
-    let (rd, mut wr) = stream.into_split();
+async fn handle_sink<S>(stream: S) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (rd, mut wr) = split(stream);
     let mut reader = BufReader::new(rd);
     let _connect = read_packet(&mut reader).await?; // consume CONNECT
     wr.write_all(&CONNACK).await?;
@@ -306,11 +391,20 @@ Roles:
   ROLE=feed   inbound test  — firehose PUBLISHes at the client (measure client receive throughput)
   ROLE=sink   outbound test — drain client PUBLISHes, PUBACK QoS 1 (measure client send path)
 
-Env: ROLE(feed|sink), BIND, PORT, TOPIC, PAYLOAD_BYTES, BATCH, RATE (feed; RATE=0 = max).
+Transport: TCP by default; TLS=1 terminates TLS (needs CERT_FILE/KEY_FILE — see gen-test-certs.sh).
+  NOTE: under TLS the peer must encrypt live, so single-session throughput is bounded by
+  min(peer, client) crypto. Lean on bench_client CPU-per-msg (/usr/bin/time -v) for the TLS signal.
+
+Env: ROLE(feed|sink), BIND, PORT, TLS(0|1), CERT_FILE, KEY_FILE,
+     TOPIC, PAYLOAD_BYTES, BATCH, RATE (feed; RATE=0 = max).
 
 Examples:
-  # Inbound: feed at max rate, 256-byte payloads
+  # Inbound over TCP: feed at max rate, 256-byte payloads
   ROLE=feed PORT=1883 PAYLOAD_BYTES=256 cargo run -p bench_peer --release
+
+  # Inbound over TLS (generate certs first: ./gen-test-certs.sh)
+  ROLE=feed TLS=1 PORT=8883 CERT_FILE=certs/server.crt KEY_FILE=certs/server.key \\
+    PAYLOAD_BYTES=256 cargo run -p bench_peer --release
 
   # Outbound: sink + PUBACK for the client's publish workloads
   ROLE=sink PORT=1883 cargo run -p bench_peer --release

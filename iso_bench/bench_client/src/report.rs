@@ -53,7 +53,7 @@ impl Report {
         let p999 = us(pct(&sorted, 99.9));
 
         println!();
-        println!("==== network_bench result ====");
+        println!("==== iso_bench result ====");
         if !self.label.is_empty() {
             println!("label:        {}", self.label);
         }

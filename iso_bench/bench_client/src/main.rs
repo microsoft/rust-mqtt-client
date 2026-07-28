@@ -36,7 +36,7 @@
 //!
 //! # Usage
 //!
-//! All configuration is via environment variables. From the `network_bench/` workspace, run
+//! All configuration is via environment variables. From the `iso_bench/` workspace, run
 //! `cargo run -p bench_client --release -- --help` (or `HELP=1 cargo run -p bench_client --release`)
 //! to print this list.
 //!

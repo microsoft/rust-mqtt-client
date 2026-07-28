@@ -118,12 +118,12 @@ jobs:
     - name: Check fuzz targets
       run: cargo check --manifest-path fuzz/Cargo.toml
 
-  # Compile-guard for the benchmark tooling workspace (network_bench/): the instrumented client
+  # Compile-guard for the benchmark tooling workspace (iso_bench/): the instrumented client
   # harness (`bench_client`) and the controlled peer (`bench_peer`). Like `fuzz/`, it's a detached
   # workspace (its own `[workspace]`), so nothing else in this gate builds it. `bench_client`
   # consumes the client's public transport API (a refactor can break it); `bench_peer` is
   # independent (hand-rolled MQTT, no dep on ms-mqtt-client). It only *builds* (`cargo check`) --
-  # running requires a peer and a tuned host, a manual out-of-CI activity (see network_bench/).
+  # running requires a peer and a tuned host, a manual out-of-CI activity (see iso_bench/).
   bench:
     name: Bench tooling compiles (pinned toolchain)
     runs-on: 'ubuntu-24.04'
@@ -143,13 +143,13 @@ jobs:
     - name: Cache cargo build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        # `network_bench/` is a separate workspace with its own target/, so
+        # `iso_bench/` is a separate workspace with its own target/, so
         # point the cache at it explicitly and key it apart from other builds.
-        workspaces: network_bench
+        workspaces: iso_bench
         shared-key: bench
 
     - name: Check bench tooling
-      run: cargo check --manifest-path network_bench/Cargo.toml
+      run: cargo check --manifest-path iso_bench/Cargo.toml
 
   # Full test suite across the supported toolchains (the MSRV declared in
   # Cargo.toml's `rust-version` and the latest stable) crossed with the

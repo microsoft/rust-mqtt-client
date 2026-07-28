@@ -10,8 +10,12 @@ edition = "2024"
 # Intentionally NO dependency on `ms-mqtt-client`: this peer hand-rolls the minimal MQTT 5 wire
 # bytes it needs so its behavior is invariant across client builds. That build-invariance is the
 # whole point — it lets the client under test be measured in isolation without the peer becoming a
-# confound. Keep it that way.
+# confound. Keep it that way. (openssl/tokio-openssl are third-party TLS termination, not the client
+# under test, so they don't break that property.)
 [dependencies]
+# TLS termination for the `TLS=1` mode. Mirrors the library's pin only to share the system lib;
+# the peer's TLS is its own end of the connection, independent of the client build.
+openssl = { version = "0.10.72", default-features = false }
 tokio = { version = "1.38.2", default-features = false, features = [
     "io-util",
     "net",
@@ -19,6 +23,7 @@ tokio = { version = "1.38.2", default-features = false, features = [
     "macros",
     "time",
 ] }
+tokio-openssl = { version = "0.6", default-features = false }
 
 [[bin]]
 name = "bench_peer"

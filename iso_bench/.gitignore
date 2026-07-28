@@ -2,3 +2,6 @@
 # regenerated locally.
 target/
 Cargo.lock
+
+# Locally generated TLS test certs (see gen-test-certs.sh) — never committed.
+certs/

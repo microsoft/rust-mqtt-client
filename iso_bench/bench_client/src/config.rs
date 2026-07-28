@@ -218,10 +218,10 @@ Examples:
   # Small-payload round-trip latency on a hot socket (nodelay/Nagle sensitive)
   MODE=latency QOS=1 PAYLOAD_BYTES=32 COUNT=50000 HOST=peer cargo run -p bench_client --release
 
-  # Large-payload sustained throughput over TLS (crypto/copy path sensitive)
+  # Large-payload sustained throughput over TLS (crypto path; run a `ROLE=sink TLS=1` peer)
   MODE=throughput QOS=0 PAYLOAD_BYTES=131072 INFLIGHT=64 COUNT=20000 \\
-    TRANSPORT=tls PORT=8883 CA_FILE=ca.pem CERT_FILE=client.pem KEY_FILE=client.key \\
-    HOST=peer cargo run -p bench_client --release
+    TRANSPORT=tls PORT=8883 CA_FILE=certs/server.crt HOST=127.0.0.1 \\
+    cargo run -p bench_client --release
 
   # Inbound receive throughput (start `bench_peer ROLE=feed` first, aim HOST/PORT at it)
   MODE=inbound PAYLOAD_BYTES=256 COUNT=100000 HOST=127.0.0.1 PORT=1883 cargo run -p bench_client --release
