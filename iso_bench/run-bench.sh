@@ -2,173 +2,166 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Single-run orchestration wrapper for the bench tooling.
+# Repetition + aggregation over single-run.sh -- the primary entry point for benchmarking.
 #
-# Purpose: a SOFTWARE-REGRESSION detector, not a realistic real-world benchmark. It runs everything
-# on ONE VM over loopback so the network is not a confound, pins the peer and client to disjoint
-# cores, wraps the client in /usr/bin/time for CPU-per-message, captures the client's RESULT line,
-# and tears the peer down. Compare the RESULT + CPU across git refs (build each, run, diff).
+# Wall-clock benchmarks are noisy, so a single run is not trustworthy. This runs REPS independent
+# reps of the CURRENT build/config, records each RESULT + CPU to a JSONL file, and prints per-label
+# summary statistics (median / mean / min / max / CV%). When the results file holds >= 2 labels it
+# also prints an A/B comparison (median deltas vs. the baseline label, flagged against the
+# baseline's run-to-run noise). For a single ad-hoc run, use single-run.sh directly.
 #
-# It starts a `bench_peer` in the role implied by MODE (inbound->feed, latency/throughput->sink),
-# waits for it to listen, runs one `bench_client` config, then cleans up.
+# A/B workflow (build each git ref, then compare):
+#   RESET=1 LABEL=main     REPS=8 MODE=latency QOS=1 ./run-bench.sh
+#   git checkout my-refactor
+#           LABEL=refactor REPS=8 MODE=latency QOS=1 ./run-bench.sh   # prints the comparison
 #
-# Rigor notes (see the design discussion): run the SAME config twice on the same build first to
-# learn the noise floor, then only trust deltas larger than that band. Read tails (p99/p99.9) and
-# CPU-per-msg, not means. `NETEM_DELAY` adds a controlled loopback RTT (a reproducible test
-# condition, not realism) and needs root.
+# Establish the noise floor first by running the SAME build twice under two labels; only trust
+# deltas larger than that spread.
 #
-# All configuration is via environment variables (same knobs as bench_client, plus orchestration):
-#   Workload:  MODE(latency|throughput|inbound) QOS TRANSPORT(tcp|tls) PAYLOAD_BYTES COUNT WARMUP
-#              INFLIGHT INTERVAL_US TOPIC LABEL HOST PORT
-#   Peer:      BATCH RATE            (feed only)
-#   Pinning:   CLIENT_CORES PEER_CORES   (taskset masks; defaults suit an 8-vCPU F8s_v2)
-#   Extras:    NETEM_DELAY (e.g. 5ms, needs root)  CERT_DIR (TLS)
-#
-# Usage: ./run-bench.sh            (all via env)
-#        MODE=inbound PAYLOAD_BYTES=256 COUNT=200000 ./run-bench.sh
+# Accepts every single-run.sh env var (MODE QOS TRANSPORT PAYLOAD_BYTES COUNT WARMUP INFLIGHT
+# INTERVAL_US CLIENT_CORES PEER_CORES NETEM_DELAY ...), plus:
+#   REPS          repetitions                       (default 8)
+#   LABEL         tag for this build                (default: git short SHA)
+#   RESULTS_FILE  JSONL accumulator                 (default: ./results.jsonl)
+#   RESET         1 = truncate RESULTS_FILE first   (default 0)
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$script_dir"
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+script_dir="$(dirname "$self")"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    sed -n '4,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    while IFS= read -r line; do
+        [[ "$line" == '#'* ]] || break
+        line="${line#\#}"
+        printf '%s\n' "${line# }"
+    done < <(tail -n +4 "$self")
     exit 0
 fi
 
-# ---- config -------------------------------------------------------------------------------------
-MODE="${MODE:-latency}"
-QOS="${QOS:-1}"
-TRANSPORT="${TRANSPORT:-tcp}"
-PAYLOAD_BYTES="${PAYLOAD_BYTES:-64}"
-COUNT="${COUNT:-50000}"
-WARMUP="${WARMUP:-2000}"
-INFLIGHT="${INFLIGHT:-32}"
-INTERVAL_US="${INTERVAL_US:-0}"
-TOPIC="${TOPIC:-bench/run}"
-LABEL="${LABEL:-}"
-HOST="${HOST:-127.0.0.1}"
-PORT="${PORT:-}"
-BATCH="${BATCH:-64}"
-RATE="${RATE:-0}"
+cd "$script_dir"
 
-# Defaults assume >= 6 cores (e.g. F8s_v2): client and peer on separate physical cores, OS elsewhere.
-# Override for your box; taskset will error on nonexistent cores.
-CLIENT_CORES="${CLIENT_CORES:-2,3}"
-PEER_CORES="${PEER_CORES:-4,5}"
-NETEM_DELAY="${NETEM_DELAY:-}"
-CERT_DIR="${CERT_DIR:-$script_dir/certs}"
-
-# Default port by transport.
-if [[ -z "$PORT" ]]; then
-    [[ "$TRANSPORT" == "tls" ]] && PORT=8883 || PORT=1883
-fi
-
-# Peer role implied by the client mode.
-case "$MODE" in
-    inbound) PEER_ROLE=feed ;;
-    latency | throughput) PEER_ROLE=sink ;;
-    *)
-        echo "unknown MODE '$MODE' (expected latency|throughput|inbound)" >&2
-        exit 2
-        ;;
-esac
-
-# ---- tooling ------------------------------------------------------------------------------------
-command -v taskset >/dev/null || {
-    echo "ERROR: taskset not found (install util-linux)" >&2
+command -v python3 >/dev/null || {
+    echo "ERROR: python3 is required for aggregation" >&2
     exit 1
 }
-TIME_BIN=/usr/bin/time
-if [[ ! -x "$TIME_BIN" ]]; then
-    echo "warning: /usr/bin/time (GNU time) not found -- CPU-per-msg will be unavailable" >&2
-    TIME_BIN=""
-fi
 
-target_dir="${CARGO_TARGET_DIR:-$script_dir/target}"
-client_bin="$target_dir/release/bench_client"
-peer_bin="$target_dir/release/bench_peer"
+REPS="${REPS:-8}"
+LABEL="${LABEL:-$(git rev-parse --short HEAD 2>/dev/null || echo run)}"
+RESULTS_FILE="${RESULTS_FILE:-$script_dir/results.jsonl}"
+RESET="${RESET:-0}"
+export LABEL # so single-run.sh -> bench_client tags the RESULT line with it
 
-# ---- build (before measuring, so cargo isn't compiling during the run) --------------------------
-echo "building release binaries..." >&2
-cargo build --release -q -p bench_client -p bench_peer
+[[ "$RESET" == "1" ]] && : >"$RESULTS_FILE"
 
-# ---- TLS certs (server-auth only; peer serves, client trusts) -----------------------------------
-peer_tls_env=()
-client_tls_env=(TRANSPORT="$TRANSPORT")
-if [[ "$TRANSPORT" == "tls" ]]; then
-    if [[ ! -f "$CERT_DIR/server.crt" || ! -f "$CERT_DIR/server.key" ]]; then
-        echo "generating TLS certs in $CERT_DIR..." >&2
-        ./gen-test-certs.sh "$CERT_DIR" >/dev/null
-    fi
-    peer_tls_env=(TLS=1 CERT_FILE="$CERT_DIR/server.crt" KEY_FILE="$CERT_DIR/server.key")
-    client_tls_env+=(CA_FILE="$CERT_DIR/server.crt")
-fi
+echo "== iso_bench repeat: label='$LABEL' reps=$REPS -> $RESULTS_FILE ==" >&2
 
-# ---- optional controlled loopback RTT (needs root) ----------------------------------------------
-netem_applied=0
-if [[ -n "$NETEM_DELAY" ]]; then
-    if tc qdisc add dev lo root netem delay "$NETEM_DELAY" 2>/dev/null; then
-        netem_applied=1
-        echo "applied netem delay $NETEM_DELAY on lo" >&2
-    else
-        echo "warning: could not apply netem (need root/CAP_NET_ADMIN); continuing without" >&2
-    fi
-fi
-
-peer_log="$(mktemp)"
-time_out="$(mktemp)"
-result_out="$(mktemp)"
-cleanup() {
-    [[ -n "${peer_pid:-}" ]] && kill "$peer_pid" 2>/dev/null || true
-    [[ "$netem_applied" == "1" ]] && tc qdisc del dev lo root 2>/dev/null || true
-    rm -f "$peer_log" "$time_out" "$result_out" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# ---- start peer (pinned) ------------------------------------------------------------------------
-echo "starting bench_peer[$PEER_ROLE] on cores $PEER_CORES, ${TRANSPORT}://$HOST:$PORT ..." >&2
-env ROLE="$PEER_ROLE" BIND="$HOST" PORT="$PORT" PAYLOAD_BYTES="$PAYLOAD_BYTES" TOPIC="$TOPIC" \
-    BATCH="$BATCH" RATE="$RATE" "${peer_tls_env[@]}" \
-    taskset -c "$PEER_CORES" "$peer_bin" >"$peer_log" 2>&1 &
-peer_pid=$!
-
-# Wait for the peer to report it is listening.
-for _ in $(seq 1 200); do
-    grep -q "listening on" "$peer_log" 2>/dev/null && break
-    kill -0 "$peer_pid" 2>/dev/null || {
-        echo "ERROR: peer exited during startup:" >&2
-        cat "$peer_log" >&2
+for ((r = 1; r <= REPS; r++)); do
+    printf '[%s] rep %d/%d ... ' "$LABEL" "$r" "$REPS" >&2
+    err_log="$(mktemp)"
+    if ! out="$(./single-run.sh 2>"$err_log")"; then
+        echo "FAILED" >&2
+        cat "$err_log" >&2
+        rm -f "$err_log"
         exit 1
-    }
-    sleep 0.05
+    fi
+    rm -f "$err_log"
+
+    result_line="$(grep '^RESULT ' <<<"$out" || true)"
+    cpu_line="$(grep '^CPU ' <<<"$out" || true)"
+    if [[ -z "$result_line" ]]; then
+        echo "no RESULT line produced" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+    msgs="$(sed -n 's/.*"msgs_per_s":\([0-9.]*\).*/\1/p' <<<"$result_line")"
+    printf 'msgs_per_s=%s\n' "${msgs:-?}" >&2
+
+    RESULT_JSON="${result_line#RESULT }" CPU_JSON="${cpu_line#CPU }" \
+        REC_LABEL="$LABEL" REP="$r" OUT_FILE="$RESULTS_FILE" \
+        python3 - <<'PY'
+import json, os
+res = json.loads(os.environ["RESULT_JSON"])
+cpu = json.loads(os.environ.get("CPU_JSON") or "{}")
+rec = {"label": os.environ["REC_LABEL"], "rep": int(os.environ["REP"])}
+for k in ("mode", "transport", "qos", "payload_bytes", "count", "msgs_per_s", "mib_per_s"):
+    if k in res:
+        rec[k] = res[k]
+for k, v in (res.get("lat_us") or {}).items():
+    rec["lat_" + k] = v
+for k in ("cpu_us_per_msg", "max_rss_kb", "user_s", "sys_s"):
+    if k in cpu:
+        rec[k] = cpu[k]
+with open(os.environ["OUT_FILE"], "a") as f:
+    f.write(json.dumps(rec) + "\n")
+PY
 done
 
-# ---- run client (pinned, timed) -----------------------------------------------------------------
-echo "running bench_client[$MODE] on cores $CLIENT_CORES (COUNT=$COUNT, PAYLOAD_BYTES=$PAYLOAD_BYTES)..." >&2
-client_env=(
-    MODE="$MODE" QOS="$QOS" HOST="$HOST" PORT="$PORT" PAYLOAD_BYTES="$PAYLOAD_BYTES"
-    COUNT="$COUNT" WARMUP="$WARMUP" INFLIGHT="$INFLIGHT" INTERVAL_US="$INTERVAL_US" TOPIC="$TOPIC"
-    "${client_tls_env[@]}"
-)
-[[ -n "$LABEL" ]] && client_env+=(LABEL="$LABEL")
+# ---- aggregate + compare ------------------------------------------------------------------------
+RESULTS_FILE="$RESULTS_FILE" python3 - <<'PY'
+import json, os, statistics as st
 
-if [[ -n "$TIME_BIN" ]]; then
-    env "${client_env[@]}" "$TIME_BIN" -v -o "$time_out" \
-        taskset -c "$CLIENT_CORES" "$client_bin" | tee "$result_out"
-else
-    env "${client_env[@]}" taskset -c "$CLIENT_CORES" "$client_bin" | tee "$result_out"
-fi
+rows = [json.loads(l) for l in open(os.environ["RESULTS_FILE"]) if l.strip()]
+if not rows:
+    raise SystemExit("no results recorded")
 
-# ---- CPU-per-message ----------------------------------------------------------------------------
-if [[ -n "$TIME_BIN" && -s "$time_out" ]]; then
-    user_s=$(awk -F': ' '/User time/{print $2}' "$time_out")
-    sys_s=$(awk -F': ' '/System time/{print $2}' "$time_out")
-    rss_kb=$(awk -F': ' '/Maximum resident set size/{print $2}' "$time_out")
-    cpu_us_per_msg=$(awk -v u="${user_s:-0}" -v s="${sys_s:-0}" -v c="$COUNT" \
-        'BEGIN{ if (c>0) printf "%.3f", (u+s)/c*1e6; else print "0" }')
-    printf 'CPU {"user_s":%s,"sys_s":%s,"cpu_us_per_msg":%s,"max_rss_kb":%s}\n' \
-        "${user_s:-0}" "${sys_s:-0}" "$cpu_us_per_msg" "${rss_kb:-0}"
-fi
+labels = []
+for r in rows:
+    if r["label"] not in labels:
+        labels.append(r["label"])
 
-echo "done." >&2
+metrics = ["msgs_per_s", "mib_per_s", "lat_p50", "lat_p99", "lat_p999", "cpu_us_per_msg", "max_rss_kb"]
+
+def series(label, m):
+    return [r[m] for r in rows if r["label"] == label and r.get(m) is not None]
+
+def cv(xs):
+    if len(xs) < 2:
+        return 0.0
+    m = st.mean(xs)
+    return 0.0 if m == 0 else st.pstdev(xs) / m * 100.0
+
+def fmt(x):
+    return f"{x:.3f}" if abs(x) < 100 else f"{x:.1f}"
+
+# Warn if the accumulated results mix different configs (likely a forgotten RESET).
+cfgs = {(r.get("mode"), r.get("transport"), r.get("qos"), r.get("payload_bytes")) for r in rows}
+if len(cfgs) > 1:
+    print("WARNING: results.jsonl mixes different configs (mode/transport/qos/payload).")
+    print("         Use RESET=1 to start a clean comparison.\n")
+
+for label in labels:
+    n = sum(1 for r in rows if r["label"] == label)
+    print(f"=== [{label}] over {n} reps ===")
+    print(f"{'metric':<16}{'median':>12}{'mean':>12}{'min':>12}{'max':>12}{'cv%':>8}")
+    for m in metrics:
+        xs = series(label, m)
+        if not xs:
+            continue
+        print(f"{m:<16}{fmt(st.median(xs)):>12}{fmt(st.mean(xs)):>12}"
+              f"{fmt(min(xs)):>12}{fmt(max(xs)):>12}{cv(xs):>8.1f}")
+    print()
+
+if len(labels) >= 2:
+    base = labels[0]
+    latest = labels[-1]
+    print(f"=== comparison (median; baseline={base}, delta={latest}) ===")
+    print(f"{'metric':<16}" + "".join(f"{l:>14}" for l in labels) + f"{'delta%':>10}{'note':>9}")
+    for m in metrics:
+        bxs = series(base, m)
+        if not bxs:
+            continue
+        bmed, bcv = st.median(bxs), cv(series(base, m))
+        cells = "".join(f"{(fmt(st.median(series(l, m))) if series(l, m) else '-'):>14}" for l in labels)
+        lxs = series(latest, m)
+        if lxs and bmed:
+            d = (st.median(lxs) - bmed) / bmed * 100.0
+            note = ">noise" if abs(d) > max(bcv, 1.0) else "~noise"
+            print(f"{m:<16}{cells}{d:>9.1f}%{note:>9}")
+        else:
+            print(f"{m:<16}{cells}{'-':>10}{'-':>9}")
+    print("\nRead latency_* and cpu_us_per_msg going UP as regressions, msgs/mib_per_s going DOWN.")
+    print("'note' flags whether the delta exceeds the baseline's run-to-run CV (a rough signal,")
+    print("not a formal significance test). delta%/note compare the LAST label to the baseline.")
+PY
+
+echo "results: $RESULTS_FILE" >&2

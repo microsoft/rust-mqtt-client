@@ -54,29 +54,32 @@ the **client**.
 - `openssl` CLI — only for generating TLS test certs.
 - `tc` (from `iproute2`) and root — only if you use `NETEM_DELAY` to inject a controlled RTT.
 
-## Quick start (recommended: the wrapper)
+## Quick start (recommended: `run-bench.sh`)
 
-[`run-bench.sh`](run-bench.sh) orchestrates a full single-run: it builds the binaries, starts the
-correct peer pinned to its cores, runs the pinned client under `/usr/bin/time`, prints the results,
-and cleans up. Run it from this directory:
+[`run-bench.sh`](run-bench.sh) is the primary entry point. It builds the binaries, then runs several
+independent **reps** of a config (each rep starts the correct pinned peer, runs the pinned client
+under `/usr/bin/time`, and tears the peer down), records every rep to `results.jsonl`, and prints
+aggregate statistics (median / mean / min / max / **CV%**). Run it from this directory:
 
 ```bash
-# Round-trip latency (QoS 1) over TCP
-MODE=latency QOS=1 COUNT=50000 ./run-bench.sh
+# Round-trip latency (QoS 1) over TCP, 8 reps
+LABEL=main REPS=8 MODE=latency QOS=1 COUNT=100000 ./run-bench.sh
 
 # Receive throughput (client draining a firehose)
-MODE=inbound PAYLOAD_BYTES=256 COUNT=200000 ./run-bench.sh
+LABEL=main REPS=8 MODE=inbound PAYLOAD_BYTES=256 COUNT=200000 ./run-bench.sh
 
 # Send throughput, pipelined
-MODE=throughput QOS=1 INFLIGHT=64 PAYLOAD_BYTES=64 COUNT=200000 ./run-bench.sh
+LABEL=main REPS=8 MODE=throughput QOS=1 INFLIGHT=64 PAYLOAD_BYTES=64 COUNT=200000 ./run-bench.sh
 
 # Over TLS, with a controlled 5 ms loopback RTT (needs root for tc)
-MODE=latency QOS=1 TRANSPORT=tls NETEM_DELAY=5ms ./run-bench.sh
+LABEL=main REPS=8 MODE=latency QOS=1 TRANSPORT=tls NETEM_DELAY=5ms ./run-bench.sh
 ```
 
-The wrapper derives the peer role from `MODE`, matches the peer's payload size for `inbound`, and
-(for TLS) generates certs and wires them up automatically. Override core pinning for your box with
-`CLIENT_CORES` / `PEER_CORES` (defaults `2,3` and `4,5` suit an F8s_v2).
+It derives the peer role from `MODE`, matches the peer's payload size for `inbound`, and (for TLS)
+generates certs and wires them up automatically. Override core pinning with `CLIENT_CORES` /
+`PEER_CORES` (defaults `2,3` and `4,5` suit an F8s_v2). For a single ad-hoc run (one `RESULT` + `CPU`
+line, no reps or aggregation), call the underlying primitive [`single-run.sh`](single-run.sh) with
+the same env vars.
 
 ## Manual usage (two terminals)
 
@@ -136,7 +139,8 @@ RESULT {"label":"main","mode":"inbound","transport":"tcp","qos":1,"payload_bytes
 - **`lat_us`** percentiles — labeled by `lat_kind`: `op latency` (round-trip / per-op for
   latency/throughput) or `inter-arrival` (reader-path jitter for `inbound` — *not* a round trip).
 
-The `run-bench.sh` wrapper adds a CPU line from `/usr/bin/time`:
+The `single-run.sh` primitive adds a CPU line from `/usr/bin/time` (per rep; `run-bench.sh`
+aggregates these across reps):
 
 ```
 CPU {"user_s":0.10,"sys_s":0.30,"cpu_us_per_msg":80.0,"max_rss_kb":5808}
@@ -145,17 +149,35 @@ CPU {"user_s":0.10,"sys_s":0.30,"cpu_us_per_msg":80.0,"max_rss_kb":5808}
 `cpu_us_per_msg` is measured on the client process alone, so it stays clean even under same-host
 contention — it's the sharpest signal for crypto/copy-path regressions.
 
-## Comparing builds (the actual workflow)
+## Comparing builds (A/B)
 
-1. **Establish the noise floor:** run the *same* config twice on the *same* build and note the
-   spread. Only trust deltas larger than that band.
-2. Build and run each git ref against the same peer, tagged with `LABEL`:
-   ```bash
-   git checkout main        && MODE=latency QOS=1 LABEL=main     ./run-bench.sh
-   git checkout my-refactor && MODE=latency QOS=1 LABEL=refactor ./run-bench.sh
-   ```
-3. Diff the `RESULT` + `CPU` lines. Read **tails and CPU-per-msg**, not means. Run trials
-   back-to-back and alternate A/B/A/B to average out drift.
+To catch a regression, run the same config on each git ref, tagged with `LABEL`; `run-bench.sh`
+accumulates results in `results.jsonl` and prints an A/B comparison (median deltas vs. the baseline,
+flagged against the baseline's run-to-run noise) as soon as it sees two or more labels:
+
+```bash
+# Build A: 8 reps, starting a fresh results file
+RESET=1 LABEL=main REPS=8 MODE=latency QOS=1 COUNT=100000 ./run-bench.sh
+
+git checkout my-refactor
+# Build B: 8 reps -> prints the comparison table
+LABEL=refactor REPS=8 MODE=latency QOS=1 COUNT=100000 ./run-bench.sh
+```
+
+Read the output as: **latency and `cpu_us_per_msg` going up = regression; `msgs_per_s` going down =
+regression.** The `note` column flags whether a delta exceeds the baseline's CV — a rough signal, not
+a formal test. `run-bench.sh` takes all `single-run.sh` knobs plus `REPS`, `LABEL` (defaults to the
+git short SHA), `RESULTS_FILE`, and `RESET`.
+
+## How to run it for meaningful numbers
+
+- **Establish the noise floor first:** run the *same* build twice under two labels; the delta you see
+  is your detection threshold. Only trust A/B deltas larger than that band.
+- **Size `COUNT` for the tail:** stable p99.9 needs ~10⁵ operations per run.
+- **Use enough reps** (`REPS=8`+; more if CV% is wide relative to the effect you're chasing), and read
+  **tails (p99/p99.9) and `cpu_us_per_msg`**, not means.
+- The minimum latency across reps is a useful low-noise "true cost" estimator (wall-clock noise only
+  ever adds time).
 
 ## Environment variables
 
@@ -167,10 +189,12 @@ contention — it's the sharpest signal for crypto/copy-path regressions.
 **`bench_peer`** — `ROLE`(feed|sink) `BIND` `PORT` `TLS`(0|1) `CERT_FILE` `KEY_FILE` `TOPIC`
 `PAYLOAD_BYTES` `BATCH` `RATE`(feed; 0=max).
 
-**`run-bench.sh`** — all of the client knobs, plus `CLIENT_CORES` `PEER_CORES` `NETEM_DELAY`
+**`single-run.sh`** — all of the client knobs, plus `CLIENT_CORES` `PEER_CORES` `NETEM_DELAY`
 `CERT_DIR` `BATCH` `RATE`.
 
-Pass `--help` (or `HELP=1`) to either binary, or `-h` to the wrapper, for the full list.
+**`run-bench.sh`** — all of the `single-run.sh` knobs, plus `REPS` `LABEL` `RESULTS_FILE` `RESET`.
+
+Pass `--help` (or `HELP=1`) to either binary, or `-h` to either script, for the full list.
 
 ## Limitations & caveats
 
@@ -190,6 +214,7 @@ Pass `--help` (or `HELP=1`) to either binary, or `-h` to the wrapper, for the fu
 iso_bench/                # detached cargo workspace (not part of the library's build)
   bench_client/           # the measured MQTT client harness
   bench_peer/             # the independent stand-in peer (TCP + TLS)
-  run-bench.sh            # single-run orchestration wrapper
+  run-bench.sh            # PRIMARY: N reps + aggregate stats + A/B comparison
+  single-run.sh           # single-run primitive (peer + pinned, timed client)
   gen-test-certs.sh       # self-signed TLS cert generator (local testing only)
 ```

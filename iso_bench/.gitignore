@@ -5,3 +5,7 @@ Cargo.lock
 
 # Locally generated TLS test certs (see gen-test-certs.sh) — never committed.
 certs/
+
+# Accumulated benchmark results from run-bench.sh — local run data, not committed.
+results.jsonl
+*.jsonl
