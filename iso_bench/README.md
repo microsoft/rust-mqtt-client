@@ -54,32 +54,34 @@ the **client**.
 - `openssl` CLI — only for generating TLS test certs.
 - `tc` (from `iproute2`) and root — only if you use `NETEM_DELAY` to inject a controlled RTT.
 
-## Quick start (recommended: `run-bench.sh`)
+## Quick start (recommended: `bench.sh`)
 
-[`run-bench.sh`](run-bench.sh) is the primary entry point. It builds the binaries, then runs several
-independent **reps** of a config (each rep starts the correct pinned peer, runs the pinned client
-under `/usr/bin/time`, and tears the peer down), records every rep to `results.jsonl`, and prints
-aggregate statistics (median / mean / min / max / **CV%**). Run it from this directory:
+[`bench.sh`](bench.sh) is the main entry point: it runs the **full curated
+suite** — latency, throughput, and inbound, each over TCP and TLS — `REPS` reps per config, and
+prints a per-config summary plus (for A/B) a per-config comparison. One command covers the whole
+regression surface.
 
 ```bash
-# Round-trip latency (QoS 1) over TCP, 8 reps
-LABEL=main REPS=8 MODE=latency QOS=1 COUNT=100000 ./run-bench.sh
-
-# Receive throughput (client draining a firehose)
-LABEL=main REPS=8 MODE=inbound PAYLOAD_BYTES=256 COUNT=200000 ./run-bench.sh
-
-# Send throughput, pipelined
-LABEL=main REPS=8 MODE=throughput QOS=1 INFLIGHT=64 PAYLOAD_BYTES=64 COUNT=200000 ./run-bench.sh
-
-# Over TLS, with a controlled 5 ms loopback RTT (needs root for tc)
-LABEL=main REPS=8 MODE=latency QOS=1 TRANSPORT=tls NETEM_DELAY=5ms ./run-bench.sh
+LABEL=main ./bench.sh          # full suite (~10 reps per config)
 ```
 
-It derives the peer role from `MODE`, matches the peer's payload size for `inbound`, and (for TLS)
-generates certs and wires them up automatically. Override core pinning with `CLIENT_CORES` /
-`PEER_CORES` (defaults `2,3` and `4,5` suit an F8s_v2). For a single ad-hoc run (one `RESULT` + `CPU`
-line, no reps or aggregation), call the underlying primitive [`single-run.sh`](single-run.sh) with
-the same env vars.
+Under the suite sit two lower-level entry points you can use directly:
+
+- [`bench-workload.sh`](bench-workload.sh) — **one config**, `REPS` reps, aggregated (median/mean/min/max/CV%):
+  ```bash
+  LABEL=main REPS=8 MODE=latency QOS=1 COUNT=100000 ./bench-workload.sh
+  LABEL=main REPS=8 MODE=inbound PAYLOAD_BYTES=16384 COUNT=300000 ./bench-workload.sh
+  ```
+- [`bench-once.sh`](bench-once.sh) — **one config, one rep** (a single `RESULT` + `CPU` line, no
+  aggregation); handy for debugging one run:
+  ```bash
+  MODE=latency QOS=1 COUNT=50000 ./bench-once.sh
+  ```
+
+All of them build the binaries, derive the peer role from `MODE`, match the peer's payload for
+`inbound`, and (for TLS) generate certs automatically. Override core pinning with `CLIENT_CORES` /
+`PEER_CORES` (defaults `2,3` and `4,5` suit an F8s_v2); add `NETEM_DELAY=5ms` for a controlled
+loopback RTT (needs root).
 
 ## Manual usage (two terminals)
 
@@ -139,7 +141,7 @@ RESULT {"label":"main","mode":"inbound","transport":"tcp","qos":1,"payload_bytes
 - **`lat_us`** percentiles — labeled by `lat_kind`: `op latency` (round-trip / per-op for
   latency/throughput) or `inter-arrival` (reader-path jitter for `inbound` — *not* a round trip).
 
-The `single-run.sh` primitive adds a CPU line from `/usr/bin/time` (per rep; `run-bench.sh`
+The `bench-once.sh` primitive adds a CPU line from `/usr/bin/time` (per rep; `bench-workload.sh`
 aggregates these across reps):
 
 ```
@@ -149,25 +151,33 @@ CPU {"user_s":0.10,"sys_s":0.30,"cpu_us_per_msg":80.0,"max_rss_kb":5808}
 `cpu_us_per_msg` is measured on the client process alone, so it stays clean even under same-host
 contention — it's the sharpest signal for crypto/copy-path regressions.
 
-## Comparing builds (A/B)
+### Histograms
 
-To catch a regression, run the same config on each git ref, tagged with `LABEL`; `run-bench.sh`
-accumulates results in `results.jsonl` and prints an A/B comparison (median deltas vs. the baseline,
-flagged against the baseline's run-to-run noise) as soon as it sees two or more labels:
+Every record also carries `hist_ns` — the full latency/inter-arrival distribution as log-spaced
+HdrHistogram buckets (`[upper_bound_ns, count]`), so a histogram can be reconstructed offline without
+keeping every raw sample. Render it with [`histogram.py`](histogram.py), which sums the buckets
+across a config's reps and prints a text histogram:
 
 ```bash
-# Build A: 8 reps, starting a fresh results file
-RESET=1 LABEL=main REPS=8 MODE=latency QOS=1 COUNT=100000 ./run-bench.sh
-
-git checkout my-refactor
-# Build B: 8 reps -> prints the comparison table
-LABEL=refactor REPS=8 MODE=latency QOS=1 COUNT=100000 ./run-bench.sh
+python3 histogram.py results.jsonl <config> [label]
 ```
 
-Read the output as: **latency and `cpu_us_per_msg` going up = regression; `msgs_per_s` going down =
+## Comparing builds (A/B)
+
+Run the suite on each git ref, tagged with `LABEL`; results accumulate in `results.jsonl` and the
+second run prints a **per-config** comparison (median deltas of the latest label vs. the baseline,
+flagged against the baseline's run-to-run CV):
+
+```bash
+RESET=1 LABEL=main     ./bench.sh   # build A (fresh results file)
+git checkout my-refactor
+        LABEL=refactor ./bench.sh   # build B -> per-config comparison
+```
+
+Read it as: **latency and `cpu_us_per_msg` going up = regression; `msgs_per_s` going down =
 regression.** The `note` column flags whether a delta exceeds the baseline's CV — a rough signal, not
-a formal test. `run-bench.sh` takes all `single-run.sh` knobs plus `REPS`, `LABEL` (defaults to the
-git short SHA), `RESULTS_FILE`, and `RESET`.
+a formal test. (`bench-workload.sh` does the same for a single config; both share
+[`aggregate.py`](aggregate.py).)
 
 ## How to run it for meaningful numbers
 
@@ -189,12 +199,16 @@ git short SHA), `RESULTS_FILE`, and `RESET`.
 **`bench_peer`** — `ROLE`(feed|sink) `BIND` `PORT` `TLS`(0|1) `CERT_FILE` `KEY_FILE` `TOPIC`
 `PAYLOAD_BYTES` `BATCH` `RATE`(feed; 0=max).
 
-**`single-run.sh`** — all of the client knobs, plus `CLIENT_CORES` `PEER_CORES` `NETEM_DELAY`
+**`bench-once.sh`** — all of the client knobs, plus `CLIENT_CORES` `PEER_CORES` `NETEM_DELAY`
 `CERT_DIR` `BATCH` `RATE`.
 
-**`run-bench.sh`** — all of the `single-run.sh` knobs, plus `REPS` `LABEL` `RESULTS_FILE` `RESET`.
+**`bench-workload.sh`** — all of the `bench-once.sh` knobs, plus `REPS` `LABEL` `RESULTS_FILE` `RESET`
+`CONFIG`.
 
-Pass `--help` (or `HELP=1`) to either binary, or `-h` to either script, for the full list.
+**`bench.sh`** — `REPS` `LABEL` `RESULTS_FILE` `RESET` (+ pinning / `NETEM_DELAY` passed
+through); the per-config workloads are a curated list inside the script.
+
+Pass `--help` (or `HELP=1`) to either binary, or `-h` to any script, for the full list.
 
 ## Limitations & caveats
 
@@ -214,7 +228,10 @@ Pass `--help` (or `HELP=1`) to either binary, or `-h` to either script, for the 
 iso_bench/                # detached cargo workspace (not part of the library's build)
   bench_client/           # the measured MQTT client harness
   bench_peer/             # the independent stand-in peer (TCP + TLS)
-  run-bench.sh            # PRIMARY: N reps + aggregate stats + A/B comparison
-  single-run.sh           # single-run primitive (peer + pinned, timed client)
+  bench.sh                # PRIMARY: full curated suite (all workloads) + per-config A/B
+  bench-workload.sh       # one config: N reps + aggregate stats + A/B
+  bench-once.sh           # single run (peer + pinned, timed client)
+  aggregate.py            # results aggregator (median/CV%/A-B); per-config, or run by hand for all
+  histogram.py            # renders a text histogram from the per-rep hist_ns buckets
   gen-test-certs.sh       # self-signed TLS cert generator (local testing only)
 ```

@@ -2,12 +2,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Single-run orchestration wrapper for the bench tooling (the primitive behind run-bench.sh).
+# Single-run orchestration wrapper for the bench tooling (the primitive behind bench-workload.sh).
 #
 # Purpose: a SOFTWARE-REGRESSION detector, not a realistic real-world benchmark. It runs everything
 # on ONE VM over loopback so the network is not a confound, pins the peer and client to disjoint
 # cores, wraps the client in /usr/bin/time for CPU-per-message, captures the client's RESULT line,
-# and tears the peer down. For statistically meaningful comparisons, prefer run-bench.sh, which runs
+# and tears the peer down. For statistically meaningful comparisons, prefer bench-workload.sh, which runs
 # many reps of this and aggregates them.
 #
 # It starts a `bench_peer` in the role implied by MODE (inbound->feed, latency/throughput->sink),
@@ -25,8 +25,8 @@
 #   Pinning:   CLIENT_CORES PEER_CORES   (taskset masks; defaults suit an 8-vCPU F8s_v2)
 #   Extras:    NETEM_DELAY (e.g. 5ms, needs root)  CERT_DIR (TLS)
 #
-# Usage: ./single-run.sh            (all via env)
-#        MODE=inbound PAYLOAD_BYTES=256 COUNT=200000 ./single-run.sh
+# Usage: ./bench-once.sh            (all via env)
+#        MODE=inbound PAYLOAD_BYTES=256 COUNT=200000 ./bench-once.sh
 set -euo pipefail
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"

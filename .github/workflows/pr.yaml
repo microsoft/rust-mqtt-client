@@ -91,7 +91,7 @@ jobs:
   # dedicated fuzzing workflow (fuzz.yaml) not the gate. `cargo check`
   # doesn't link the libFuzzer runtime, so it runs fine on the pinned
   # stable toolchain like the rest of this gate.
-  fuzz:
+  fuzz-compile:
     name: Fuzz targets compile (pinned toolchain)
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
@@ -124,7 +124,7 @@ jobs:
   # consumes the client's public transport API (a refactor can break it); `bench_peer` is
   # independent (hand-rolled MQTT, no dep on ms-mqtt-client). It only *builds* (`cargo check`) --
   # running requires a peer and a tuned host, a manual out-of-CI activity (see iso_bench/).
-  bench:
+  bench-compile:
     name: Bench tooling compiles (pinned toolchain)
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10

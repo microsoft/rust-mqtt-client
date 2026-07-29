@@ -7,6 +7,8 @@
 
 use std::time::Duration;
 
+use hdrhistogram::Histogram;
+
 pub(crate) struct Report {
     pub(crate) cfg_summary: String,
     pub(crate) label: String,
@@ -52,6 +54,9 @@ impl Report {
         let p99 = us(pct(&sorted, 99.0));
         let p999 = us(pct(&sorted, 99.9));
 
+        // Log-spaced buckets of the raw samples, so a histogram can be reconstructed offline.
+        let hist_ns = log_buckets_json(&self.latencies_ns);
+
         println!();
         println!("==== iso_bench result ====");
         if !self.label.is_empty() {
@@ -77,7 +82,7 @@ impl Report {
                 r#""payload_bytes":{},"inflight":{},"interval_us":{},"count":{},"#,
                 r#""wall_s":{:.6},"msgs_per_s":{:.3},"mib_per_s":{:.3},"lat_kind":"{}","#,
                 r#""lat_us":{{"min":{:.3},"p50":{:.3},"p90":{:.3},"p99":{:.3},"#,
-                r#""p999":{:.3},"max":{:.3},"mean":{:.3}}}}}"#,
+                r#""p999":{:.3},"max":{:.3},"mean":{:.3}}},"hist_ns":{}}}"#,
             ),
             self.label,
             self.mode,
@@ -98,12 +103,40 @@ impl Report {
             p999,
             max,
             mean,
+            hist_ns,
         );
     }
 }
 
 fn us(ns: u64) -> f64 {
     ns as f64 / 1000.0
+}
+
+/// Records the samples into an HdrHistogram and emits `[[upper_bound_ns, count], ...]` over
+/// log2 buckets (1 us base). Deterministic bucket bounds let reps be summed by an offline renderer.
+fn log_buckets_json(latencies: &[u64]) -> String {
+    let mut hist = match Histogram::<u64>::new_with_bounds(1, 60_000_000_000, 3) {
+        Ok(h) => h,
+        Err(_) => return "[]".to_string(),
+    };
+    for &v in latencies {
+        let _ = hist.record(v.max(1));
+    }
+    let mut out = String::from("[");
+    let mut first = true;
+    for iv in hist.iter_log(1000, 2.0) {
+        let count = iv.count_since_last_iteration();
+        if count == 0 {
+            continue;
+        }
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        out.push_str(&format!("[{},{}]", iv.value_iterated_to(), count));
+    }
+    out.push(']');
+    out
 }
 
 fn pct(sorted: &[u64], p: f64) -> u64 {
