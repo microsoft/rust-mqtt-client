@@ -18,6 +18,8 @@ pub(crate) struct Report {
     pub(crate) payload_bytes: usize,
     pub(crate) inflight: usize,
     pub(crate) interval_us: u64,
+    /// Open-loop offered rate in msgs/sec (0 = closed-loop / sequential).
+    pub(crate) target_rate: f64,
     /// What the percentile numbers represent for this mode ("op latency" vs "inter-arrival").
     pub(crate) latency_kind: &'static str,
     pub(crate) count: usize,
@@ -65,7 +67,14 @@ impl Report {
         println!("config:       {}", self.cfg_summary);
         println!("measured ops: {}", self.count);
         println!("wall time:    {wall_s:.3} s");
-        println!("throughput:   {msgs_per_s:.1} msg/s   {mb_per_s:.2} MiB/s (payload only)");
+        if self.target_rate > 0.0 {
+            println!(
+                "offered rate: {msgs_per_s:.1} msg/s achieved (open-loop; ~= TARGET_RATE unless \
+                 overloaded)   {mb_per_s:.2} MiB/s"
+            );
+        } else {
+            println!("throughput:   {msgs_per_s:.1} msg/s   {mb_per_s:.2} MiB/s (payload only)");
+        }
         println!(
             "{kind} (us): min={min:.1}  p50={p50:.1}  p90={p90:.1}  p99={p99:.1}  \
              p99.9={p999:.1}  max={max:.1}  mean={mean:.1}",
@@ -79,7 +88,7 @@ impl Report {
         println!(
             concat!(
                 r#"RESULT {{"label":"{}","mode":"{}","transport":"{}","qos":{},"#,
-                r#""payload_bytes":{},"inflight":{},"interval_us":{},"count":{},"#,
+                r#""payload_bytes":{},"inflight":{},"interval_us":{},"target_rate":{:.3},"count":{},"#,
                 r#""wall_s":{:.6},"msgs_per_s":{:.3},"mib_per_s":{:.3},"lat_kind":"{}","#,
                 r#""lat_us":{{"min":{:.3},"p50":{:.3},"p90":{:.3},"p99":{:.3},"#,
                 r#""p999":{:.3},"max":{:.3},"mean":{:.3}}},"hist_ns":{}}}"#,
@@ -91,6 +100,7 @@ impl Report {
             self.payload_bytes,
             self.inflight,
             self.interval_us,
+            self.target_rate,
             self.count,
             wall_s,
             msgs_per_s,

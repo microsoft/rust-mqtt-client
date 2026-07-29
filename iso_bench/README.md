@@ -38,7 +38,10 @@ the **client**.
 - **Core budget (why 8 vCPU):** the client wants ~2 cores (its connection reader and workload
   consumer run concurrently), the peer ~1–2 (more under TLS, which encrypts live), and the OS needs
   headroom. Loopback has no hardware NIC IRQ to steer, so the main job is keeping the client and
-  peer on **separate physical cores**.
+  peer on **separate physical cores**. **Open-loop `latency` wants one *extra* client core** (3 total)
+  — its pacer busy-spins a core, so give it a dedicated one to keep the measured client at its full
+  2-core budget (e.g. `CLIENT_CORES=2,3,4 PEER_CORES=5,6`). F8s_v2 still fits; `F4s_v2` is then too
+  tight.
 - The tooling runs anywhere Linux + Rust is available; the VM above is only the *recommended* target
   for trustworthy numbers.
 
@@ -104,6 +107,38 @@ MODE=inbound HOST=127.0.0.1 PORT=1883 PAYLOAD_BYTES=256 \
 ```
 
 The peer accepts a fresh connection per client run, so you can leave it up and fire many client runs.
+
+### Latency: closed-loop vs open-loop
+
+`latency` mode has two pacing strategies:
+
+- **Closed-loop** (default, `TARGET_RATE=0`): each op waits for its own completion before the next
+  is sent — one operation in flight at a time. Reports the client's intrinsic per-op cost with a hot
+  socket; the achieved rate is whatever the round-trip allows. `INTERVAL_US` optionally adds a fixed
+  sleep between ops. This is the stable, low-variance number for A/B regression comparison.
+- **Open-loop** (`TARGET_RATE=<msgs/s>`): ops are issued on a fixed schedule (`intended = start +
+  i/rate`) regardless of whether prior ops have completed, and each latency is measured **from its
+  intended send time**, not from when it actually left. This is the coordinated-omission correction:
+  if the client falls behind, the queueing delay shows up in the tail instead of being hidden. Use
+  it to draw a **latency-vs-offered-rate curve** and find the knee where tails blow up.
+
+```bash
+# closed-loop (intrinsic per-op cost)
+MODE=latency QOS=1 COUNT=20000 ./bench-once.sh
+
+# open-loop sweep (latency under load) — watch p99/p99.9 climb as rate approaches saturation
+for r in 2000 20000 100000 160000; do
+  TARGET_RATE=$r MODE=latency QOS=1 COUNT=20000 ./bench-once.sh
+done
+```
+
+> Open-loop pacing busy-spins the last few ms up to each `intended` instant (tokio's ~1ms timer is
+> too coarse for us-scale latencies), so it burns a core on the pinned client — fine for a dedicated
+> benchmark VM, and the cost is systematic so it cancels in same-rate A/B comparisons. **Pin one
+> extra client core for open-loop** (e.g. `CLIENT_CORES=2,3,4`) so the spin gets its own core and
+> doesn't steal from the measured client — otherwise the latency-vs-rate curve (and the apparent
+> saturation knee) is pulled in below the client's true capacity. `bench-once.sh` warns if you run
+> open-loop with fewer than 3 client cores.
 
 ## TLS
 
@@ -194,7 +229,7 @@ a formal test. (`bench-workload.sh` does the same for a single config; both shar
 **`bench_client`** — connection: `HOST` `PORT` `TRANSPORT`(tcp|tls) `CLIENT_ID` `USERNAME`
 `PASSWORD` `CA_FILE` `CERT_FILE` `KEY_FILE` `CONNECT_TIMEOUT_SECS` `KEEPALIVE_SECS`; workload:
 `MODE`(latency|throughput|inbound) `QOS`(0|1) `TOPIC` `PAYLOAD_BYTES` `COUNT` `WARMUP` `INFLIGHT`
-`INTERVAL_US` `LABEL`.
+`INTERVAL_US` `TARGET_RATE`(latency; 0=closed-loop) `LABEL`.
 
 **`bench_peer`** — `ROLE`(feed|sink) `BIND` `PORT` `TLS`(0|1) `CERT_FILE` `KEY_FILE` `TOPIC`
 `PAYLOAD_BYTES` `BATCH` `RATE`(feed; 0=max).
@@ -218,8 +253,18 @@ Pass `--help` (or `HELP=1`) to either binary, or `-h` to any script, for the ful
 - **Loopback** exercises all of the client's transport software (syscalls, kernel TCP, TLS, framing,
   decode, buffer pool) but not real NIC offloads — which is correct for a *software* regression
   detector.
-- **Closed-loop workloads** (each op waits for completion): tail latency under load can be
-  under-reported (coordinated omission). An open-loop / rate-based mode is a future improvement.
+- **Closed-loop is the default** (each op waits for completion), which reports intrinsic per-op cost
+  but under-reports tail latency under load (coordinated omission). Use **open-loop** `latency`
+  (`TARGET_RATE=<msgs/s>`, above) for coordinated-omission-correct tails and latency-under-load
+  curves.
+- **An open-loop knee can be the *peer*, not the client.** The `sink` peer parses every publish to
+  echo its PUBACK and tops out around ~190k/s locally, so an open-loop latency knee near that rate
+  may be the *harness* saturating rather than the client. Keep sweeps well below the peer's echo
+  ceiling, give the peer enough cores (`PEER_CORES`), and trust the knee only in that regime.
+- **Open-loop holds every un-acked op in flight** (~2 KB each). If the offered rate stays below
+  client capacity the backlog is tiny, but if you deliberately overload, the backlog approaches
+  `COUNT` \u2014 so a long overloaded run (`COUNT` \u2273 500k) can use ~`COUNT`\u00d72 KB of RAM. `bench-once.sh`
+  notes this above `COUNT=500000`; keep overload probes short.
 - TLS throughput is `min(peer, client)`-bound (see the TLS caveat above).
 
 ## Layout

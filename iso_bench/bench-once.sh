@@ -20,7 +20,7 @@
 #
 # All configuration is via environment variables (same knobs as bench_client, plus orchestration):
 #   Workload:  MODE(latency|throughput|inbound) QOS TRANSPORT(tcp|tls) PAYLOAD_BYTES COUNT WARMUP
-#              INFLIGHT INTERVAL_US TOPIC LABEL HOST PORT
+#              INFLIGHT INTERVAL_US TARGET_RATE TOPIC LABEL HOST PORT
 #   Peer:      BATCH RATE            (feed only)
 #   Pinning:   CLIENT_CORES PEER_CORES   (taskset masks; defaults suit an 8-vCPU F8s_v2)
 #   Extras:    NETEM_DELAY (e.g. 5ms, needs root)  CERT_DIR (TLS)
@@ -52,6 +52,7 @@ COUNT="${COUNT:-50000}"
 WARMUP="${WARMUP:-2000}"
 INFLIGHT="${INFLIGHT:-32}"
 INTERVAL_US="${INTERVAL_US:-0}"
+TARGET_RATE="${TARGET_RATE:-0}"
 TOPIC="${TOPIC:-bench/run}"
 LABEL="${LABEL:-}"
 HOST="${HOST:-127.0.0.1}"
@@ -80,6 +81,34 @@ case "$MODE" in
         exit 2
         ;;
 esac
+
+# Open-loop latency busy-spins one core to pace precisely; give it a dedicated core so it can't
+# steal cycles from the measured client and distort the latency-vs-rate curve (need >=3: 2 for
+# client work + 1 pacer).
+if [[ "$MODE" == "latency" ]] && awk "BEGIN{exit !($TARGET_RATE > 0)}"; then
+    client_core_count=0
+    IFS=',' read -ra _cores <<<"$CLIENT_CORES"
+    for _part in "${_cores[@]}"; do
+        if [[ "$_part" == *-* ]]; then
+            client_core_count=$((client_core_count + ${_part#*-} - ${_part%-*} + 1))
+        else
+            client_core_count=$((client_core_count + 1))
+        fi
+    done
+    if ((client_core_count < 3)); then
+        echo "warning: open-loop (TARGET_RATE=$TARGET_RATE) busy-spins a core to pace, but" >&2
+        echo "         CLIENT_CORES='$CLIENT_CORES' pins only $client_core_count core(s). The spin" >&2
+        echo "         will steal from the client and bias the latency-vs-rate curve; pin >=3, e.g." >&2
+        echo "         CLIENT_CORES=2,3,4 (2 for client work + 1 for the pacer)." >&2
+    fi
+    # Open-loop keeps every un-acked op in flight (~2 KB each); if the offered rate exceeds the
+    # client's capacity the backlog approaches COUNT, so a long overloaded run can eat a lot of RAM.
+    if ((COUNT > 500000)); then
+        echo "note: open-loop with COUNT=$COUNT can hold up to ~$((COUNT * 2 / 1024)) MB of in-flight" >&2
+        echo "      backlog IF the offered rate exceeds client capacity. Keep COUNT modest when" >&2
+        echo "      probing ABOVE capacity, or ensure TARGET_RATE is sustainable." >&2
+    fi
+fi
 
 # ---- tooling ------------------------------------------------------------------------------------
 command -v taskset >/dev/null || {
@@ -156,6 +185,7 @@ echo "running bench_client[$MODE] on cores $CLIENT_CORES (COUNT=$COUNT, PAYLOAD_
 client_env=(
     MODE="$MODE" QOS="$QOS" HOST="$HOST" PORT="$PORT" PAYLOAD_BYTES="$PAYLOAD_BYTES"
     COUNT="$COUNT" WARMUP="$WARMUP" INFLIGHT="$INFLIGHT" INTERVAL_US="$INTERVAL_US" TOPIC="$TOPIC"
+    TARGET_RATE="$TARGET_RATE"
     "${client_tls_env[@]}"
 )
 [[ -n "$LABEL" ]] && client_env+=(LABEL="$LABEL")

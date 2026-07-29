@@ -63,6 +63,7 @@
 //!   WARMUP       discarded warmup operations           (default: 1000)
 //!   INFLIGHT     concurrent ops (throughput mode)      (default: 32)
 //!   INTERVAL_US  sleep between ops (latency mode), us  (default: 0 = hot)
+//!   TARGET_RATE  open-loop latency send rate, msg/s     (default: 0 = closed-loop/sequential)
 //!   LABEL        free-form tag echoed into output      (default: empty)
 //!
 //! Output: a human-readable summary plus a single machine-readable line prefixed `RESULT ` containing

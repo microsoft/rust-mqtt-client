@@ -52,6 +52,8 @@ pub(crate) struct Config {
     pub(crate) warmup: usize,
     pub(crate) inflight: usize,
     pub(crate) interval_us: u64,
+    /// Open-loop target send rate (msgs/sec) for `latency`; 0 = closed-loop (sequential).
+    pub(crate) target_rate: f64,
     pub(crate) label: String,
 }
 
@@ -90,6 +92,14 @@ impl Config {
             return Err("CERT_FILE and KEY_FILE must be set together".to_string());
         }
 
+        let target_rate = env_f64("TARGET_RATE", 0.0).max(0.0);
+        if target_rate > 0.0 && mode != Mode::Latency {
+            eprintln!(
+                "warning: TARGET_RATE (open-loop) only applies to latency mode; ignored for {}",
+                mode.as_str()
+            );
+        }
+
         Ok(Self {
             host: env_str("HOST", "localhost"),
             port: env_u64("PORT", u64::from(default_port)) as u16,
@@ -111,6 +121,7 @@ impl Config {
             warmup: env_usize("WARMUP", 1_000),
             inflight: env_usize("INFLIGHT", 32).max(1),
             interval_us: env_u64("INTERVAL_US", 0),
+            target_rate,
             label: env_str("LABEL", ""),
         })
     }
@@ -147,21 +158,27 @@ impl Config {
         }
     }
 
-    /// One-line, human-readable summary of the run configuration (for display).
+    /// One-line, human-readable summary showing only the knobs relevant to the mode.
     pub(crate) fn summary(&self) -> String {
+        // qos/inflight/interval_us don't all apply to every mode; show only the relevant ones.
+        let mode_specific = match self.mode {
+            Mode::Latency if self.target_rate > 0.0 => {
+                format!(" qos={} rate={}/s(open-loop)", self.qos, self.target_rate)
+            }
+            Mode::Latency => format!(" qos={} interval_us={}", self.qos, self.interval_us),
+            Mode::Throughput => format!(" qos={} inflight={}", self.qos, self.inflight),
+            Mode::Inbound => String::new(),
+        };
         format!(
-            "mode={} transport={} qos={} payload={}B count={} warmup={} inflight={} interval_us={} \
-             host={}:{}",
+            "mode={} transport={} payload={}B count={} warmup={} host={}:{}{}",
             self.mode.as_str(),
             if self.tls { "tls" } else { "tcp" },
-            self.qos,
             self.payload_bytes,
             self.count,
             self.warmup,
-            self.inflight,
-            self.interval_us,
             self.host,
             self.port,
+            mode_specific,
         )
     }
 }
@@ -178,6 +195,13 @@ fn env_usize(key: &str, default: usize) -> usize {
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_f64(key: &str, default: f64) -> f64 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())
@@ -212,7 +236,7 @@ Connection:
 
 Workload:
   MODE(latency|throughput|inbound), QOS(0|1), TOPIC, PAYLOAD_BYTES,
-  COUNT, WARMUP, INFLIGHT, INTERVAL_US, LABEL
+  COUNT, WARMUP, INFLIGHT, INTERVAL_US, TARGET_RATE, LABEL
 
 Examples:
   # Small-payload round-trip latency on a hot socket (nodelay/Nagle sensitive)
