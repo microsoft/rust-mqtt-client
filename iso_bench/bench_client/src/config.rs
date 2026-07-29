@@ -14,17 +14,19 @@ use ms_mqtt_client::client::{
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
-    Latency,
-    Throughput,
-    Inbound,
+    PubLatency,
+    PubThroughput,
+    RecvThroughput,
+    RecvLatency,
 }
 
 impl Mode {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Mode::Latency => "latency",
-            Mode::Throughput => "throughput",
-            Mode::Inbound => "inbound",
+            Mode::PubLatency => "pub-latency",
+            Mode::PubThroughput => "pub-throughput",
+            Mode::RecvThroughput => "recv-throughput",
+            Mode::RecvLatency => "recv-latency",
         }
     }
 }
@@ -52,7 +54,7 @@ pub(crate) struct Config {
     pub(crate) warmup: usize,
     pub(crate) inflight: usize,
     pub(crate) interval_us: u64,
-    /// Open-loop target send rate (msgs/sec) for `latency`; 0 = closed-loop (sequential).
+    /// Open-loop target send rate (msgs/sec) for `pub-latency`; 0 = closed-loop (sequential).
     pub(crate) target_rate: f64,
     pub(crate) label: String,
 }
@@ -65,13 +67,14 @@ impl Config {
             other => return Err(format!("unknown TRANSPORT '{other}' (expected tcp|tls)")),
         };
 
-        let mode = match env_str("MODE", "latency").to_ascii_lowercase().as_str() {
-            "latency" => Mode::Latency,
-            "throughput" => Mode::Throughput,
-            "inbound" => Mode::Inbound,
+        let mode = match env_str("MODE", "pub-latency").to_ascii_lowercase().as_str() {
+            "pub-latency" => Mode::PubLatency,
+            "pub-throughput" => Mode::PubThroughput,
+            "recv-throughput" => Mode::RecvThroughput,
+            "recv-latency" => Mode::RecvLatency,
             other => {
                 return Err(format!(
-                    "unknown MODE '{other}' (expected latency|throughput|inbound)"
+                    "unknown MODE '{other}' (expected pub-latency|pub-throughput|recv-throughput|recv-latency)"
                 ));
             }
         };
@@ -93,9 +96,9 @@ impl Config {
         }
 
         let target_rate = env_f64("TARGET_RATE", 0.0).max(0.0);
-        if target_rate > 0.0 && mode != Mode::Latency {
+        if target_rate > 0.0 && mode != Mode::PubLatency {
             eprintln!(
-                "warning: TARGET_RATE (open-loop) only applies to latency mode; ignored for {}",
+                "warning: TARGET_RATE (open-loop) only applies to pub-latency mode; ignored for {}",
                 mode.as_str()
             );
         }
@@ -162,12 +165,12 @@ impl Config {
     pub(crate) fn summary(&self) -> String {
         // qos/inflight/interval_us don't all apply to every mode; show only the relevant ones.
         let mode_specific = match self.mode {
-            Mode::Latency if self.target_rate > 0.0 => {
+            Mode::PubLatency if self.target_rate > 0.0 => {
                 format!(" qos={} rate={}/s(open-loop)", self.qos, self.target_rate)
             }
-            Mode::Latency => format!(" qos={} interval_us={}", self.qos, self.interval_us),
-            Mode::Throughput => format!(" qos={} inflight={}", self.qos, self.inflight),
-            Mode::Inbound => String::new(),
+            Mode::PubLatency => format!(" qos={} interval_us={}", self.qos, self.interval_us),
+            Mode::PubThroughput => format!(" qos={} inflight={}", self.qos, self.inflight),
+            Mode::RecvThroughput | Mode::RecvLatency => format!(" qos={}", self.qos),
         };
         format!(
             "mode={} transport={} payload={}B count={} warmup={} host={}:{}{}",
@@ -235,23 +238,23 @@ Connection:
   CA_FILE, CERT_FILE, KEY_FILE, CONNECT_TIMEOUT_SECS, KEEPALIVE_SECS
 
 Workload:
-  MODE(latency|throughput|inbound), QOS(0|1), TOPIC, PAYLOAD_BYTES,
-  COUNT, WARMUP, INFLIGHT, INTERVAL_US, TARGET_RATE, LABEL
+  MODE(pub-latency|pub-throughput|recv-throughput|recv-latency), QOS(0|1), TOPIC,
+  PAYLOAD_BYTES, COUNT, WARMUP, INFLIGHT, INTERVAL_US, TARGET_RATE, LABEL
 
 Examples:
-  # Small-payload round-trip latency on a hot socket (nodelay/Nagle sensitive)
-  MODE=latency QOS=1 PAYLOAD_BYTES=32 COUNT=50000 HOST=peer cargo run -p bench_client --release
+  # Small-payload round-trip publish latency on a hot socket (nodelay/Nagle sensitive)
+  MODE=pub-latency QOS=1 PAYLOAD_BYTES=32 COUNT=50000 HOST=peer cargo run -p bench_client --release
 
-  # Large-payload sustained throughput over TLS (crypto path; run a `ROLE=sink TLS=1` peer)
-  MODE=throughput QOS=0 PAYLOAD_BYTES=131072 INFLIGHT=64 COUNT=20000 \\
+  # Large-payload sustained publish throughput over TLS (crypto path; run a `ROLE=sink TLS=1` peer)
+  MODE=pub-throughput QOS=0 PAYLOAD_BYTES=131072 INFLIGHT=64 COUNT=20000 \\
     TRANSPORT=tls PORT=8883 CA_FILE=certs/server.crt HOST=127.0.0.1 \\
     cargo run -p bench_client --release
 
-  # Inbound receive throughput (start `bench_peer ROLE=feed` first, aim HOST/PORT at it)
-  MODE=inbound PAYLOAD_BYTES=256 COUNT=100000 HOST=127.0.0.1 PORT=1883 cargo run -p bench_client --release
+  # Receive throughput (start `bench_peer ROLE=feed` first, aim HOST/PORT at it)
+  MODE=recv-throughput PAYLOAD_BYTES=256 COUNT=100000 HOST=127.0.0.1 PORT=1883 cargo run -p bench_client --release
 
 Note: the client-isolating workloads run against bench_peer, not a real broker
-  (ROLE=feed for inbound; ROLE=sink for latency/throughput). See `cargo run -p bench_peer -- --help`.
+  (ROLE=feed for recv-*; ROLE=sink for pub-*). See `cargo run -p bench_peer -- --help`.
 Tip: measure CPU-per-message with `/usr/bin/time -v` and inject RTT on loopback with `tc netem`.
 "
     );

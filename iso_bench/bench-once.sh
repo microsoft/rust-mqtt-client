@@ -10,7 +10,7 @@
 # and tears the peer down. For statistically meaningful comparisons, prefer bench-workload.sh, which runs
 # many reps of this and aggregates them.
 #
-# It starts a `bench_peer` in the role implied by MODE (inbound->feed, latency/throughput->sink),
+# It starts a `bench_peer` in the role implied by MODE (recv-*->feed, pub-*->sink),
 # waits for it to listen, runs one `bench_client` config, then cleans up.
 #
 # Rigor notes (see the design discussion): run the SAME config twice on the same build first to
@@ -19,14 +19,14 @@
 # condition, not realism) and needs root.
 #
 # All configuration is via environment variables (same knobs as bench_client, plus orchestration):
-#   Workload:  MODE(latency|throughput|inbound) QOS TRANSPORT(tcp|tls) PAYLOAD_BYTES COUNT WARMUP
+#   Workload:  MODE(pub-latency|pub-throughput|recv-throughput|recv-latency) QOS TRANSPORT(tcp|tls) PAYLOAD_BYTES COUNT WARMUP
 #              INFLIGHT INTERVAL_US TARGET_RATE TOPIC LABEL HOST PORT
 #   Peer:      BATCH RATE            (feed only)
 #   Pinning:   CLIENT_CORES PEER_CORES   (taskset masks; defaults suit an 8-vCPU F8s_v2)
 #   Extras:    NETEM_DELAY (e.g. 5ms, needs root)  CERT_DIR (TLS)
 #
 # Usage: ./bench-once.sh            (all via env)
-#        MODE=inbound PAYLOAD_BYTES=256 COUNT=200000 ./bench-once.sh
+#        MODE=recv-throughput PAYLOAD_BYTES=256 COUNT=200000 ./bench-once.sh
 set -euo pipefail
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -44,7 +44,7 @@ fi
 cd "$script_dir"
 
 # ---- config -------------------------------------------------------------------------------------
-MODE="${MODE:-latency}"
+MODE="${MODE:-pub-latency}"
 QOS="${QOS:-1}"
 TRANSPORT="${TRANSPORT:-tcp}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-64}"
@@ -74,18 +74,21 @@ fi
 
 # Peer role implied by the client mode.
 case "$MODE" in
-    inbound) PEER_ROLE=feed ;;
-    latency | throughput) PEER_ROLE=sink ;;
+    recv-throughput | recv-latency) PEER_ROLE=feed ;;
+    pub-latency | pub-throughput) PEER_ROLE=sink ;;
     *)
-        echo "unknown MODE '$MODE' (expected latency|throughput|inbound)" >&2
+        echo "unknown MODE '$MODE' (expected pub-latency|pub-throughput|recv-throughput|recv-latency)" >&2
         exit 2
         ;;
 esac
 
+# recv-latency needs the peer to stamp each publish's payload with its send time (epoch nanos).
+if [[ "$MODE" == "recv-latency" ]]; then STAMP=1; else STAMP="${STAMP:-0}"; fi
+
 # Open-loop latency busy-spins one core to pace precisely; give it a dedicated core so it can't
 # steal cycles from the measured client and distort the latency-vs-rate curve (need >=3: 2 for
 # client work + 1 pacer).
-if [[ "$MODE" == "latency" ]] && awk "BEGIN{exit !($TARGET_RATE > 0)}"; then
+if [[ "$MODE" == "pub-latency" ]] && awk "BEGIN{exit !($TARGET_RATE > 0)}"; then
     client_core_count=0
     IFS=',' read -ra _cores <<<"$CLIENT_CORES"
     for _part in "${_cores[@]}"; do
@@ -165,7 +168,7 @@ trap cleanup EXIT
 # ---- start peer (pinned) ------------------------------------------------------------------------
 echo "starting bench_peer[$PEER_ROLE] on cores $PEER_CORES, ${TRANSPORT}://$HOST:$PORT ..." >&2
 env ROLE="$PEER_ROLE" BIND="$HOST" PORT="$PORT" PAYLOAD_BYTES="$PAYLOAD_BYTES" TOPIC="$TOPIC" \
-    BATCH="$BATCH" RATE="$RATE" "${peer_tls_env[@]}" \
+    QOS="$QOS" STAMP="$STAMP" BATCH="$BATCH" RATE="$RATE" "${peer_tls_env[@]}" \
     taskset -c "$PEER_CORES" "$peer_bin" >"$peer_log" 2>&1 &
 peer_pid=$!
 

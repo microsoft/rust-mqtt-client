@@ -38,10 +38,10 @@ the **client**.
 - **Core budget (why 8 vCPU):** the client wants ~2 cores (its connection reader and workload
   consumer run concurrently), the peer ~1–2 (more under TLS, which encrypts live), and the OS needs
   headroom. Loopback has no hardware NIC IRQ to steer, so the main job is keeping the client and
-  peer on **separate physical cores**. **Open-loop `latency` wants one *extra* client core** (3 total)
-  — its pacer busy-spins a core, so give it a dedicated one to keep the measured client at its full
-  2-core budget (e.g. `CLIENT_CORES=2,3,4 PEER_CORES=5,6`). F8s_v2 still fits; `F4s_v2` is then too
-  tight.
+  peer on **separate physical cores**. **Open-loop `pub-latency` (and `recv-latency`) want one *extra*
+  core** (client 3 total, or peer for `recv-latency`) — the pacer busy-spins a core, so give it a
+  dedicated one to keep the measured side at its full budget (e.g. `CLIENT_CORES=2,3,4 PEER_CORES=5,6`).
+  F8s_v2 still fits; `F4s_v2` is then too tight.
 - The tooling runs anywhere Linux + Rust is available; the VM above is only the *recommended* target
   for trustworthy numbers.
 
@@ -60,9 +60,12 @@ the **client**.
 ## Quick start (recommended: `bench.sh`)
 
 [`bench.sh`](bench.sh) is the main entry point: it runs the **full curated
-suite** — latency, throughput, and inbound, each over TCP and TLS — `REPS` reps per config, and
-prints a per-config summary plus (for A/B) a per-config comparison. One command covers the whole
-regression surface.
+suite** — the four modes (`pub-latency`, `pub-throughput`, `recv-throughput`, `recv-latency`) over
+TCP and TLS, plus variants that isolate one path each (QoS 0 send, small-payload throughput,
+large-payload latency, QoS 1 receive+PUBACK) and two **open-loop latency-under-load** configs
+(coordinated-omission-correct) — `REPS`
+reps per config, and prints a per-config summary plus (for A/B) a per-config comparison. One command
+covers the whole regression surface.
 
 ```bash
 LABEL=main ./bench.sh          # full suite (~10 reps per config)
@@ -72,17 +75,17 @@ Under the suite sit two lower-level entry points you can use directly:
 
 - [`bench-workload.sh`](bench-workload.sh) — **one config**, `REPS` reps, aggregated (median/mean/min/max/CV%):
   ```bash
-  LABEL=main REPS=8 MODE=latency QOS=1 COUNT=100000 ./bench-workload.sh
-  LABEL=main REPS=8 MODE=inbound PAYLOAD_BYTES=16384 COUNT=300000 ./bench-workload.sh
+  LABEL=main REPS=8 MODE=pub-latency QOS=1 COUNT=100000 ./bench-workload.sh
+  LABEL=main REPS=8 MODE=recv-throughput PAYLOAD_BYTES=16384 COUNT=300000 ./bench-workload.sh
   ```
 - [`bench-once.sh`](bench-once.sh) — **one config, one rep** (a single `RESULT` + `CPU` line, no
   aggregation); handy for debugging one run:
   ```bash
-  MODE=latency QOS=1 COUNT=50000 ./bench-once.sh
+  MODE=pub-latency QOS=1 COUNT=50000 ./bench-once.sh
   ```
 
 All of them build the binaries, derive the peer role from `MODE`, match the peer's payload for
-`inbound`, and (for TLS) generate certs automatically. Override core pinning with `CLIENT_CORES` /
+the `recv-*` modes, and (for TLS) generate certs automatically. Override core pinning with `CLIENT_CORES` /
 `PEER_CORES` (defaults `2,3` and `4,5` suit an F8s_v2); add `NETEM_DELAY=5ms` for a controlled
 loopback RTT (needs root).
 
@@ -93,24 +96,25 @@ Run both from this directory. **Always build `--release`** — a dev build is se
 
 | Client `MODE` | Peer `ROLE` | Measures |
 |---|---|---|
-| `inbound` | `feed` | client **receive** throughput (peer firehoses PUBLISHes) |
-| `latency` | `sink` | **round-trip** publish→PUBACK latency (QoS 1) |
-| `throughput` | `sink` | client **send** throughput, pipelined |
+| `recv-throughput` | `feed` | client **receive** throughput (peer firehoses PUBLISHes; `QOS=1` on both adds the receive-side PUBACK path) |
+| `recv-latency` | `feed` (`STAMP=1`) | per-message **delivery** latency wire→app (peer stamps send time; paced via `RATE`) |
+| `pub-latency` | `sink` | **round-trip** publish→PUBACK latency (QoS 1) |
+| `pub-throughput` | `sink` | client **send** throughput, pipelined |
 
 ```bash
-# Terminal A — peer (inbound example; PAYLOAD_BYTES must match the client)
+# Terminal A — peer (recv-throughput example; PAYLOAD_BYTES must match the client)
 ROLE=feed PORT=1883 PAYLOAD_BYTES=256 cargo run --release -p bench_peer
 
 # Terminal B — measured client
-MODE=inbound HOST=127.0.0.1 PORT=1883 PAYLOAD_BYTES=256 \
+MODE=recv-throughput HOST=127.0.0.1 PORT=1883 PAYLOAD_BYTES=256 \
   WARMUP=5000 COUNT=200000 LABEL=main cargo run --release -p bench_client
 ```
 
 The peer accepts a fresh connection per client run, so you can leave it up and fire many client runs.
 
-### Latency: closed-loop vs open-loop
+### `pub-latency`: closed-loop vs open-loop
 
-`latency` mode has two pacing strategies:
+`pub-latency` mode has two pacing strategies:
 
 - **Closed-loop** (default, `TARGET_RATE=0`): each op waits for its own completion before the next
   is sent — one operation in flight at a time. Reports the client's intrinsic per-op cost with a hot
@@ -124,11 +128,11 @@ The peer accepts a fresh connection per client run, so you can leave it up and f
 
 ```bash
 # closed-loop (intrinsic per-op cost)
-MODE=latency QOS=1 COUNT=20000 ./bench-once.sh
+MODE=pub-latency QOS=1 COUNT=20000 ./bench-once.sh
 
 # open-loop sweep (latency under load) — watch p99/p99.9 climb as rate approaches saturation
 for r in 2000 20000 100000 160000; do
-  TARGET_RATE=$r MODE=latency QOS=1 COUNT=20000 ./bench-once.sh
+  TARGET_RATE=$r MODE=pub-latency QOS=1 COUNT=20000 ./bench-once.sh
 done
 ```
 
@@ -152,14 +156,14 @@ trust anchor). `certs/` is gitignored.
 ROLE=feed TLS=1 PORT=8883 CERT_FILE=certs/server.crt KEY_FILE=certs/server.key \
   PAYLOAD_BYTES=256 cargo run --release -p bench_peer
 # client:
-MODE=inbound TRANSPORT=tls PORT=8883 CA_FILE=certs/server.crt HOST=127.0.0.1 \
+MODE=recv-throughput TRANSPORT=tls PORT=8883 CA_FILE=certs/server.crt HOST=127.0.0.1 \
   PAYLOAD_BYTES=256 COUNT=200000 cargo run --release -p bench_client
 ```
 
 > **TLS throughput caveat:** unlike plaintext, the peer must **encrypt live** (TLS records can't be
 > pre-encoded or replayed), so it is no longer trivially faster than the client — single-session TLS
 > throughput is bounded by `min(peer encrypt, client decrypt)`. For the crypto-cost signal, rely on
-> the client's **CPU-per-message** (below), which stays un-confounded, and use `latency` mode for
+> the client's **CPU-per-message** (below), which stays un-confounded, and use `pub-latency` mode for
 > TLS round-trip.
 
 ## Reading the output
@@ -167,14 +171,15 @@ MODE=inbound TRANSPORT=tls PORT=8883 CA_FILE=certs/server.crt HOST=127.0.0.1 \
 Each client run prints a human summary plus one machine-readable line:
 
 ```
-RESULT {"label":"main","mode":"inbound","transport":"tcp","qos":1,"payload_bytes":256,
+RESULT {"label":"main","mode":"recv-throughput","transport":"tcp","qos":0,"payload_bytes":256,
         "inflight":1,"interval_us":0,"count":200000,"wall_s":0.83,"msgs_per_s":240093.4,
         "mib_per_s":58.6,"lat_kind":"inter-arrival","lat_us":{"min":0.1,"p50":0.5,...}}
 ```
 
-- **`msgs_per_s` / `mib_per_s`** — the headline for `inbound` and `throughput`.
-- **`lat_us`** percentiles — labeled by `lat_kind`: `op latency` (round-trip / per-op for
-  latency/throughput) or `inter-arrival` (reader-path jitter for `inbound` — *not* a round trip).
+- **`msgs_per_s` / `mib_per_s`** — the headline for the `recv-throughput` and `pub-throughput` modes.
+- **`lat_us`** percentiles — labeled by `lat_kind`: `op latency` (round-trip / per-op for the
+  `pub-*` modes), `inter-arrival` (reader-path jitter for `recv-throughput` — *not* a round trip), or
+  `delivery latency` (wire→app one-way for `recv-latency`).
 
 The `bench-once.sh` primitive adds a CPU line from `/usr/bin/time` (per rep; `bench-workload.sh`
 aggregates these across reps):
@@ -197,7 +202,7 @@ without keeping raw samples).
 
 ```bash
 python3 report.py results.jsonl                    # full report (all configs + histograms)
-python3 report.py results.jsonl --config lat-tcp   # one config
+python3 report.py results.jsonl --config pub-lat-tcp   # one config
 python3 report.py results.jsonl --label main       # one build
 python3 report.py results.jsonl --no-hist          # tables only
 python3 report.py results.jsonl --hist-only        # histograms only
@@ -249,11 +254,12 @@ not a formal test. (`bench-workload.sh` prints the same for a single config inli
 
 **`bench_client`** — connection: `HOST` `PORT` `TRANSPORT`(tcp|tls) `CLIENT_ID` `USERNAME`
 `PASSWORD` `CA_FILE` `CERT_FILE` `KEY_FILE` `CONNECT_TIMEOUT_SECS` `KEEPALIVE_SECS`; workload:
-`MODE`(latency|throughput|inbound) `QOS`(0|1) `TOPIC` `PAYLOAD_BYTES` `COUNT` `WARMUP` `INFLIGHT`
-`INTERVAL_US` `TARGET_RATE`(latency; 0=closed-loop) `LABEL`.
+`MODE`(pub-latency|pub-throughput|recv-throughput|recv-latency) `QOS`(0|1) `TOPIC` `PAYLOAD_BYTES`
+`COUNT` `WARMUP` `INFLIGHT` `INTERVAL_US` `TARGET_RATE`(pub-latency; 0=closed-loop) `LABEL`.
 
 **`bench_peer`** — `ROLE`(feed|sink) `BIND` `PORT` `TLS`(0|1) `CERT_FILE` `KEY_FILE` `TOPIC`
-`PAYLOAD_BYTES` `BATCH` `RATE`(feed; 0=max).
+`PAYLOAD_BYTES` `QOS`(feed; 0|1) `WINDOW`(feed QoS 1 in-flight) `STAMP`(feed recv-latency) `BATCH`
+`RATE`(feed; 0=max).
 
 **`bench-once.sh`** — all of the client knobs, plus `CLIENT_CORES` `PEER_CORES` `NETEM_DELAY`
 `CERT_DIR` `BATCH` `RATE`.
@@ -269,13 +275,24 @@ Pass `--help` (or `HELP=1`) to either binary, or `-h` to any script, for the ful
 ## Limitations & caveats
 
 - **QoS 2 is not implemented** (the client doesn't implement it either).
-- **`inbound` requires `PAYLOAD_BYTES` to match** between peer (`feed`) and client, or the reported
-  MiB/s is wrong.
+- **The `recv-*` modes require `PAYLOAD_BYTES` to match** between peer (`feed`) and client, or the
+  reported MiB/s is wrong.
+- **`recv-latency` uses a shared wall clock.** The peer stamps each publish's send time and the
+  client differences it at delivery, which is only valid on a *single host* (both read the same
+  `SystemTime`) — which the whole tool already requires. Needs `PAYLOAD_BYTES >= 8`; the peer paces
+  precisely (busy-spins a core, like open-loop) so absolute delivery latency isn't a send-pacing
+  artifact.
+- **Inbound QoS 1 needs flow control.** The client keeps each incoming QoS 1 packet id pending until
+  it PUBACKs and *asserts (panics) if a still-pending id is reused*, so `feed QOS=1` caps in-flight to
+  `WINDOW` and never reuses a live id (compliant-server behavior). The client's incoming-publish
+  channel is **unbounded by design**, so a receiver slower than the network would grow memory without
+  bound — the harness acks promptly (staying producer-bound), and `max_rss_kb` in the results
+  surfaces any growth.
 - **Loopback** exercises all of the client's transport software (syscalls, kernel TCP, TLS, framing,
   decode, buffer pool) but not real NIC offloads — which is correct for a *software* regression
   detector.
 - **Closed-loop is the default** (each op waits for completion), which reports intrinsic per-op cost
-  but under-reports tail latency under load (coordinated omission). Use **open-loop** `latency`
+  but under-reports tail latency under load (coordinated omission). Use **open-loop** `pub-latency`
   (`TARGET_RATE=<msgs/s>`, above) for coordinated-omission-correct tails and latency-under-load
   curves.
 - **An open-loop knee can be the *peer*, not the client.** The `sink` peer parses every publish to

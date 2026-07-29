@@ -74,9 +74,7 @@ def rule(char="=", width=74):
 def config_meta(rows):
     """One-line descriptor + latency-kind label for a config, from a representative row."""
     r = rows[0]
-    parts = [r.get("mode", "?"), r.get("transport", "?")]
-    if r.get("mode") != "inbound":
-        parts.append(f"qos{r.get('qos')}")
+    parts = [r.get("mode", "?"), r.get("transport", "?"), f"qos{r.get('qos')}"]
     parts.append(f"{r.get('payload_bytes', '?')}B")
     if (r.get("target_rate") or 0) > 0:
         parts.append(f"open-loop {fmt_num(r['target_rate'])}/s")
