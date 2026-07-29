@@ -74,4 +74,4 @@ done
 
 echo "" >&2
 echo "== suite done: label='$LABEL' -> $RESULTS_FILE ==" >&2
-echo "   (re-view all configs at once: python3 aggregate.py $RESULTS_FILE)" >&2
+echo "   (full human report incl. histograms: python3 report.py $RESULTS_FILE)" >&2

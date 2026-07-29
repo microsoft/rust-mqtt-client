@@ -186,16 +186,25 @@ CPU {"user_s":0.10,"sys_s":0.30,"cpu_us_per_msg":80.0,"max_rss_kb":5808}
 `cpu_us_per_msg` is measured on the client process alone, so it stays clean even under same-host
 contention — it's the sharpest signal for crypto/copy-path regressions.
 
-### Histograms
+### Rendering the results (`report.py`)
 
-Every record also carries `hist_ns` — the full latency/inter-arrival distribution as log-spaced
-HdrHistogram buckets (`[upper_bound_ns, count]`), so a histogram can be reconstructed offline without
-keeping every raw sample. Render it with [`histogram.py`](histogram.py), which sums the buckets
-across a config's reps and prints a text histogram:
+[`report.py`](report.py) turns a results file into a human report: an **overview**, then per-config
+**statistic tables** (median / mean / min / max / CV% for throughput, latency percentiles, and
+`cpu_us_per_msg` / `max_rss_kb`), an **A/B comparison** when a config has ≥ 2 labels (delta% + a
+`better` / `WORSE` / `~noise` verdict), and a **text histogram** of each distribution (summed from
+the per-rep `hist_ns` HdrHistogram buckets — `[upper_bound_ns, count]` — so it reconstructs offline
+without keeping raw samples).
 
 ```bash
-python3 histogram.py results.jsonl <config> [label]
+python3 report.py results.jsonl                    # full report (all configs + histograms)
+python3 report.py results.jsonl --config lat-tcp   # one config
+python3 report.py results.jsonl --label main       # one build
+python3 report.py results.jsonl --no-hist          # tables only
+python3 report.py results.jsonl --hist-only        # histograms only
 ```
+
+The suite prints the tables (`--no-hist`, scoped to each config) inline as it runs; run `report.py`
+by hand afterward for the full view including histograms.
 
 ## Comparing builds (A/B)
 
@@ -210,9 +219,21 @@ git checkout my-refactor
 ```
 
 Read it as: **latency and `cpu_us_per_msg` going up = regression; `msgs_per_s` going down =
-regression.** The `note` column flags whether a delta exceeds the baseline's CV — a rough signal, not
-a formal test. (`bench-workload.sh` does the same for a single config; both share
-[`aggregate.py`](aggregate.py).)
+regression.** The `verdict` column flags whether a delta exceeds the baseline's CV — a rough signal,
+not a formal test. (`bench-workload.sh` prints the same for a single config inline; both render via
+[`report.py`](report.py).)
+
+> **⚠ The harness runs from each branch — it is *not* pinned.** `git checkout my-refactor` switches
+> the whole tree, so build B runs **`my-refactor`'s copy of `iso_bench`**, not build A's. A valid A/B
+> therefore **assumes the harness and workload definitions are identical on both branches** (same
+> suite, `COUNT`s, payloads, pinning) — only the library under `src/` should differ. If the harness
+> drifted between branches, the comparison is confounded. To keep this honest, every record is
+> stamped with provenance (git SHA + dirty flag, `rustc`, host) and `report.py` **flags workload
+> drift** (mismatched `count` / `payload_bytes` / `qos` / `inflight` / `target_rate` across labels)
+> and **toolchain/host drift** — treat any such warning as "these numbers aren't comparable." A
+> fixed, out-of-tree harness (one instrument built against each library ref) is the eventual fix once
+> the API stabilizes; until then, keep `iso_bench` changes on a shared base and rebase feature
+> branches onto it before benchmarking.
 
 ## How to run it for meaningful numbers
 
@@ -276,7 +297,6 @@ iso_bench/                # detached cargo workspace (not part of the library's 
   bench.sh                # PRIMARY: full curated suite (all workloads) + per-config A/B
   bench-workload.sh       # one config: N reps + aggregate stats + A/B
   bench-once.sh           # single run (peer + pinned, timed client)
-  aggregate.py            # results aggregator (median/CV%/A-B); per-config, or run by hand for all
-  histogram.py            # renders a text histogram from the per-rep hist_ns buckets
+  report.py               # human report: overview + stat tables + A/B + histograms
   gen-test-certs.sh       # self-signed TLS cert generator (local testing only)
 ```

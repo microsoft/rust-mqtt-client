@@ -57,6 +57,14 @@ export LABEL # so bench-once.sh -> bench_client tags the RESULT line with it
 
 echo "== iso_bench: label='$LABEL' config='${CONFIG:-auto}' reps=$REPS -> $RESULTS_FILE ==" >&2
 
+# Build provenance -- stamped into every record so two results files are self-describing and any
+# instrument/toolchain drift between branches is visible after the fact (see report.py drift check).
+prov_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+prov_dirty=0
+[[ -n "$(git status --porcelain 2>/dev/null)" ]] && prov_dirty=1
+prov_rustc="$(rustc --version 2>/dev/null | awk '{print $2}')"
+prov_host="$(hostname 2>/dev/null || echo unknown)"
+
 this_config=""
 for ((r = 1; r <= REPS; r++)); do
     printf '[%s] rep %d/%d ... ' "$LABEL" "$r" "$REPS" >&2
@@ -82,12 +90,13 @@ for ((r = 1; r <= REPS; r++)); do
     this_config="$(
         RESULT_JSON="${result_line#RESULT }" CPU_JSON="${cpu_line#CPU }" \
             REC_LABEL="$LABEL" REC_CONFIG="$CONFIG" REP="$r" OUT_FILE="$RESULTS_FILE" \
+            PROV_SHA="$prov_sha" PROV_DIRTY="$prov_dirty" PROV_RUSTC="$prov_rustc" PROV_HOST="$prov_host" \
             python3 - <<'PY'
 import json, os
 res = json.loads(os.environ["RESULT_JSON"])
 cpu = json.loads(os.environ.get("CPU_JSON") or "{}")
 rec = {"label": os.environ["REC_LABEL"], "rep": int(os.environ["REP"])}
-for k in ("mode", "transport", "qos", "payload_bytes", "count", "msgs_per_s", "mib_per_s", "hist_ns"):
+for k in ("mode", "transport", "qos", "payload_bytes", "count", "inflight", "target_rate", "msgs_per_s", "mib_per_s", "lat_kind", "hist_ns"):
     if k in res:
         rec[k] = res[k]
 rec["config"] = os.environ.get("REC_CONFIG") or (
@@ -98,6 +107,10 @@ for k, v in (res.get("lat_us") or {}).items():
 for k in ("cpu_us_per_msg", "max_rss_kb", "user_s", "sys_s"):
     if k in cpu:
         rec[k] = cpu[k]
+rec["git_sha"] = os.environ.get("PROV_SHA") or "unknown"
+rec["git_dirty"] = os.environ.get("PROV_DIRTY") == "1"
+rec["rustc"] = os.environ.get("PROV_RUSTC") or "unknown"
+rec["host"] = os.environ.get("PROV_HOST") or "unknown"
 with open(os.environ["OUT_FILE"], "a") as f:
     f.write(json.dumps(rec) + "\n")
 print(rec["config"])
@@ -106,6 +119,6 @@ PY
 done
 
 # Summarize just THIS config (across its reps, plus any earlier label for it -> A/B).
-python3 "$script_dir/aggregate.py" "$RESULTS_FILE" "$this_config"
+python3 "$script_dir/report.py" "$RESULTS_FILE" --config "$this_config" --no-hist
 
 echo "results: $RESULTS_FILE" >&2
