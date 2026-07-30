@@ -3,10 +3,10 @@
 
 //! Transport performance harness for detecting regressions across builds.
 //!
-//! This is a manual, environment-variable-driven load generator that connects to a real broker
+//! This is a manual, environment-variable-driven load generator that connects to a peer
+//! (typically `bench_peer` from this workspace for isolation, but it can also target a real broker)
 //! and exercises the transport under a chosen workload, reporting latency percentiles and
-//! throughput. It is intended to be run against the same broker on two builds of the client and
-//! the numbers compared by hand.
+//! throughput. It is intended to be run against the same peer on two builds of the client and
 //!
 //! # Why several modes
 //!
