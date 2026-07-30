@@ -114,13 +114,17 @@ run_and_record() {
         python3 "$script_dir/record.py" >/dev/null
 }
 
-# Fill the global `order` with a balanced, shuffled per-pair order: exactly REPS/2 zeros (CUR first)
-# and the rest ones (REF first). Balance removes order bias; the shuffle keeps anti-aliasing.
+# Fill the global `order` with a balanced, shuffled per-pair order: zeros (CUR first) and ones (REF
+# first). With even REPS the split is exact (REPS/2 each); with odd REPS an even split is impossible,
+# so the single leftover run goes to a RANDOM side per config -- no build is systematically favored.
+# The shuffle then keeps anti-aliasing.
 make_order() {
     order=()
-    local i j t half=$((REPS / 2))
+    local i j t zeros=$((REPS / 2))
+    # odd REPS: hand the leftover run to CUR or REF by coin flip so the tiny imbalance has no fixed sign
+    if ((REPS % 2 == 1)) && ((RANDOM % 2 == 0)); then zeros=$((zeros + 1)); fi
     for ((i = 0; i < REPS; i++)); do
-        if ((i < half)); then order+=(0); else order+=(1); fi
+        if ((i < zeros)); then order+=(0); else order+=(1); fi
     done
     for ((i = REPS - 1; i > 0; i--)); do  # Fisher-Yates
         j=$((RANDOM % (i + 1)))
