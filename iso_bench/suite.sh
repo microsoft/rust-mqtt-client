@@ -37,21 +37,39 @@
 # p99); parallel acking (spawn accept() per msg) measured 3-6x WORSE throughput because it floods the
 # runtime and starves that connection task. So QoS 1 delivery latency can't be measured cleanly from
 # the harness -- it needs the client's ack path restructured. TODO: revisit if/when that changes.
-suite=(
-    "CONFIG=pub-lat-tcp      MODE=pub-latency    QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=64    COUNT=100000"
-    "CONFIG=pub-lat-tls      MODE=pub-latency    QOS=1 TRANSPORT=tls PAYLOAD_BYTES=64    COUNT=100000"
-    "CONFIG=pub-lat-large    MODE=pub-latency    QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=16384 COUNT=100000"
-    "CONFIG=pub-lat-open-tcp MODE=pub-latency    QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=64 TARGET_RATE=60000 COUNT=500000 CLIENT_CORES=2,4,6 PEER_CORES=8,10"
-    "CONFIG=pub-lat-open-tls MODE=pub-latency    QOS=1 TRANSPORT=tls PAYLOAD_BYTES=64 TARGET_RATE=38000 COUNT=500000 CLIENT_CORES=2,4,6 PEER_CORES=8,10"
-    "CONFIG=pub-tput-tcp     MODE=pub-throughput QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=16384 INFLIGHT=64 COUNT=300000"
-    "CONFIG=pub-tput-tls     MODE=pub-throughput QOS=1 TRANSPORT=tls PAYLOAD_BYTES=16384 INFLIGHT=64 COUNT=300000"
-    "CONFIG=pub-tput-small   MODE=pub-throughput QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=64    INFLIGHT=64 COUNT=300000"
-    "CONFIG=pub-tput-qos0    MODE=pub-throughput QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=64    INFLIGHT=64 COUNT=300000"
-    "CONFIG=recv-tput-tcp    MODE=recv-throughput QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=16384 COUNT=300000"
-    "CONFIG=recv-tput-tls    MODE=recv-throughput QOS=0 TRANSPORT=tls PAYLOAD_BYTES=16384 COUNT=300000"
-    "CONFIG=recv-tput-small  MODE=recv-throughput QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=64    COUNT=300000"
-    "CONFIG=recv-tput-q1-tcp MODE=recv-throughput QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=16384 COUNT=300000"
-    "CONFIG=recv-tput-q1-tls MODE=recv-throughput QOS=1 TRANSPORT=tls PAYLOAD_BYTES=16384 COUNT=300000"
-    "CONFIG=recv-lat-tcp     MODE=recv-latency   QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=256 RATE=50000 BATCH=1 COUNT=500000"
-    "CONFIG=recv-lat-tls     MODE=recv-latency   QOS=0 TRANSPORT=tls PAYLOAD_BYTES=256 RATE=50000 BATCH=1 COUNT=500000"
-)
+# The suite is a matrix: WORKLOAD (a test minus transport) x TRANSPORT. Add a transport to TRANSPORTS
+# and every cross-transport workload picks it up; the coherence gate (report.py) reads the resulting
+# transport-contrast pairs to tell a shared-logic move from a crypto/framing one.
+#   cross NAME ENV   -> one config per transport, named NAME-<transport>
+#   fixed NAME ENV   -> emitted once (TRANSPORT set in ENV); isolates client LOGIC on a single
+#                       transport where the crypto/framing path is already covered by a *-tls config
+# Per-cell tuning: define `tune_<name_with_underscores> <transport>` to echo extra env for a cross
+# cell. Call order below is the historical run order so results stay comparable. Edit this to change
+# the gate.
+TRANSPORTS=(tcp tls)
+suite=()
+cross() {
+    local name=$1 env=$2 t extra tuner="tune_${1//-/_}"
+    for t in "${TRANSPORTS[@]}"; do
+        extra=""
+        declare -F "$tuner" >/dev/null 2>&1 && extra=" $("$tuner" "$t")"
+        suite+=("CONFIG=$name-$t $env TRANSPORT=$t$extra")
+    done
+}
+fixed() { suite+=("CONFIG=$1 $2"); }
+
+# TLS saturates below TCP, so hold each open-loop cell ~60% of its own QoS1-64B knee (see rate note above).
+tune_pub_lat_open() { case $1 in tcp) echo "TARGET_RATE=60000" ;; tls) echo "TARGET_RATE=38000" ;; esac; }
+
+cross pub-lat         "MODE=pub-latency     QOS=1 PAYLOAD_BYTES=64    COUNT=100000"
+fixed pub-lat-large   "MODE=pub-latency     QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=16384 COUNT=100000"
+cross pub-lat-open    "MODE=pub-latency     QOS=1 PAYLOAD_BYTES=64    COUNT=500000 CLIENT_CORES=2,4,6 PEER_CORES=8,10"
+cross pub-tput        "MODE=pub-throughput  QOS=1 PAYLOAD_BYTES=16384 INFLIGHT=64 COUNT=300000"
+fixed pub-tput-small  "MODE=pub-throughput  QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=64    INFLIGHT=64 COUNT=300000"
+fixed pub-tput-qos0   "MODE=pub-throughput  QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=64    INFLIGHT=64 COUNT=300000"
+cross recv-tput       "MODE=recv-throughput QOS=0 PAYLOAD_BYTES=16384 COUNT=300000"
+fixed recv-tput-small "MODE=recv-throughput QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=64    COUNT=300000"
+cross recv-tput-q1    "MODE=recv-throughput QOS=1 PAYLOAD_BYTES=16384 COUNT=300000"
+cross recv-lat        "MODE=recv-latency    QOS=0 PAYLOAD_BYTES=256 RATE=50000 BATCH=1 COUNT=500000"
+
+unset -f cross fixed tune_pub_lat_open
