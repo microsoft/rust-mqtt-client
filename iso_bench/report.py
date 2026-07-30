@@ -304,7 +304,35 @@ def adj_delta(deltas):
     return med * max(0.0, 1.0 - 1.0 / snr2)
 
 
-def print_paired_comparison(rows, config, labels):
+# Within-config corroboration partners: metrics that a REAL regression moves together, so a lone flag
+# is suspect. Latency percentiles co-move (a shifted distribution lifts several); throughput and
+# cpu/msg are inversely linked (fewer msg/s <-> more us/msg). msgs<->mib are the same signal so they
+# do NOT corroborate each other; max_rss has no within-config partner (sibling-only).
+WITHIN_PARTNERS = {
+    "lat_p50": {"lat_p90", "lat_p99"},
+    "lat_p90": {"lat_p50", "lat_p99"},
+    "lat_p99": {"lat_p50", "lat_p90"},
+    "msgs_per_s": {"cpu_us_per_msg"},
+    "mib_per_s": {"cpu_us_per_msg"},
+    "cpu_us_per_msg": {"msgs_per_s", "mib_per_s"},
+}
+
+
+def config_factors(rep):
+    """The workload axes of a config EXCEPT transport -- two configs with equal factors and different
+    transport are a transport-contrast pair (see suite.sh matrix)."""
+    return (
+        rep.get("mode"),
+        str(rep.get("qos")),
+        rep.get("payload_bytes"),
+        1 if (rep.get("target_rate") or 0) > 0 else 0,  # paced / open-loop
+    )
+
+
+def compute_paired(rows, config, labels):
+    """Per-metric paired stats for one config (no printing). `fired` = passes the raw significance gate
+    (Wilcoxon p<0.05 and |median delta| over the floor); `direction` is better/WORSE. Corroboration
+    (coherence) decides later whether a fired flag becomes a verdict or a soft 'watch'."""
     base, latest = labels[0], labels[-1]
     rep = next((r for r in rows if config_of(r) == config), {})
     # Not gated (shown as 'info'): lat_max is a single worst sample; inter-arrival p50 is recv-throughput
@@ -314,37 +342,79 @@ def print_paired_comparison(rows, config, labels):
         info_only |= {"lat_p50"}
     if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
         info_only |= {"msgs_per_s", "mib_per_s", "lat_p50"}
-    tp = set(paired_map(rows, config, base, "msgs_per_s")) & set(paired_map(rows, config, latest, "msgs_per_s"))
-    print(f"\n  PAIRED A/B  (interleaved; baseline=[{base}], delta=[{latest}], {len(tp)} pairs)")
-    print(f"  {'metric':<12}{('[' + base + ']'):>14}{('[' + latest + ']'):>14}{'raw Δ%':>10}{'p':>8}{'adj Δ%':>8}{'verdict':>11}")
-    print(f"  {rule('-', 12 + 28 + 10 + 8 + 8 + 11)}")
+    out = []
+    n_pairs = 0
     for key, disp, _, better in METRICS:
         bmap = paired_map(rows, config, base, key)
         lmap = paired_map(rows, config, latest, key)
         pairs = sorted(set(bmap) & set(lmap))
-        if len(pairs) < 2:
-            print(f"  {disp:<12}{'-':>14}{'-':>14}{'-':>10}{'-':>8}{'-':>8}{'-':>11}")
+        n_pairs = max(n_pairs, len(pairs))
+        m = {"key": key, "disp": disp, "better": better, "info": key in info_only,
+             "bmed": None, "lmed": None, "med_d": 0.0, "deltas": [], "p": None,
+             "fired": False, "direction": None}
+        if len(pairs) >= 2:
+            m["bmed"] = st.median([bmap[p] for p in pairs])
+            m["lmed"] = st.median([lmap[p] for p in pairs])
+            deltas = [(lmap[p] - bmap[p]) / bmap[p] * 100.0 for p in pairs if bmap[p]]
+            m["deltas"] = deltas
+            m["med_d"] = st.median(deltas) if deltas else 0.0
+            if not m["info"] and deltas:
+                p = wilcoxon_p(deltas)
+                m["p"] = p
+                if p < 0.05 and abs(m["med_d"]) >= PAIRED_FLOOR.get(key, PAIRED_FLOOR_PCT):
+                    improved = (m["med_d"] > 0) if better == "up" else (m["med_d"] < 0)
+                    m["fired"] = True
+                    m["direction"] = "better" if improved else "WORSE"
+        out.append(m)
+    return base, latest, n_pairs, out
+
+
+def coherence(comp_by_config, reps_by_config):
+    """Confirm each fired flag by CORROBORATION -- a real regression is coherent, a chance flag is
+    isolated. A flag is confirmed if the SAME metric moves the same way in the config's transport-
+    contrast sibling, OR a within-config partner metric (WITHIN_PARTNERS) fires the same direction.
+    Uncorroborated flags are downgraded to 'watch'. Returns {config: set(confirmed metric keys)}."""
+    fired = {c: {m["key"]: m["direction"] for m in comp if m["fired"]} for c, comp in comp_by_config.items()}
+    factors = {c: config_factors(reps_by_config[c]) for c in comp_by_config}
+    transport = {c: reps_by_config[c].get("transport") for c in comp_by_config}
+    confirmed = {}
+    for c, comp in comp_by_config.items():
+        sibs = [o for o in comp_by_config if o != c and factors[o] == factors[c] and transport[o] != transport[c]]
+        conf = set()
+        for m in comp:
+            if not m["fired"]:
+                continue
+            k, d = m["key"], m["direction"]
+            within = any(fired[c].get(p) == d for p in WITHIN_PARTNERS.get(k, ()))
+            cross = any(fired[s].get(k) == d for s in sibs)
+            if within or cross:
+                conf.add(k)
+        confirmed[c] = conf
+    return confirmed
+
+
+def print_paired_table(base, latest, n_pairs, comp, confirmed):
+    print(f"\n  PAIRED A/B  (interleaved; baseline=[{base}], delta=[{latest}], {n_pairs} pairs)")
+    print(f"  {'metric':<12}{('[' + base + ']'):>14}{('[' + latest + ']'):>14}{'raw Δ%':>10}{'p':>8}{'adj Δ%':>8}{'verdict':>11}")
+    print(f"  {rule('-', 12 + 28 + 10 + 8 + 8 + 11)}")
+    for m in comp:
+        if m["bmed"] is None:
+            print(f"  {m['disp']:<12}{'-':>14}{'-':>14}{'-':>10}{'-':>8}{'-':>8}{'-':>11}")
             continue
-        bmed = st.median([bmap[p] for p in pairs])
-        lmed = st.median([lmap[p] for p in pairs])
-        deltas = [(lmap[p] - bmap[p]) / bmap[p] * 100.0 for p in pairs if bmap[p]]
-        med_d = st.median(deltas) if deltas else 0.0
-        cells = f"{fmt_num(bmed):>14}{fmt_num(lmed):>14}"
-        if key in info_only:
+        cells = f"{fmt_num(m['bmed']):>14}{fmt_num(m['lmed']):>14}"
+        if m["info"]:
             verdict, p_str, adj_str = "info", "-", "-"
-        elif not deltas:
+        elif m["p"] is None:
             verdict, p_str, adj_str = "-", "-", "-"
+        elif m["fired"] and m["key"] in confirmed:
+            p_str = "<.001" if m["p"] < 0.001 else f"{m['p']:.3f}"
+            verdict = m["direction"]
+            adj_str = f"{adj_delta(m['deltas']):.1f}"
         else:
-            p = wilcoxon_p(deltas)
-            p_str = "<.001" if p < 0.001 else f"{p:.3f}"
-            if p < 0.05 and abs(med_d) >= PAIRED_FLOOR.get(key, PAIRED_FLOOR_PCT):
-                improved = (med_d > 0) if better == "up" else (med_d < 0)
-                verdict = "better" if improved else "WORSE"
-                adj_str = f"{adj_delta(deltas):.1f}"  # shrunk magnitude of a real effect
-            else:
-                verdict = "~noise"
-                adj_str = "0.0"  # indistinguishable from noise
-        print(f"  {disp:<12}{cells}{med_d:>9.1f}%{p_str:>8}{adj_str:>8}{verdict:>11}")
+            p_str = "<.001" if m["p"] < 0.001 else f"{m['p']:.3f}"
+            # significant but isolated (no sibling/partner) is almost always chance -> noise, marked '*'
+            verdict, adj_str = ("~noise*" if m["fired"] else "~noise"), "0.0"
+        print(f"  {m['disp']:<12}{cells}{m['med_d']:>9.1f}%{p_str:>8}{adj_str:>8}{verdict:>11}")
 
 
 def print_histogram(rows, config, label, kind):
@@ -409,6 +479,20 @@ def main():
     if not args.hist_only:
         print_overview(rows, configs)
 
+    # Paired stats are computed for ALL configs first so the coherence pass can corroborate a flag
+    # against its transport-contrast sibling (a cross-config check) before any verdict is printed.
+    paired_comp, reps_by_config = {}, {}
+    for config in configs:
+        crows = [r for r in rows if config_of(r) == config]
+        if not has_pairs(crows, config):
+            continue
+        labels = ordered(r["label"] for r in crows)
+        if args.baseline and args.baseline in labels:
+            labels = [args.baseline] + [l for l in labels if l != args.baseline]
+        paired_comp[config] = compute_paired(rows, config, labels)
+        reps_by_config[config] = crows[0]
+    confirmed_map = coherence({c: paired_comp[c][3] for c in paired_comp}, reps_by_config)
+
     any_ab = False
     any_paired = False
     for config in configs:
@@ -427,9 +511,10 @@ def main():
             if len(labels) >= 2:
                 any_ab = True
                 print_drift(rows, config, labels)
-                if has_pairs(crows, config):
+                if config in paired_comp:
                     any_paired = True
-                    print_paired_comparison(rows, config, labels)
+                    base, latest, n_pairs, comp = paired_comp[config]
+                    print_paired_table(base, latest, n_pairs, comp, confirmed_map[config])
                 else:
                     print_comparison(rows, config, labels)
 
@@ -444,8 +529,13 @@ def main():
             print(" PAIRED A/B (interleaved): raw Δ% is the MEDIAN per-pair delta; p is the Wilcoxon")
             print(" signed-rank p-value; adj Δ% is the noise-corrected change -- 0.0 when indistinguishable")
             print(" from noise, else the raw delta shrunk toward zero by its residual jitter (James-Stein);")
-            print(" read it as 'the real change is ~this %'. verdict = better/WORSE when p<0.05 AND")
-            print(" |raw Δ%| >= 0.5%, else ~noise. Non-interleaved configs flag deltas larger than baseline CV.")
+            print(" read it as 'the real change is ~this %'. A metric passes the gate when p<0.05 AND")
+            print(" |raw Δ%| >= its floor; the verdict is then better/WORSE only if COHERENT -- corroborated")
+            print(" by its transport-contrast sibling or a within-config partner metric (co-moving latency")
+            print(" percentiles, throughput<->cpu/msg). A significant but ISOLATED flag (nothing corroborates")
+            print(" it) is marked '~noise*' -- treated as noise, since a lone metric moving with no support is")
+            print(" almost always chance; re-run or find a coherent pattern to promote it. adj Δ% is 0.0")
+            print(" unless coherent. Non-interleaved configs flag deltas larger than baseline CV.")
         else:
             print(" 'verdict' compares the LATEST label to the baseline and flags deltas larger than the")
             print(" baseline's run-to-run CV (a rough signal, not a formal significance test).")

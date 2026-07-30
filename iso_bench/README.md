@@ -80,9 +80,18 @@ python3 report.py results.jsonl --baseline main
 
 In each config's **paired A/B** table, the column that matters is **`adj Δ%`** — the change *after*
 correcting for run-to-run jitter (`0.0` = indistinguishable from noise; non-zero = the real delta).
-The **`verdict`** summarises it as `better` / `WORSE` / `~noise` (`info` = a metric that isn't gated).
-`raw Δ%`
-is the raw measured delta and `p` its significance — context for `adj Δ%`.
+The **`verdict`** summarises it:
+
+- **`better` / `WORSE`** — significant **and coherent**: the move is corroborated either by the
+  config's transport-contrast sibling (e.g. `pub-tput-tcp` ↔ `pub-tput-tls`) or by a within-config
+  partner metric (co-moving latency percentiles, or throughput ↔ `cpu/msg`). This is the only hard signal.
+- **`~noise*`** — significant but **isolated** (nothing corroborates it). Treated as noise, because a lone
+  metric moving with no support is almost always chance; the `*` just flags it for the curious. `raw Δ%`
+  still shows the blip's size; `adj Δ%` is `0.0`.
+- **`~noise`** — didn't clear the significance/floor gate at all.
+- **`info`** — a metric that isn't gated (shown for context only).
+
+`raw Δ%` is the raw measured delta and `p` its Wilcoxon significance — context for `adj Δ%`.
 
 ## Advanced usage
 
@@ -256,10 +265,15 @@ contention — it's the sharpest signal for crypto/copy-path regressions.
 
 [`report.py`](report.py) turns a results file into a human report: an **overview**, then per-config
 **statistic tables** (median / mean / min / max / CV% for throughput, latency percentiles, and
-`cpu_us_per_msg` / `max_rss_kb`), an **A/B comparison** when a config has ≥ 2 labels (delta% + a
-`better` / `WORSE` / `~noise` verdict), and a **text histogram** of each distribution (summed from
-the per-rep `hist_ns` HdrHistogram buckets — `[upper_bound_ns, count]` — so it reconstructs offline
-without keeping raw samples).
+`cpu_us_per_msg` / `max_rss_kb`), an **A/B comparison** when a config has ≥ 2 labels (`raw Δ%` + `p`
++ noise-corrected `adj Δ%` + a coherence-gated `better` / `WORSE` / `~noise*` / `~noise` verdict),
+and a **text histogram** of each distribution (summed from the per-rep `hist_ns` HdrHistogram buckets
+— `[upper_bound_ns, count]` — so it reconstructs offline without keeping raw samples).
+
+A `better` / `WORSE` verdict requires the flagged metric to pass the significance gate **and** be
+corroborated (its transport-contrast sibling or a within-config partner metric moves the same way);
+an isolated significant flag is demoted to `~noise*` — see the [Simple usage](#run-the-suite) verdict
+list for the full scale.
 
 ```bash
 python3 report.py results.jsonl                    # full report (all configs + histograms)
