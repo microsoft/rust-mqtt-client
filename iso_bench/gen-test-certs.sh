@@ -24,4 +24,4 @@ openssl req -x509 -newkey rsa:2048 -nodes \
 echo
 echo "Wrote $dir/server.crt and $dir/server.key"
 echo "Peer:   ROLE=feed TLS=1 PORT=8883 CERT_FILE=$dir/server.crt KEY_FILE=$dir/server.key ..."
-echo "Client: MODE=inbound TRANSPORT=tls PORT=8883 CA_FILE=$dir/server.crt HOST=localhost ..."
+echo "Client: MODE=recv-throughput TRANSPORT=tls PORT=8883 CA_FILE=$dir/server.crt HOST=localhost ..."
