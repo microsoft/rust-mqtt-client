@@ -78,9 +78,33 @@ histograms):
 python3 report.py results.jsonl --baseline main
 ```
 
-In each config's **paired A/B** table, the column that matters is **`adj Δ%`** — the change *after*
-correcting for run-to-run jitter (`0.0` = indistinguishable from noise; non-zero = the real delta).
-The **`verdict`** summarises it:
+See [Reading the report](#reading-the-report) for what each column means.
+
+### Reading the report
+
+Both `bench.sh` and `bench-compare.sh` print a per-config table (and `report.py` re-renders the same
+data, plus histograms). Each row is one **metric**, summarised across the config's reps. Each config
+measures one kind of latency — the table header says which: *op latency* for closed-loop publish,
+*delivery latency* for `recv-latency`, and *inter-arrival* gap for `recv-throughput`.
+
+- **throughput** — messages per second, and the same rate expressed as **MiB/s** at the payload size.
+  Higher is better. Paced configs hold this fixed at the offered rate.
+- **p50 / p90 / p99** — latency percentiles from the per-message HdrHistogram: p50 is the typical
+  case, p90 the early tail, p99 the deep tail (where regressions usually surface first). Lower is better.
+- **max** — the single worst sample in the run. Useful context but very noisy (one OS hiccup sets it),
+  so it's shown as `info` and never gated; trust p99 for the tail.
+- **cpu/msg** — CPU microseconds per message (client process only, user + sys). An efficiency figure
+  independent of wall-clock: it catches extra work (copies, allocs, syscalls) even when latency hides
+  it, and it's the cleanest cross-config signal. Lower is better.
+- **max rss** — peak resident memory (physical pages) the process held; a leak/bloat detector. Lower
+  is better. Page-quantized and low-variance, so it needs a larger move before it flags.
+
+In the **single-build** tables (`bench.sh`) the columns are **median / mean / min / max** across reps
+and **CV%** (coefficient of variation = run-to-run noise; a low CV means a stable metric).
+
+In each config's **paired A/B** table (comparing ≥ 2 builds) the column that matters is **`adj Δ%`** —
+the change *after* correcting for run-to-run jitter (`0.0` = indistinguishable from noise; non-zero =
+the real delta). The **`verdict`** summarises it:
 
 - **`better` / `WORSE`** — significant **and coherent**: the move is corroborated either by the
   config's transport-contrast sibling (e.g. `pub-tput-tcp` ↔ `pub-tput-tls`) or by a within-config
@@ -272,8 +296,8 @@ and a **text histogram** of each distribution (summed from the per-rep `hist_ns`
 
 A `better` / `WORSE` verdict requires the flagged metric to pass the significance gate **and** be
 corroborated (its transport-contrast sibling or a within-config partner metric moves the same way);
-an isolated significant flag is demoted to `~noise*` — see the [Simple usage](#run-the-suite) verdict
-list for the full scale.
+an isolated significant flag is demoted to `~noise*` — see the [Reading the report](#reading-the-report)
+verdict list for the full scale.
 
 ```bash
 python3 report.py results.jsonl                    # full report (all configs + histograms)
