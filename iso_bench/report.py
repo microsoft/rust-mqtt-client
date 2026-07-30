@@ -182,6 +182,14 @@ def print_comparison(rows, config, labels):
     header = "".join(f"{('[' + l + ']'):>14}" for l in labels)
     print(f"  {'metric':<12}{header}{'delta%':>10}{'verdict':>11}")
     print(f"  {rule('-', 12 + 14 * len(labels) + 21)}")
+    rep = next((r for r in rows if config_of(r) == config), {})
+    # Metrics that must NOT be gated as pass/fail for this config (shown as 'info'):
+    #   lat_max            -- a single worst sample per rep, far too heavy-tailed to judge.
+    #   QoS 0 pub tput/p50 -- no wire-completion signal, so these time queue admission +
+    #                         scheduler interleaving, not send cost (read cpu/msg + p99 instead).
+    info_only = {"lat_max"}
+    if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
+        info_only |= {"msgs_per_s", "mib_per_s", "lat_p50"}
     for key, disp, _, better in METRICS:
         bxs = series(rows, config, base, key)
         if not bxs:
@@ -194,7 +202,9 @@ def print_comparison(rows, config, labels):
         lxs = series(rows, config, latest, key)
         if lxs and bmed:
             d = (st.median(lxs) - bmed) / bmed * 100.0
-            if abs(d) <= max(bcv, 1.0):
+            if key in info_only:
+                verdict = "info"
+            elif abs(d) <= max(bcv, 1.0):
                 verdict = "~noise"
             else:
                 improved = (d > 0) if better == "up" else (d < 0)
@@ -291,6 +301,8 @@ def main():
         print(" Reading A/B: latency_* / cpu_us_per_msg UP = regression; throughput DOWN = regression.")
         print(" 'verdict' compares the LATEST label to the baseline and flags deltas larger than the")
         print(" baseline's run-to-run CV (a rough signal, not a formal significance test).")
+        print(" 'info' = shown for context, never a verdict (heavy-tailed max; QoS 0 throughput/p50")
+        print("          measure queue admission, not send cost -- read cpu/msg + p99 there).")
 
 
 if __name__ == "__main__":

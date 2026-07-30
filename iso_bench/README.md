@@ -51,7 +51,17 @@ the **client**.
 
 ## Prerequisites
 
+On a fresh VM, run [`check-prereqs.sh`](check-prereqs.sh) to detect and install everything below
+(apt/dnf/yum; `--check` reports without installing):
+
+```bash
+./check-prereqs.sh          # install what's missing
+./check-prereqs.sh --check  # report only (exit 1 if anything required is missing)
+```
+
 - A Rust toolchain (the repo pins one via `rust-toolchain.toml`).
+- A C compiler + `pkg-config` + libssl headers (`libssl-dev` / `openssl-devel`) — to build the
+  `openssl` crate.
 - `taskset` (from `util-linux`) — for core pinning.
 - GNU `time` at `/usr/bin/time` — for CPU-per-message (optional; the wrapper degrades gracefully).
 - `openssl` CLI — only for generating TLS test certs.
@@ -242,11 +252,18 @@ not a formal test. (`bench-workload.sh` prints the same for a single config inli
 
 ## How to run it for meaningful numbers
 
+- **Warm the box first — this matters more than reps.** A cold/fresh VM (post-boot, or right after
+  `apt`/`cargo build`) drifts several percent over the first minute as turbo ramps, caches fill, and
+  background work settles — enough to fake a regression. Measured on an F8s_v2: p99 CV was **8–10%
+  cold vs ~1% warm**, and two runs of the *same* build differed 6% (throughput) / 22% (p99) cold vs
+  `~noise` warm. `bench.sh` auto-runs a throwaway warm-up block (`WARMUP_REPS`, default 8; set `0` to
+  skip); if you drive `bench-workload.sh` directly, warm the box yourself first.
 - **Establish the noise floor first:** run the *same* build twice under two labels; the delta you see
   is your detection threshold. Only trust A/B deltas larger than that band.
-- **Size `COUNT` for the tail:** stable p99.9 needs ~10⁵ operations per run.
-- **Use enough reps** (`REPS=8`+; more if CV% is wide relative to the effect you're chasing), and read
-  **tails (p99/p99.9) and `cpu_us_per_msg`**, not means.
+- **Size `COUNT` for the tail:** stable p99 needs ~10⁵ operations per run (p99.9 needs ~10× more).
+- **`REPS=10` is plenty for p99 on a warm, pinned VM** (p99 CV ~1% → resolves ~1% deltas). Read
+  **p99, throughput, and `cpu_us_per_msg`**; treat **p99.9 as directional and ignore `max`** (their
+  CV is 15–100%+). Only bump `REPS` if the calibration shows a wide CV for a metric you care about.
 - The minimum latency across reps is a useful low-noise "true cost" estimator (wall-clock noise only
   ever adds time).
 
@@ -267,7 +284,7 @@ not a formal test. (`bench-workload.sh` prints the same for a single config inli
 **`bench-workload.sh`** — all of the `bench-once.sh` knobs, plus `REPS` `LABEL` `RESULTS_FILE` `RESET`
 `CONFIG`.
 
-**`bench.sh`** — `REPS` `LABEL` `RESULTS_FILE` `RESET` (+ pinning / `NETEM_DELAY` passed
+**`bench.sh`** — `REPS` `WARMUP_REPS` `LABEL` `RESULTS_FILE` `RESET` (+ pinning / `NETEM_DELAY` passed
 through); the per-config workloads are a curated list inside the script.
 
 Pass `--help` (or `HELP=1`) to either binary, or `-h` to any script, for the full list.
@@ -315,5 +332,6 @@ iso_bench/                # detached cargo workspace (not part of the library's 
   bench-workload.sh       # one config: N reps + aggregate stats + A/B
   bench-once.sh           # single run (peer + pinned, timed client)
   report.py               # human report: overview + stat tables + A/B + histograms
+  check-prereqs.sh        # detect + install build/run prerequisites (apt/dnf/yum)
   gen-test-certs.sh       # self-signed TLS cert generator (local testing only)
 ```
