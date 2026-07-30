@@ -2,7 +2,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Checks (and by default installs) the prerequisites needed to BUILD and RUN the iso_bench tooling
+# Installs (and can just check) the prerequisites needed to BUILD and RUN the iso_bench tooling
 # on a fresh Linux VM. Safe to re-run -- it only installs what's actually missing.
 #
 # Required: a C compiler + pkg-config + libssl headers (to build the openssl crate), the openssl CLI
@@ -11,12 +11,17 @@
 # tc/iproute2 (only for the NETEM_DELAY knob).
 #
 # Usage:
-#   ./check-prereqs.sh          # report status, then install anything missing (uses sudo if needed)
-#   ./check-prereqs.sh --check  # report only; install nothing; exit 1 if a REQUIRED item is missing
+#   ./install-prereqs.sh          # install anything missing (uses sudo if needed)
+#   ./install-prereqs.sh --check  # report only; install nothing; exit 1 if a REQUIRED item is missing
 set -euo pipefail
 
 check_only=0
 if [[ "${1:-}" == "--check" ]]; then check_only=1; fi
+
+# Caller's PATH before we source anything -- used at the end to tell whether THIS shell can see cargo
+# (a child script can't mutate the parent's PATH; the best we can do is instruct).
+orig_path="$PATH"
+cargo_bin="$HOME/.cargo/bin"
 
 [[ "$(uname -s)" == "Linux" ]] || echo "warning: iso_bench targets Linux (taskset/pinning); '$(uname -s)' may not work" >&2
 
@@ -108,6 +113,11 @@ fi
 
 # ---- Rust toolchain (via rustup; rust-toolchain.toml pins the version) --------------------------
 echo
+# rustup may already be installed but unsourced in this shell -- pick it up before reinstalling.
+if ! have cargo && [[ -r "$HOME/.cargo/env" ]]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.cargo/env"
+fi
 if have cargo; then
     ok "Rust ($(cargo --version 2>/dev/null))"
 elif ((check_only)); then
@@ -118,6 +128,14 @@ else
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     # shellcheck disable=SC1091
     source "$HOME/.cargo/env"
+fi
+
+# A child process can't update the parent shell's PATH. If cargo lives in ~/.cargo/bin but that dir
+# wasn't on the caller's PATH, tell them how to fix THIS shell (new shells get it from rustup's rc).
+if have cargo && [[ ":$orig_path:" != *":$cargo_bin:"* ]]; then
+    echo
+    echo ">> cargo is installed but NOT on your current shell's PATH. Run this now (new shells are fine):"
+    echo "       source \"\$HOME/.cargo/env\""
 fi
 
 # ---- verdict -----------------------------------------------------------------------------------

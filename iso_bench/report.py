@@ -11,13 +11,15 @@
 # its own with --config) or a whole suite (bench.sh writes every config to one file).
 #
 # Usage:
-#   report.py [results.jsonl] [--config NAME] [--label NAME] [--no-hist | --hist-only]
+#   report.py [results.jsonl] [--config NAME] [--label NAME] [--baseline NAME] [--no-hist | --hist-only]
 #
 #   --config NAME   only this config          --no-hist    tables only (no histograms)
 #   --label NAME    only this build label      --hist-only  histograms only (no tables)
+#   --baseline NAME force the A/B baseline label (else first-seen); interleaved data uses a paired test
 import argparse
 import collections
 import json
+import math
 import statistics as st
 import sys
 
@@ -214,6 +216,102 @@ def print_comparison(rows, config, labels):
             print(f"  {disp:<12}{cells}{'-':>10}{'-':>11}")
 
 
+# ---- interleaved (paired) A/B ---------------------------------------------------------------------
+# bench-compare.sh interleaves the two builds rep-by-rep and stamps each record with a `pair` index.
+# Environmental drift is then COMMON to each pair, so the per-pair delta cancels it and the threshold
+# self-calibrates from the paired-delta spread -- no CV-band guess needed.
+PAIRED_FLOOR_PCT = 0.5  # ignore statistically-consistent deltas below the measurement grain
+
+
+def has_pairs(rows, config):
+    return any(config_of(r) == config and r.get("pair") is not None for r in rows)
+
+
+def paired_map(rows, config, label, key):
+    """pair index -> metric value, for one (config, label). First value wins per pair."""
+    out = {}
+    for r in rows:
+        if config_of(r) == config and r.get("label") == label and r.get("pair") is not None and r.get(key) is not None:
+            out.setdefault(r["pair"], r[key])
+    return out
+
+
+def _two_sided_p_from_z(z):
+    return math.erfc(abs(z) / math.sqrt(2.0))
+
+
+def _sign_test_p(deltas):
+    """Exact two-sided sign test (binomial p=0.5) -- used when n is too small for the normal approx."""
+    pos = sum(1 for x in deltas if x > 0)
+    neg = sum(1 for x in deltas if x < 0)
+    n = pos + neg
+    if n == 0:
+        return 1.0
+    k = min(pos, neg)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / (2.0 ** n)
+    return min(1.0, 2.0 * tail)
+
+
+def wilcoxon_p(deltas):
+    """Two-sided p that the paired diffs are symmetric about 0 (Wilcoxon signed-rank, normal approx
+    with continuity correction). A rough signal for small n, not an exact test."""
+    d = [x for x in deltas if x != 0.0]
+    n = len(d)
+    if n < 6:
+        return _sign_test_p(deltas)
+    mags = sorted((abs(x), (1.0 if x > 0 else -1.0)) for x in d)
+    ranks = [0.0] * n
+    i = 0
+    while i < n:  # average ranks within ties
+        j = i
+        while j + 1 < n and mags[j + 1][0] == mags[i][0]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[k] = avg
+        i = j + 1
+    w_signed = sum(sign * ranks[k] for k, (_, sign) in enumerate(mags))
+    var = n * (n + 1) * (2 * n + 1) / 6.0
+    if var == 0:
+        return 1.0
+    z = (abs(w_signed) - 1.0) / math.sqrt(var)
+    return min(1.0, _two_sided_p_from_z(z))
+
+
+def print_paired_comparison(rows, config, labels):
+    base, latest = labels[0], labels[-1]
+    rep = next((r for r in rows if config_of(r) == config), {})
+    info_only = {"lat_max"}
+    if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
+        info_only |= {"msgs_per_s", "mib_per_s", "lat_p50"}
+    tp = set(paired_map(rows, config, base, "msgs_per_s")) & set(paired_map(rows, config, latest, "msgs_per_s"))
+    print(f"\n  PAIRED A/B  (interleaved; baseline=[{base}], delta=[{latest}], {len(tp)} pairs)")
+    print(f"  {'metric':<12}{('[' + base + ']'):>14}{('[' + latest + ']'):>14}{'delta%':>10}{'verdict':>11}")
+    print(f"  {rule('-', 12 + 28 + 21)}")
+    for key, disp, _, better in METRICS:
+        bmap = paired_map(rows, config, base, key)
+        lmap = paired_map(rows, config, latest, key)
+        pairs = sorted(set(bmap) & set(lmap))
+        if len(pairs) < 2:
+            print(f"  {disp:<12}{'-':>14}{'-':>14}{'-':>10}{'-':>11}")
+            continue
+        bmed = st.median([bmap[p] for p in pairs])
+        lmed = st.median([lmap[p] for p in pairs])
+        deltas = [(lmap[p] - bmap[p]) / bmap[p] * 100.0 for p in pairs if bmap[p]]
+        med_d = st.median(deltas) if deltas else 0.0
+        cells = f"{fmt_num(bmed):>14}{fmt_num(lmed):>14}"
+        if key in info_only:
+            verdict = "info"
+        elif not deltas:
+            verdict = "-"
+        elif wilcoxon_p(deltas) < 0.05 and abs(med_d) >= PAIRED_FLOOR_PCT:
+            improved = (med_d > 0) if better == "up" else (med_d < 0)
+            verdict = "better" if improved else "WORSE"
+        else:
+            verdict = "~noise"
+        print(f"  {disp:<12}{cells}{med_d:>9.1f}%{verdict:>11}")
+
+
 def print_histogram(rows, config, label, kind):
     selected = [
         r for r in rows if config_of(r) == config and r["label"] == label and "hist_ns" in r
@@ -254,6 +352,7 @@ def main():
     ap.add_argument("path", nargs="?", default="results.jsonl", help="results JSONL file")
     ap.add_argument("--config", help="only this config")
     ap.add_argument("--label", help="only this build label")
+    ap.add_argument("--baseline", help="label to treat as the A/B baseline (else first-seen)")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--no-hist", action="store_true", help="tables only (no histograms)")
     g.add_argument("--hist-only", action="store_true", help="histograms only (no tables)")
@@ -276,9 +375,12 @@ def main():
         print_overview(rows, configs)
 
     any_ab = False
+    any_paired = False
     for config in configs:
         crows = [r for r in rows if config_of(r) == config]
         labels = ordered(r["label"] for r in crows)
+        if args.baseline and args.baseline in labels:
+            labels = [args.baseline] + [l for l in labels if l != args.baseline]
         desc, kind = config_meta(crows)
 
         print(f"\n{rule()}")
@@ -290,7 +392,11 @@ def main():
             if len(labels) >= 2:
                 any_ab = True
                 print_drift(rows, config, labels)
-                print_comparison(rows, config, labels)
+                if has_pairs(crows, config):
+                    any_paired = True
+                    print_paired_comparison(rows, config, labels)
+                else:
+                    print_comparison(rows, config, labels)
 
         if not args.no_hist:
             for label in labels:
@@ -299,8 +405,13 @@ def main():
     if any_ab and not args.hist_only:
         print(f"\n{rule('-')}")
         print(" Reading A/B: latency_* / cpu_us_per_msg UP = regression; throughput DOWN = regression.")
-        print(" 'verdict' compares the LATEST label to the baseline and flags deltas larger than the")
-        print(" baseline's run-to-run CV (a rough signal, not a formal significance test).")
+        if any_paired:
+            print(" PAIRED A/B (interleaved): delta% is the MEDIAN per-pair delta; verdict = Wilcoxon")
+            print(" signed-rank p<0.05 AND |median| >= 0.5% (drift cancels per pair, so it resolves small")
+            print(" effects). Non-interleaved configs flag deltas larger than the baseline's run-to-run CV.")
+        else:
+            print(" 'verdict' compares the LATEST label to the baseline and flags deltas larger than the")
+            print(" baseline's run-to-run CV (a rough signal, not a formal significance test).")
         print(" 'info' = shown for context, never a verdict (heavy-tailed max; QoS 0 throughput/p50")
         print("          measure queue admission, not send cost -- read cpu/msg + p99 there).")
 

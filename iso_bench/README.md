@@ -29,34 +29,37 @@ the **client**.
 
 ## Recommended target for running it
 
-- **Azure VM: `Standard_F8s_v2`** (8 vCPU, compute-optimized, **non-burstable**). `F4s_v2` (4 vCPU)
-  is the workable minimum. Avoid **B-series** (burstable — credit throttling ruins measurements).
+- **Azure VM: `Standard_F16s_v2`** (16 vCPU, compute-optimized, **non-burstable**). It is
+  hyperthreaded, so 16 vCPUs = **8 physical cores** (2 sibling threads each — check with `lscpu -e`).
+  Avoid **B-series** (burstable — credit throttling ruins measurements).
 - **A single VM, loopback only.** Keeping both processes on one host removes the network as a
   variable and holds the hardware constant across A/B runs — exactly what a regression detector
   wants. Containers (bridge networking adds a confound) and multi-VM (network becomes a variable)
   are intentionally avoided.
-- **Core budget (why 8 vCPU):** the client wants ~2 cores (its connection reader and workload
-  consumer run concurrently), the peer ~1–2 (more under TLS, which encrypts live), and the OS needs
-  headroom. Loopback has no hardware NIC IRQ to steer, so the main job is keeping the client and
-  peer on **separate physical cores**. **Open-loop `pub-latency` (and `recv-latency`) want one *extra*
-  core** (client 3 total, or peer for `recv-latency`) — the pacer busy-spins a core, so give it a
-  dedicated one to keep the measured side at its full budget (e.g. `CLIENT_CORES=2,3,4 PEER_CORES=5,6`).
-  F8s_v2 still fits; `F4s_v2` is then too tight.
+- **Core budget (why 8 physical cores):** the client wants ~2 cores (its connection reader and
+  workload consumer run concurrently), the peer ~1–2 (more under TLS, which encrypts live), and the
+  OS needs headroom. The point of 8 physical cores is to give the client and peer their **own
+  physical cores with the hyperthread siblings left idle** (no shared execution units) and leave
+  spare cores for the OS/IRQs to drift onto. Defaults pin the client to `2,4` (physical cores 1,2)
+  and the peer to `8,10` (cores 4,5). **Open-loop `pub-latency` wants one *extra* client core** for
+  the busy-spin pacer (`CLIENT_CORES=2,4,6 PEER_CORES=8,10`). An F8s_v2 (4 physical cores) also runs
+  but forces the client and peer onto hyperthread siblings — a measurable noise source.
 - The tooling runs anywhere Linux + Rust is available; the VM above is only the *recommended* target
   for trustworthy numbers.
 
 > **Azure guest caveat:** you generally cannot set the CPU governor / turbo / C-states from inside
-> the guest. Determinism therefore comes from **core pinning + repeated, alternating runs + reading
-> tails (p99/p99.9)**, not from power settings.
+> the guest, so some turbo wander is unavoidable. Determinism therefore comes from **physical-core
+> pinning + interleaved A/B (`bench-compare.sh`) + reading the right metrics**, not from power
+> settings — see "Comparing builds" below.
 
 ## Prerequisites
 
-On a fresh VM, run [`check-prereqs.sh`](check-prereqs.sh) to detect and install everything below
+On a fresh VM, run [`install-prereqs.sh`](install-prereqs.sh) to detect and install everything below
 (apt/dnf/yum; `--check` reports without installing):
 
 ```bash
-./check-prereqs.sh          # install what's missing
-./check-prereqs.sh --check  # report only (exit 1 if anything required is missing)
+./install-prereqs.sh          # install what's missing
+./install-prereqs.sh --check  # report only (exit 1 if anything required is missing)
 ```
 
 - A Rust toolchain (the repo pins one via `rust-toolchain.toml`).
@@ -96,8 +99,8 @@ Under the suite sit two lower-level entry points you can use directly:
 
 All of them build the binaries, derive the peer role from `MODE`, match the peer's payload for
 the `recv-*` modes, and (for TLS) generate certs automatically. Override core pinning with `CLIENT_CORES` /
-`PEER_CORES` (defaults `2,3` and `4,5` suit an F8s_v2); add `NETEM_DELAY=5ms` for a controlled
-loopback RTT (needs root).
+`PEER_CORES` (defaults `2,4` and `8,10` put one worker per physical core on an F16s_v2); add
+`NETEM_DELAY=5ms` for a controlled loopback RTT (needs root).
 
 ## Manual usage (two terminals)
 
@@ -149,7 +152,7 @@ done
 > Open-loop pacing busy-spins the last few ms up to each `intended` instant (tokio's ~1ms timer is
 > too coarse for us-scale latencies), so it burns a core on the pinned client — fine for a dedicated
 > benchmark VM, and the cost is systematic so it cancels in same-rate A/B comparisons. **Pin one
-> extra client core for open-loop** (e.g. `CLIENT_CORES=2,3,4`) so the spin gets its own core and
+> extra client core for open-loop** (e.g. `CLIENT_CORES=2,4,6`) so the spin gets its own core and
 > doesn't steal from the measured client — otherwise the latency-vs-rate curve (and the apparent
 > saturation knee) is pulled in below the client's true capacity. `bench-once.sh` warns if you run
 > open-loop with fewer than 3 client cores.
@@ -214,6 +217,7 @@ without keeping raw samples).
 python3 report.py results.jsonl                    # full report (all configs + histograms)
 python3 report.py results.jsonl --config pub-lat-tcp   # one config
 python3 report.py results.jsonl --label main       # one build
+python3 report.py results.jsonl --baseline main    # force the A/B baseline label
 python3 report.py results.jsonl --no-hist          # tables only
 python3 report.py results.jsonl --hist-only        # histograms only
 ```
@@ -223,9 +227,41 @@ by hand afterward for the full view including histograms.
 
 ## Comparing builds (A/B)
 
+### Interleaved (recommended): `bench-compare.sh`
+
+On a cloud VM you can't pin turbo, so running the *whole* suite for build A and *then* the whole
+suite for build B lets slow drift (turbo, neighbours, thermal) between the two blocks masquerade as a
+regression. [`bench-compare.sh`](bench-compare.sh) removes that: it takes two **prebuilt**
+`bench_client` binaries and interleaves them **rep-by-rep in randomized order** against one shared
+peer, so the drift is common to each adjacent pair and **cancels in the per-pair delta**. `report.py`
+then uses a **paired** test (Wilcoxon signed-rank on the per-pair deltas) whose threshold
+self-calibrates per config — far tighter than the CV band.
+
+Build each ref into its own target (git worktrees keep them independent), then point the runner at
+both binaries:
+
+```bash
+git worktree add ../iso-main main
+( cd ../iso-main/iso_bench && CARGO_TARGET_DIR=/tmp/t-main cargo build --release -p bench_client )
+CARGO_TARGET_DIR=/tmp/t-cur cargo build --release -p bench_client
+
+CUR_BIN=/tmp/t-cur/release/bench_client  REF_BIN=/tmp/t-main/release/bench_client \
+  CUR_LABEL=branch REF_LABEL=main ./bench-compare.sh
+```
+
+Each binary carries its own copy of the harness compiled against its own library API, so builds with
+**different library APIs compare fine** — you only adapt `bench_client`'s call sites on the changed
+branch; the env knobs and `RESULT` schema (the external contract) must stay identical. The reference
+can also be a **frozen anchor** binary: record the current-vs-anchor ratio each session and those
+ratios are comparable across time (drift already cancelled), which is the only trustworthy way to do
+historical comparison on a box you can't pin.
+
+### Sequential (simpler, but drift-confounded)
+
 Run the suite on each git ref, tagged with `LABEL`; results accumulate in `results.jsonl` and the
-second run prints a **per-config** comparison (median deltas of the latest label vs. the baseline,
-flagged against the baseline's run-to-run CV):
+second run prints a per-config comparison (median deltas vs. the baseline, flagged against the
+baseline's run-to-run CV). Fine for a quick look on a quiet, warm box; prefer `bench-compare.sh` for a
+real gate.
 
 ```bash
 RESET=1 LABEL=main     ./bench.sh   # build A (fresh results file)
@@ -254,7 +290,7 @@ not a formal test. (`bench-workload.sh` prints the same for a single config inli
 
 - **Warm the box first — this matters more than reps.** A cold/fresh VM (post-boot, or right after
   `apt`/`cargo build`) drifts several percent over the first minute as turbo ramps, caches fill, and
-  background work settles — enough to fake a regression. Measured on an F8s_v2: p99 CV was **8–10%
+  background work settles — enough to fake a regression. Measured on an Azure F-series VM: p99 CV was **8–10%
   cold vs ~1% warm**, and two runs of the *same* build differed 6% (throughput) / 22% (p99) cold vs
   `~noise` warm. `bench.sh` auto-runs a throwaway warm-up block (`WARMUP_REPS`, default 8; set `0` to
   skip); if you drive `bench-workload.sh` directly, warm the box yourself first.
@@ -285,7 +321,11 @@ not a formal test. (`bench-workload.sh` prints the same for a single config inli
 `CONFIG`.
 
 **`bench.sh`** — `REPS` `WARMUP_REPS` `LABEL` `RESULTS_FILE` `RESET` (+ pinning / `NETEM_DELAY` passed
-through); the per-config workloads are a curated list inside the script.
+through); the per-config workloads are a curated list in `suite.sh`.
+
+**`bench-compare.sh`** — `CUR_BIN` `REF_BIN` (required, prebuilt binaries) `CUR_LABEL` `REF_LABEL`
+`CUR_SHA` `REF_SHA` `PEER_BIN` `REPS` `WARMUP_REPS` `RESULTS_FILE` `RESET`; interleaves the two
+binaries and renders a paired A/B (`report.py --baseline $REF_LABEL`).
 
 Pass `--help` (or `HELP=1`) to either binary, or `-h` to any script, for the full list.
 
@@ -328,10 +368,13 @@ Pass `--help` (or `HELP=1`) to either binary, or `-h` to any script, for the ful
 iso_bench/                # detached cargo workspace (not part of the library's build)
   bench_client/           # the measured MQTT client harness
   bench_peer/             # the independent stand-in peer (TCP + TLS)
-  bench.sh                # PRIMARY: full curated suite (all workloads) + per-config A/B
+  bench.sh                # PRIMARY: full curated suite (all workloads), single-label runs
+  bench-compare.sh        # interleaved head-to-head A/B of two prebuilt binaries (paired stats)
   bench-workload.sh       # one config: N reps + aggregate stats + A/B
   bench-once.sh           # single run (peer + pinned, timed client)
-  report.py               # human report: overview + stat tables + A/B + histograms
-  check-prereqs.sh        # detect + install build/run prerequisites (apt/dnf/yum)
+  suite.sh                # shared curated config list (sourced by bench.sh + bench-compare.sh)
+  record.py               # shared JSONL record writer (one place for the schema)
+  report.py               # human report: overview + stat tables + A/B (paired) + histograms
+  install-prereqs.sh      # detect + install build/run prerequisites (apt/dnf/yum)
   gen-test-certs.sh       # self-signed TLS cert generator (local testing only)
 ```

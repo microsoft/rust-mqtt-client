@@ -22,7 +22,7 @@
 #   Workload:  MODE(pub-latency|pub-throughput|recv-throughput|recv-latency) QOS TRANSPORT(tcp|tls) PAYLOAD_BYTES COUNT WARMUP
 #              INFLIGHT INTERVAL_US TARGET_RATE TOPIC LABEL HOST PORT
 #   Peer:      BATCH RATE            (feed only)
-#   Pinning:   CLIENT_CORES PEER_CORES   (taskset masks; defaults suit an 8-vCPU F8s_v2)
+#   Pinning:   CLIENT_CORES PEER_CORES   (taskset masks; defaults suit a 16-vCPU F16s_v2)
 #   Extras:    NETEM_DELAY (e.g. 5ms, needs root)  CERT_DIR (TLS)
 #
 # Usage: ./bench-once.sh            (all via env)
@@ -60,10 +60,12 @@ PORT="${PORT:-}"
 BATCH="${BATCH:-64}"
 RATE="${RATE:-0}"
 
-# Defaults assume >= 6 cores (e.g. F8s_v2): client and peer on separate physical cores, OS elsewhere.
-# Override for your box; taskset will error on nonexistent cores.
-CLIENT_CORES="${CLIENT_CORES:-2,3}"
-PEER_CORES="${PEER_CORES:-4,5}"
+# Defaults target a 16-vCPU F16s_v2 (8 physical cores, 2 HT siblings each): one client/peer worker
+# per PHYSICAL core with the sibling left idle (no intra-process HT contention), OS + IRQs + spare
+# cores absorb background. Cores 2,4 = phys 1,2; 8,10 = phys 4,5 (see `lscpu -e`). Override for your
+# box; taskset will error on nonexistent cores.
+CLIENT_CORES="${CLIENT_CORES:-2,4}"
+PEER_CORES="${PEER_CORES:-8,10}"
 NETEM_DELAY="${NETEM_DELAY:-}"
 CERT_DIR="${CERT_DIR:-$script_dir/certs}"
 
@@ -102,7 +104,7 @@ if [[ "$MODE" == "pub-latency" ]] && awk "BEGIN{exit !($TARGET_RATE > 0)}"; then
         echo "warning: open-loop (TARGET_RATE=$TARGET_RATE) busy-spins a core to pace, but" >&2
         echo "         CLIENT_CORES='$CLIENT_CORES' pins only $client_core_count core(s). The spin" >&2
         echo "         will steal from the client and bias the latency-vs-rate curve; pin >=3, e.g." >&2
-        echo "         CLIENT_CORES=2,3,4 (2 for client work + 1 for the pacer)." >&2
+        echo "         CLIENT_CORES=2,4,6 (2 for client work + 1 for the pacer)." >&2
     fi
     # Open-loop keeps every un-acked op in flight (~2 KB each); if the offered rate exceeds the
     # client's capacity the backlog approaches COUNT, so a long overloaded run can eat a lot of RAM.
@@ -125,12 +127,22 @@ if [[ ! -x "$TIME_BIN" ]]; then
 fi
 
 target_dir="${CARGO_TARGET_DIR:-$script_dir/target}"
-client_bin="$target_dir/release/bench_client"
-peer_bin="$target_dir/release/bench_peer"
+client_bin="${CLIENT_BIN:-$target_dir/release/bench_client}"
+peer_bin="${PEER_BIN:-$target_dir/release/bench_peer}"
 
 # ---- build (before measuring, so cargo isn't compiling during the run) --------------------------
-echo "building release binaries..." >&2
-cargo build --release -q -p bench_client -p bench_peer
+# Skip the build when both binaries are supplied prebuilt -- bench-compare.sh passes CLIENT_BIN/PEER_BIN
+# to interleave two already-built revisions without rebuilding between reps.
+if [[ -z "${CLIENT_BIN:-}" || -z "${PEER_BIN:-}" ]]; then
+    echo "building release binaries..." >&2
+    cargo build --release -q -p bench_client -p bench_peer
+fi
+for _b in "$client_bin" "$peer_bin"; do
+    [[ -x "$_b" ]] || {
+        echo "ERROR: binary not found or not executable: $_b" >&2
+        exit 1
+    }
+done
 
 # ---- TLS certs (server-auth only; peer serves, client trusts) -----------------------------------
 peer_tls_env=()
