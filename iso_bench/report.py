@@ -373,7 +373,7 @@ def coherence(comp_by_config, reps_by_config):
     """Confirm each fired flag by CORROBORATION -- a real regression is coherent, a chance flag is
     isolated. A flag is confirmed if the SAME metric moves the same way in the config's transport-
     contrast sibling, OR a within-config partner metric (WITHIN_PARTNERS) fires the same direction.
-    Uncorroborated flags are downgraded to 'watch'. Returns {config: set(confirmed metric keys)}."""
+    Uncorroborated significant flags are downgraded to `~noise*` in the report output."""
     fired = {c: {m["key"]: m["direction"] for m in comp if m["fired"]} for c, comp in comp_by_config.items()}
     factors = {c: config_factors(reps_by_config[c]) for c in comp_by_config}
     transport = {c: reps_by_config[c].get("transport") for c in comp_by_config}
