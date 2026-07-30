@@ -221,6 +221,9 @@ def print_comparison(rows, config, labels):
 # Environmental drift is then COMMON to each pair, so the per-pair delta cancels it and the threshold
 # self-calibrates from the paired-delta spread -- no CV-band guess needed.
 PAIRED_FLOOR_PCT = 0.5  # ignore statistically-consistent deltas below the measurement grain
+# Per-metric practical floor (%): max_rss is page-quantized and ultra-low-variance, so a 1-2 page
+# shift reads as "significant" but is meaningless -- require a real move before flagging.
+PAIRED_FLOOR = {"max_rss_kb": 2.0}
 
 
 def has_pairs(rows, config):
@@ -304,7 +307,11 @@ def adj_delta(deltas):
 def print_paired_comparison(rows, config, labels):
     base, latest = labels[0], labels[-1]
     rep = next((r for r in rows if config_of(r) == config), {})
+    # Not gated (shown as 'info'): lat_max is a single worst sample; inter-arrival p50 is recv-throughput
+    # reader cadence (tracks throughput); QoS 0 pub-throughput tput/p50 measure queue admission, not send cost.
     info_only = {"lat_max"}
+    if rep.get("lat_kind") == "inter-arrival":
+        info_only |= {"lat_p50"}
     if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
         info_only |= {"msgs_per_s", "mib_per_s", "lat_p50"}
     tp = set(paired_map(rows, config, base, "msgs_per_s")) & set(paired_map(rows, config, latest, "msgs_per_s"))
@@ -330,7 +337,7 @@ def print_paired_comparison(rows, config, labels):
         else:
             p = wilcoxon_p(deltas)
             p_str = "<.001" if p < 0.001 else f"{p:.3f}"
-            if p < 0.05 and abs(med_d) >= PAIRED_FLOOR_PCT:
+            if p < 0.05 and abs(med_d) >= PAIRED_FLOOR.get(key, PAIRED_FLOOR_PCT):
                 improved = (med_d > 0) if better == "up" else (med_d < 0)
                 verdict = "better" if improved else "WORSE"
                 adj_str = f"{adj_delta(deltas):.1f}"  # shrunk magnitude of a real effect
