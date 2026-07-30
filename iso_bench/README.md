@@ -118,7 +118,7 @@ the real delta). The **`verdict`** summarises it:
 `raw Δ%` is the raw measured delta and `p` its Wilcoxon significance — context for `adj Δ%`.
 
 ## Advanced usage
-This section contains a lot of detail that is probably not relevant to most users. The standard usage of this tool is to just use the suite described in the above section.
+*The canonical use of this tool is the simple usage above. It is not recommended to use these more granular pieces of the tooling directly.*
 
 ### A/B details
 
