@@ -22,8 +22,9 @@
 # rep-to-rep -- a heavy tail is a useless regression signal -- whereas at 60k/38k the tail is stable
 # while the pipe is still loaded. They pin one EXTRA client core (2,4,6 / peer 8,10) because the
 # open-loop pacer busy-spins a core -- see the open-loop notes in README. Payloads: 64 B small
-# (per-op), 16 KiB large (per-byte). COUNTs: latency ~1e5 (stable p99); throughput/inbound ~3e5 (>=~1 s
-# steady window). Edit this list to change what the gate covers.
+# (per-op), 16 KiB large (per-byte). COUNTs: closed-loop latency 1e5 (stable p99); paced tail configs
+# (open-loop, recv-latency) 5e5 for a solid p99; throughput/inbound 3e5 (>=~1 s steady window). p99.9
+# needs ~1e6 (more than we run) so report.py does not report it. Edit this list to change the gate.
 #
 # No QoS 0 latency config on purpose: the client's QoS 0 completion token fires at queue admission,
 # BEFORE encode + socket write (session.rs completes the notifier as it dequeues), so it would time
@@ -40,8 +41,8 @@ suite=(
     "CONFIG=pub-lat-tcp      MODE=pub-latency    QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=64    COUNT=100000"
     "CONFIG=pub-lat-tls      MODE=pub-latency    QOS=1 TRANSPORT=tls PAYLOAD_BYTES=64    COUNT=100000"
     "CONFIG=pub-lat-large    MODE=pub-latency    QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=16384 COUNT=100000"
-    "CONFIG=pub-lat-open-tcp MODE=pub-latency    QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=64 TARGET_RATE=60000 COUNT=100000 CLIENT_CORES=2,4,6 PEER_CORES=8,10"
-    "CONFIG=pub-lat-open-tls MODE=pub-latency    QOS=1 TRANSPORT=tls PAYLOAD_BYTES=64 TARGET_RATE=38000 COUNT=100000 CLIENT_CORES=2,4,6 PEER_CORES=8,10"
+    "CONFIG=pub-lat-open-tcp MODE=pub-latency    QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=64 TARGET_RATE=60000 COUNT=500000 CLIENT_CORES=2,4,6 PEER_CORES=8,10"
+    "CONFIG=pub-lat-open-tls MODE=pub-latency    QOS=1 TRANSPORT=tls PAYLOAD_BYTES=64 TARGET_RATE=38000 COUNT=500000 CLIENT_CORES=2,4,6 PEER_CORES=8,10"
     "CONFIG=pub-tput-tcp     MODE=pub-throughput QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=16384 INFLIGHT=64 COUNT=300000"
     "CONFIG=pub-tput-tls     MODE=pub-throughput QOS=1 TRANSPORT=tls PAYLOAD_BYTES=16384 INFLIGHT=64 COUNT=300000"
     "CONFIG=pub-tput-small   MODE=pub-throughput QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=64    INFLIGHT=64 COUNT=300000"
@@ -51,6 +52,6 @@ suite=(
     "CONFIG=recv-tput-small  MODE=recv-throughput QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=64    COUNT=300000"
     "CONFIG=recv-tput-q1-tcp MODE=recv-throughput QOS=1 TRANSPORT=tcp PAYLOAD_BYTES=16384 COUNT=300000"
     "CONFIG=recv-tput-q1-tls MODE=recv-throughput QOS=1 TRANSPORT=tls PAYLOAD_BYTES=16384 COUNT=300000"
-    "CONFIG=recv-lat-tcp     MODE=recv-latency   QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=256 RATE=50000 BATCH=1 COUNT=100000"
-    "CONFIG=recv-lat-tls     MODE=recv-latency   QOS=0 TRANSPORT=tls PAYLOAD_BYTES=256 RATE=50000 BATCH=1 COUNT=100000"
+    "CONFIG=recv-lat-tcp     MODE=recv-latency   QOS=0 TRANSPORT=tcp PAYLOAD_BYTES=256 RATE=50000 BATCH=1 COUNT=500000"
+    "CONFIG=recv-lat-tls     MODE=recv-latency   QOS=0 TRANSPORT=tls PAYLOAD_BYTES=256 RATE=50000 BATCH=1 COUNT=500000"
 )

@@ -20,6 +20,7 @@ import argparse
 import collections
 import json
 import math
+import random
 import statistics as st
 import sys
 
@@ -30,7 +31,6 @@ METRICS = [
     ("lat_p50", "p50", "us", "down"),
     ("lat_p90", "p90", "us", "down"),
     ("lat_p99", "p99", "us", "down"),
-    ("lat_p999", "p99.9", "us", "down"),
     ("lat_max", "max", "us", "down"),
     ("cpu_us_per_msg", "cpu/msg", "us", "down"),
     ("max_rss_kb", "max rss", "KB", "down"),
@@ -278,6 +278,29 @@ def wilcoxon_p(deltas):
     return min(1.0, _two_sided_p_from_z(z))
 
 
+_BOOT = 2000  # bootstrap resamples for the noise-adjusted effect (fixed seed -> reproducible report)
+
+
+def adj_delta(deltas):
+    """Noise-corrected effect: the raw median per-pair delta SHRUNK toward zero in proportion to its
+    own sampling uncertainty (positive-part James-Stein / empirical-Bayes shrinkage). A delta that is
+    mostly noise collapses toward 0; a well-resolved one keeps ~its full magnitude. Model-based and
+    rough for small n -- read it as an intuition of 'how much really changed', not an exact figure."""
+    n = len(deltas)
+    if n < 2:
+        return 0.0
+    med = st.median(deltas)
+    if med == 0.0:
+        return 0.0
+    rng = random.Random(20260730)
+    meds = [st.median([deltas[rng.randrange(n)] for _ in range(n)]) for _ in range(_BOOT)]
+    se = st.pstdev(meds)  # bootstrap standard error of the median
+    if se == 0.0:
+        return med
+    snr2 = (med / se) ** 2
+    return med * max(0.0, 1.0 - 1.0 / snr2)
+
+
 def print_paired_comparison(rows, config, labels):
     base, latest = labels[0], labels[-1]
     rep = next((r for r in rows if config_of(r) == config), {})
@@ -286,14 +309,14 @@ def print_paired_comparison(rows, config, labels):
         info_only |= {"msgs_per_s", "mib_per_s", "lat_p50"}
     tp = set(paired_map(rows, config, base, "msgs_per_s")) & set(paired_map(rows, config, latest, "msgs_per_s"))
     print(f"\n  PAIRED A/B  (interleaved; baseline=[{base}], delta=[{latest}], {len(tp)} pairs)")
-    print(f"  {'metric':<12}{('[' + base + ']'):>14}{('[' + latest + ']'):>14}{'delta%':>10}{'verdict':>11}")
-    print(f"  {rule('-', 12 + 28 + 21)}")
+    print(f"  {'metric':<12}{('[' + base + ']'):>14}{('[' + latest + ']'):>14}{'raw Δ%':>10}{'p':>8}{'adj Δ%':>8}{'verdict':>11}")
+    print(f"  {rule('-', 12 + 28 + 10 + 8 + 8 + 11)}")
     for key, disp, _, better in METRICS:
         bmap = paired_map(rows, config, base, key)
         lmap = paired_map(rows, config, latest, key)
         pairs = sorted(set(bmap) & set(lmap))
         if len(pairs) < 2:
-            print(f"  {disp:<12}{'-':>14}{'-':>14}{'-':>10}{'-':>11}")
+            print(f"  {disp:<12}{'-':>14}{'-':>14}{'-':>10}{'-':>8}{'-':>8}{'-':>11}")
             continue
         bmed = st.median([bmap[p] for p in pairs])
         lmed = st.median([lmap[p] for p in pairs])
@@ -301,15 +324,20 @@ def print_paired_comparison(rows, config, labels):
         med_d = st.median(deltas) if deltas else 0.0
         cells = f"{fmt_num(bmed):>14}{fmt_num(lmed):>14}"
         if key in info_only:
-            verdict = "info"
+            verdict, p_str, adj_str = "info", "-", "-"
         elif not deltas:
-            verdict = "-"
-        elif wilcoxon_p(deltas) < 0.05 and abs(med_d) >= PAIRED_FLOOR_PCT:
-            improved = (med_d > 0) if better == "up" else (med_d < 0)
-            verdict = "better" if improved else "WORSE"
+            verdict, p_str, adj_str = "-", "-", "-"
         else:
-            verdict = "~noise"
-        print(f"  {disp:<12}{cells}{med_d:>9.1f}%{verdict:>11}")
+            p = wilcoxon_p(deltas)
+            p_str = "<.001" if p < 0.001 else f"{p:.3f}"
+            if p < 0.05 and abs(med_d) >= PAIRED_FLOOR_PCT:
+                improved = (med_d > 0) if better == "up" else (med_d < 0)
+                verdict = "better" if improved else "WORSE"
+                adj_str = f"{adj_delta(deltas):.1f}"  # shrunk magnitude of a real effect
+            else:
+                verdict = "~noise"
+                adj_str = "0.0"  # indistinguishable from noise
+        print(f"  {disp:<12}{cells}{med_d:>9.1f}%{p_str:>8}{adj_str:>8}{verdict:>11}")
 
 
 def print_histogram(rows, config, label, kind):
@@ -406,9 +434,11 @@ def main():
         print(f"\n{rule('-')}")
         print(" Reading A/B: latency_* / cpu_us_per_msg UP = regression; throughput DOWN = regression.")
         if any_paired:
-            print(" PAIRED A/B (interleaved): delta% is the MEDIAN per-pair delta; verdict = Wilcoxon")
-            print(" signed-rank p<0.05 AND |median| >= 0.5% (drift cancels per pair, so it resolves small")
-            print(" effects). Non-interleaved configs flag deltas larger than the baseline's run-to-run CV.")
+            print(" PAIRED A/B (interleaved): raw Δ% is the MEDIAN per-pair delta; p is the Wilcoxon")
+            print(" signed-rank p-value; adj Δ% is the noise-corrected change -- 0.0 when indistinguishable")
+            print(" from noise, else the raw delta shrunk toward zero by its residual jitter (James-Stein);")
+            print(" read it as 'the real change is ~this %'. verdict = better/WORSE when p<0.05 AND")
+            print(" |raw Δ%| >= 0.5%, else ~noise. Non-interleaved configs flag deltas larger than baseline CV.")
         else:
             print(" 'verdict' compares the LATEST label to the baseline and flags deltas larger than the")
             print(" baseline's run-to-run CV (a rough signal, not a formal significance test).")

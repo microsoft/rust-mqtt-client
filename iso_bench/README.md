@@ -296,10 +296,12 @@ not a formal test. (`bench-workload.sh` prints the same for a single config inli
   skip); if you drive `bench-workload.sh` directly, warm the box yourself first.
 - **Establish the noise floor first:** run the *same* build twice under two labels; the delta you see
   is your detection threshold. Only trust A/B deltas larger than that band.
-- **Size `COUNT` for the tail:** stable p99 needs ~10⁵ operations per run (p99.9 needs ~10× more).
+- **Size `COUNT` for the tail:** stable p99 needs ~10⁵–5×10⁵ ops per run (the paced open-loop and
+  recv-latency configs run 5×10⁵ for a solid p99). p99.9 needs ~10⁶ — more than the suite runs, so it
+  is **not reported**; the raw distribution is still in the histogram if you ever need it.
 - **`REPS=10` is plenty for p99 on a warm, pinned VM** (p99 CV ~1% → resolves ~1% deltas). Read
-  **p99, throughput, and `cpu_us_per_msg`**; treat **p99.9 as directional and ignore `max`** (their
-  CV is 15–100%+). Only bump `REPS` if the calibration shows a wide CV for a metric you care about.
+  **p99, throughput, and `cpu_us_per_msg`**; **ignore `max`** (single-sample, CV up to ~100%). Only
+  bump `REPS` if the calibration shows a wide CV for a metric you care about.
 - The minimum latency across reps is a useful low-noise "true cost" estimator (wall-clock noise only
   ever adds time).
 

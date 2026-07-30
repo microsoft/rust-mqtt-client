@@ -114,6 +114,22 @@ run_and_record() {
         python3 "$script_dir/record.py" >/dev/null
 }
 
+# Fill the global `order` with a balanced, shuffled per-pair order: exactly REPS/2 zeros (CUR first)
+# and the rest ones (REF first). Balance removes order bias; the shuffle keeps anti-aliasing.
+make_order() {
+    order=()
+    local i j t half=$((REPS / 2))
+    for ((i = 0; i < REPS; i++)); do
+        if ((i < half)); then order+=(0); else order+=(1); fi
+    done
+    for ((i = REPS - 1; i > 0; i--)); do  # Fisher-Yates
+        j=$((RANDOM % (i + 1)))
+        t="${order[i]}"
+        order[i]="${order[j]}"
+        order[j]="$t"
+    done
+}
+
 echo "== iso_bench COMPARE (interleaved): [$CUR_LABEL] vs baseline [$REF_LABEL], reps=$REPS configs=${#suite[@]} ==" >&2
 
 # Warm the box (CPU-saturating throughput-TLS), alternating binaries so both crypto paths warm; not
@@ -137,11 +153,11 @@ for cfg in "${suite[@]}"; do
     cfg_name="${cfg_name#CONFIG=}"
     echo "" >&2
     echo ">>> config [$i/${#suite[@]}]: $cfg_name" >&2
+    make_order
     for ((p = 1; p <= REPS; p++)); do
         printf '   [pair %d/%d] interleaving %s / %s ...\r' "$p" "$REPS" "$CUR_LABEL" "$REF_LABEL" >&2
-        # Randomize which build runs first in each pair so strict alternation can't alias with a
-        # periodic background task.
-        if ((RANDOM % 2 == 0)); then
+        # Balanced shuffled order (see make_order): no build is systematically the 2nd runner.
+        if ((order[p - 1] == 0)); then
             run_and_record "$CUR_BIN" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name"
             run_and_record "$REF_BIN" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name"
         else
