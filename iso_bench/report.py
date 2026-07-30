@@ -335,13 +335,16 @@ def compute_paired(rows, config, labels):
     (coherence) decides later whether a fired flag becomes a verdict or a soft 'watch'."""
     base, latest = labels[0], labels[-1]
     rep = next((r for r in rows if config_of(r) == config), {})
-    # Not gated (shown as 'info'): lat_max is a single worst sample; inter-arrival p50 is recv-throughput
-    # reader cadence (tracks throughput); QoS 0 pub-throughput tput/p50 measure queue admission, not send cost.
+    # Not gated (shown as 'info'): lat_max is a single worst sample (p99/p90 carry the tail); inter-arrival
+    # p50 is recv-throughput delivery cadence (throughput carries the rate, p90/p99 the jitter); QoS 0
+    # op-latency p50 is queue-ADMISSION time, not send cost (token resolves before encode+write). QoS 0
+    # THROUGHPUT stays gated: the publish queue is bounded, so over a full run its rate tracks the real
+    # send rate (the fixed <=queue-depth overcount is identical in both arms and cancels in the delta).
     info_only = {"lat_max"}
     if rep.get("lat_kind") == "inter-arrival":
         info_only |= {"lat_p50"}
     if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
-        info_only |= {"msgs_per_s", "mib_per_s", "lat_p50"}
+        info_only |= {"lat_p50"}
     out = []
     n_pairs = 0
     for key, disp, _, better in METRICS:
@@ -393,7 +396,7 @@ def coherence(comp_by_config, reps_by_config):
     return confirmed
 
 
-def print_paired_table(base, latest, n_pairs, comp, confirmed):
+def print_paired_table(base, latest, n_pairs, comp, confirmed, kind=None, qos0_pub=False):
     print(f"\n  PAIRED A/B  (interleaved; baseline=[{base}], delta=[{latest}], {n_pairs} pairs)")
     print(f"  {'metric':<12}{('[' + base + ']'):>14}{('[' + latest + ']'):>14}{'raw Δ%':>10}{'p':>8}{'adj Δ%':>8}{'verdict':>11}")
     print(f"  {rule('-', 12 + 28 + 10 + 8 + 8 + 11)}")
@@ -415,6 +418,13 @@ def print_paired_table(base, latest, n_pairs, comp, confirmed):
             # significant but isolated (no sibling/partner) is almost always chance -> noise, marked '*'
             verdict, adj_str = ("~noise*" if m["fired"] else "~noise"), "0.0"
         print(f"  {m['disp']:<12}{cells}{m['med_d']:>9.1f}%{p_str:>8}{adj_str:>8}{verdict:>11}")
+    if kind == "inter-arrival":
+        print("    note: inter-arrival = the gap between consecutive deliveries. p50 is intra-burst")
+        print("    packing (a read-batch artifact) so it's 'info'; throughput carries the rate and")
+        print("    p90/p99 the delivery stalls.")
+    if qos0_pub:
+        print("    note: QoS 0 publish completes at queue admission (before encode+write), so p50 is")
+        print("    admission/queueing time, not send cost -- it's 'info'; read throughput + cpu/msg.")
 
 
 def print_histogram(rows, config, label, kind):
@@ -514,7 +524,9 @@ def main():
                 if config in paired_comp:
                     any_paired = True
                     base, latest, n_pairs, comp = paired_comp[config]
-                    print_paired_table(base, latest, n_pairs, comp, confirmed_map[config])
+                    rep0 = crows[0]
+                    qos0_pub = rep0.get("mode") == "pub-throughput" and rep0.get("qos") in (0, "0")
+                    print_paired_table(base, latest, n_pairs, comp, confirmed_map[config], kind, qos0_pub)
                 else:
                     print_comparison(rows, config, labels)
 
@@ -539,8 +551,8 @@ def main():
         else:
             print(" 'verdict' compares the LATEST label to the baseline and flags deltas larger than the")
             print(" baseline's run-to-run CV (a rough signal, not a formal significance test).")
-        print(" 'info' = shown for context, never a verdict (heavy-tailed max; QoS 0 throughput/p50")
-        print("          measure queue admission, not send cost -- read cpu/msg + p99 there).")
+        print(" 'info' = shown for context, never a verdict (heavy-tailed max; recv inter-arrival p50 and")
+        print("          QoS 0 op-latency p50 measure delivery cadence / queue admission, not send cost).")
 
 
 if __name__ == "__main__":
