@@ -2,9 +2,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Requirement-based tests for report.py's verdict engine. Each test asserts ONE documented behaviour
-# (the test name is the requirement), driving compute_replicated() with synthetic per-pair deltas and
-# checking the structured verdict -- NOT the printed text, so formatting changes don't break these.
+# Requirement-based tests for report.py's verdict engine. Each asserts documented behaviour by driving
+# compute_replicated() with synthetic per-pair deltas and checking the STRUCTURED verdict -- not the
+# printed text, so formatting changes don't break these. Tests are parameterised over the behavioural
+# axes: config type -> info set; metric -> (floor, direction); round pattern -> verdict class.
 #
 # Run:  python3 -m unittest test_report.py        (from iso_bench/)
 #   or: python3 test_report.py
@@ -17,6 +18,22 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import report  # noqa: E402
+
+ALL_METRICS = {m[0] for m in report.METRICS}   # every metric report.py knows about
+GATED_METRICS = ALL_METRICS - {"lat_max"}      # lat_max is the only always-'info' metric
+
+# Per gated metric: (floor %, "up"|"down" = which direction is BETTER). Hard-coded independently of
+# report.py (deriving it from report.py would assert nothing); the single source for the floor and
+# direction axes below. Kept in sync with report.py by TestMetricCoverage.
+METRIC_SPEC = {
+    "msgs_per_s":     (0.5, "up"),
+    "mib_per_s":      (0.5, "up"),
+    "lat_p50":        (0.5, "down"),
+    "lat_p90":        (0.5, "down"),
+    "lat_p99":        (0.5, "down"),
+    "cpu_us_per_msg": (0.5, "down"),
+    "max_rss_kb":     (2.0, "down"),
+}
 
 # One representative base value per metric; only the deltas below matter to the verdict.
 BASE = {"lat_p50": 80.0, "lat_p90": 95.0, "lat_p99": 130.0, "lat_max": 8000.0,
@@ -60,80 +77,95 @@ def verdict_of(rows, config, key):
     return next(m["verdict"] for m in out if m["key"] == key)
 
 
+def reproduce(key, delta):
+    """Two rounds that both move `key` by ~delta% (the common 'reproduced' shape)."""
+    return make_rows("c", [{key: steady(delta)}, {key: steady(delta)}])
+
+
+class TestMetricCoverage(unittest.TestCase):
+    """Guard: the per-metric test tables stay in sync with report.py's metric set."""
+
+    def test_tables_cover_every_metric(self):
+        # If report.py adds a metric (or changes what's always-info), update METRIC_SPEC + BASE.
+        self.assertEqual(set(METRIC_SPEC), GATED_METRICS)
+        self.assertEqual(set(BASE), ALL_METRICS)
+
+
 class TestInfoMetrics(unittest.TestCase):
-    """Which metrics are shown as 'info' (context only, never gated) per config type."""
+    """`info_metrics` returns EXACTLY the carve-outs for a config; every other metric is gated."""
 
-    def test_lat_max_is_always_info(self):
-        self.assertIn("lat_max", report.info_metrics({"mode": "pub-latency", "qos": 1}))
+    # (config rep, expected info set). Equality => everything not listed is gated.
+    CASES = [
+        ({"mode": "pub-latency",     "qos": 1, "lat_kind": "op latency"},       {"lat_max"}),
+        ({"mode": "pub-throughput",  "qos": 1, "lat_kind": "op latency"},       {"lat_max"}),
+        ({"mode": "recv-latency",    "qos": 0, "lat_kind": "delivery latency"}, {"lat_max"}),
+        ({"mode": "recv-throughput", "qos": 0, "lat_kind": "inter-arrival"},    {"lat_max", "lat_p50"}),
+        ({"mode": "pub-throughput",  "qos": 0, "lat_kind": "op latency"},       {"lat_max", "lat_p50"}),
+    ]
 
-    def test_inter_arrival_p50_is_info(self):
-        self.assertIn("lat_p50", report.info_metrics({"mode": "recv-throughput", "lat_kind": "inter-arrival"}))
-
-    def test_qos0_pub_p50_is_info(self):
-        self.assertIn("lat_p50", report.info_metrics({"mode": "pub-throughput", "qos": 0}))
-
-    def test_qos0_pub_throughput_is_gated_not_info(self):
-        # Regression guard: QoS 0 throughput tracks the real send rate (bounded queue), so it must gate.
-        info = report.info_metrics({"mode": "pub-throughput", "qos": 0})
-        self.assertNotIn("msgs_per_s", info)
-        self.assertNotIn("mib_per_s", info)
+    def test_info_set_per_config(self):
+        for rep, expected in self.CASES:
+            with self.subTest(mode=rep["mode"], qos=rep["qos"], kind=rep["lat_kind"]):
+                self.assertLessEqual(expected, ALL_METRICS)  # test names only real metrics
+                self.assertEqual(report.info_metrics(rep), expected)
 
 
 class TestReplicationVerdicts(unittest.TestCase):
-    """A verdict requires the effect to reproduce across every round."""
+    """Two axes: round pattern -> verdict class, and each metric's better/WORSE direction."""
 
-    def test_reproduced_regression_is_WORSE(self):
-        rows = make_rows("c", [{"lat_p99": steady(2.0)}, {"lat_p99": steady(2.0)}])
-        self.assertEqual(verdict_of(rows, "c", "lat_p99"), "WORSE")
+    # Round pattern -> verdict. This logic lives in compute_replicated (not per metric), so one
+    # representative gated metric exercises it: lat_p99 is 'down'-is-better, so an UP move reads WORSE.
+    ROUND_PATTERNS = [
+        ("reproduced",     steady(2.0), steady(2.0),  "WORSE"),
+        ("one round only", steady(2.0), None,         "~noise*"),
+        ("opposite dirs",  steady(2.0), steady(-2.0), "~noise"),
+        ("neither fires",  scatter(),   scatter(),    "~noise"),
+    ]
 
-    def test_reproduced_improvement_is_better(self):
-        rows = make_rows("c", [{"lat_p99": steady(-2.0)}, {"lat_p99": steady(-2.0)}])
-        self.assertEqual(verdict_of(rows, "c", "lat_p99"), "better")
+    def test_round_pattern_to_verdict(self):
+        for label, r1, r2, expected in self.ROUND_PATTERNS:
+            with self.subTest(pattern=label):
+                per_round = [{"lat_p99": r1}, {} if r2 is None else {"lat_p99": r2}]
+                self.assertEqual(verdict_of(make_rows("c", per_round), "c", "lat_p99"), expected)
 
-    def test_throughput_drop_is_WORSE(self):
-        rows = make_rows("c", [{"msgs_per_s": steady(-2.0)}, {"msgs_per_s": steady(-2.0)}])
-        self.assertEqual(verdict_of(rows, "c", "msgs_per_s"), "WORSE")
-
-    def test_fires_one_round_only_is_noise_star(self):
-        rows = make_rows("c", [{"lat_p99": steady(2.0)}, {}])  # round 2 flat
-        self.assertEqual(verdict_of(rows, "c", "lat_p99"), "~noise*")
-
-    def test_opposite_directions_is_noise(self):
-        rows = make_rows("c", [{"lat_p99": steady(2.0)}, {"lat_p99": steady(-2.0)}])
-        self.assertEqual(verdict_of(rows, "c", "lat_p99"), "~noise")
-
-    def test_neither_round_fires_is_noise(self):
-        rows = make_rows("c", [{"lat_p99": scatter()}, {"lat_p99": scatter()}])
-        self.assertEqual(verdict_of(rows, "c", "lat_p99"), "~noise")
+    def test_direction_convention(self):
+        # A reproduced move in each metric's BAD direction is WORSE; the GOOD direction is better.
+        # 3% clears every floor (max_rss's is 2%). Catches a flipped `better` field or a sign bug.
+        for key, (_, better) in METRIC_SPEC.items():
+            good = 3.0 if better == "up" else -3.0
+            for delta, expected in ((good, "better"), (-good, "WORSE")):
+                with self.subTest(metric=key, expected=expected):
+                    self.assertEqual(verdict_of(reproduce(key, delta), "c", key), expected)
 
     def test_reproduced_verdict_carries_adj(self):
-        rows = make_rows("c", [{"lat_p99": steady(2.0)}, {"lat_p99": steady(2.0)}])
-        _, _, _, out = report.compute_replicated(rows, "c", ["main", "branch"])
+        _, _, _, out = report.compute_replicated(reproduce("lat_p99", 2.0), "c", ["main", "branch"])
         self.assertIsNotNone(next(m["adj"] for m in out if m["key"] == "lat_p99"))
 
 
 class TestFloors(unittest.TestCase):
-    """A significant-but-tiny move below the metric's floor must not fire."""
+    """Each gated metric fires only when the reproduced move clears ITS floor (max_rss: 2%, else 0.5%)."""
 
-    def test_below_default_floor_is_noise(self):
-        rows = make_rows("c", [{"cpu_us_per_msg": steady(0.3)}, {"cpu_us_per_msg": steady(0.3)}])
-        self.assertEqual(verdict_of(rows, "c", "cpu_us_per_msg"), "~noise")
+    def test_below_floor_is_noise(self):
+        for key, (floor, _) in METRIC_SPEC.items():
+            with self.subTest(metric=key):  # significant but under the floor -> ~noise
+                self.assertEqual(verdict_of(reproduce(key, floor * 0.6), "c", key), "~noise")
 
-    def test_max_rss_below_2pct_floor_is_noise(self):
-        rows = make_rows("c", [{"max_rss_kb": steady(1.0)}, {"max_rss_kb": steady(1.0)}])
-        self.assertEqual(verdict_of(rows, "c", "max_rss_kb"), "~noise")
-
-    def test_max_rss_above_2pct_floor_fires(self):
-        rows = make_rows("c", [{"max_rss_kb": steady(3.0)}, {"max_rss_kb": steady(3.0)}])
-        self.assertEqual(verdict_of(rows, "c", "max_rss_kb"), "WORSE")
+    def test_above_floor_fires(self):
+        for key, (floor, _) in METRIC_SPEC.items():
+            with self.subTest(metric=key):  # over the floor and reproduced -> a real verdict
+                self.assertIn(verdict_of(reproduce(key, floor * 1.6), "c", key), ("better", "WORSE"))
 
 
 class TestSingleRoundFallback(unittest.TestCase):
-    """Untagged (single-pass) data falls back to fire -> verdict, with no replication check."""
+    """Untagged (single-pass) data: fire -> verdict (no replication check); flat -> ~noise."""
 
     def test_single_round_fires_to_verdict(self):
         rows = make_rows("c", [{"cpu_us_per_msg": steady(2.0)}], tag_round=False)
         self.assertEqual(verdict_of(rows, "c", "cpu_us_per_msg"), "WORSE")
+
+    def test_single_round_flat_is_noise(self):
+        rows = make_rows("c", [{"cpu_us_per_msg": scatter()}], tag_round=False)
+        self.assertEqual(verdict_of(rows, "c", "cpu_us_per_msg"), "~noise")
 
 
 class TestEndToEnd(unittest.TestCase):
