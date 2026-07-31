@@ -185,8 +185,9 @@ env ROLE="$PEER_ROLE" BIND="$HOST" PORT="$PORT" PAYLOAD_BYTES="$PAYLOAD_BYTES" T
 peer_pid=$!
 
 # Wait for the peer to report it is listening.
+peer_ready=0
 for _ in $(seq 1 200); do
-    grep -q "listening on" "$peer_log" 2>/dev/null && break
+    if grep -q "listening on" "$peer_log" 2>/dev/null; then peer_ready=1; break; fi
     kill -0 "$peer_pid" 2>/dev/null || {
         echo "ERROR: peer exited during startup:" >&2
         cat "$peer_log" >&2
@@ -194,6 +195,12 @@ for _ in $(seq 1 200); do
     }
     sleep 0.05
 done
+# Loop can exhaust with the peer still alive but never ready -- don't start the client blind.
+if ((peer_ready == 0)); then
+    echo "ERROR: peer never reported 'listening on' within ~10s (still running); aborting:" >&2
+    cat "$peer_log" >&2
+    exit 1  # cleanup trap kills the peer
+fi
 
 # ---- run client (pinned, timed) -----------------------------------------------------------------
 echo "running bench_client[$MODE] on cores $CLIENT_CORES (COUNT=$COUNT, PAYLOAD_BYTES=$PAYLOAD_BYTES)..." >&2

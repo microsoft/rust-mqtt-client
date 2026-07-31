@@ -455,6 +455,7 @@ iso_bench/                # detached cargo workspace (not part of the library's 
   suite.sh                # shared curated config list (sourced by bench.sh + bench-compare.sh)
   record.py               # shared JSONL record writer (one place for the schema)
   report.py               # human report: overview + stat tables + A/B (paired) + histograms
+  test_report.py          # requirement-based tests for report.py (python3 -m unittest test_report.py)
   install-prereqs.sh      # detect + install build/run prerequisites (apt/dnf/yum)
   gen-test-certs.sh       # self-signed TLS cert generator (local testing only)
 ```

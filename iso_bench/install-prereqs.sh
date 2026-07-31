@@ -7,8 +7,8 @@
 #
 # Required: a C compiler + pkg-config + libssl headers (to build the openssl crate), the openssl CLI
 # (TLS cert generation), taskset (core pinning), GNU /usr/bin/time (CPU-per-msg), python3 (report.py),
-# and a Rust toolchain (installed via rustup; rust-toolchain.toml pins the exact version). Optional:
-# tc/iproute2 (only for the NETEM_DELAY knob).
+# curl (to fetch rustup), and a Rust toolchain (installed via rustup; rust-toolchain.toml pins the exact
+# version). Optional: tc/iproute2 (only for the NETEM_DELAY knob).
 #
 # Usage:
 #   ./install-prereqs.sh          # install anything missing (uses sudo if needed)
@@ -71,6 +71,7 @@ else
 fi
 
 # ---- runtime tools -----------------------------------------------------------------------------
+if have curl; then ok "curl"; else miss "curl"; required+=(curl); fi  # needed to fetch rustup below
 if have openssl; then ok "openssl CLI"; else miss "openssl CLI"; required+=(openssl); fi
 if have taskset; then ok "taskset"; else miss "taskset"; required+=("$(pkg util-linux util-linux)"); fi
 if [[ -x /usr/bin/time ]]; then ok "/usr/bin/time (GNU time)"; else miss "/usr/bin/time (GNU time)"; required+=(time); fi

@@ -251,6 +251,8 @@ where
                 Err(_) => break,
             }
         }
+        // No more PUBACKs will arrive: close so a writer blocked on acquire_many wakes (Err) and exits.
+        window_reader.close();
     });
 
     // Pre-encode a batch of PUBLISH frames so the hot loop is mostly `write` (plus TLS when enabled).
