@@ -458,5 +458,6 @@ iso_bench/                # detached cargo workspace (not part of the library's 
   report.py               # human report: overview + stat tables + A/B (paired) + histograms
   test_report.py          # requirement-based tests for report.py (python3 -m unittest test_report.py)
   install-prereqs.sh      # detect + install build/run prerequisites (apt/dnf/yum)
+  vm-prep.sh              # dedicated-VM jitter tuning: isolate/quiet the bench cores; report the floor
   gen-test-certs.sh       # self-signed TLS cert generator (local testing only)
 ```
