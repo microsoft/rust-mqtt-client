@@ -183,6 +183,19 @@ def print_summary_table(rows, config, labels, kind):
             )
 
 
+def info_metrics(rep):
+    """Metrics shown as 'info' (context only, never gated) for a config. lat_max is a single worst
+    sample (p99/p90 carry the tail); inter-arrival p50 is recv-throughput delivery cadence (throughput
+    carries the rate, p90/p99 the jitter); QoS 0 op-latency p50 is queue-ADMISSION time, not send cost.
+    QoS 0 THROUGHPUT stays gated -- its publish queue is bounded, so its rate tracks the real send rate."""
+    info = {"lat_max"}
+    if rep.get("lat_kind") == "inter-arrival":
+        info.add("lat_p50")
+    if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
+        info.add("lat_p50")
+    return info
+
+
 def print_comparison(rows, config, labels):
     base, latest = labels[0], labels[-1]
     print(f"\n  A/B comparison  (median; baseline=[{base}], delta=[{latest}])")
@@ -190,13 +203,7 @@ def print_comparison(rows, config, labels):
     print(f"  {'metric':<12}{header}{'delta%':>10}{'verdict':>11}")
     print(f"  {rule('-', 12 + 14 * len(labels) + 21)}")
     rep = next((r for r in rows if config_of(r) == config), {})
-    # Metrics that must NOT be gated as pass/fail for this config (shown as 'info'):
-    #   lat_max            -- a single worst sample per rep, far too heavy-tailed to judge.
-    #   QoS 0 pub tput/p50 -- no wire-completion signal, so these time queue admission +
-    #                         scheduler interleaving, not send cost (read cpu/msg + p99 instead).
-    info_only = {"lat_max"}
-    if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
-        info_only |= {"msgs_per_s", "mib_per_s", "lat_p50"}
+    info_only = info_metrics(rep)
     for key, disp, _, better in METRICS:
         bxs = series(rows, config, base, key)
         if not bxs:
@@ -341,19 +348,9 @@ def compute_replicated(rows, config, labels):
     fire -> verdict, uncorroborated. Each metric dict carries per-round p/direction for display."""
     base, latest = labels[0], labels[-1]
     rep = next((r for r in rows if config_of(r) == config), {})
-    # Not gated (shown as 'info'): lat_max is a single worst sample (p99/p90 carry the tail); inter-arrival
-    # p50 is recv-throughput delivery cadence (throughput carries the rate, p90/p99 the jitter); QoS 0
-    # op-latency p50 is queue-ADMISSION time, not send cost (token resolves before encode+write). QoS 0
-    # THROUGHPUT stays gated: the publish queue is bounded, so over a full run its rate tracks the real
-    # send rate (the fixed <=queue-depth overcount is identical in both arms and cancels in the delta).
-    info_only = {"lat_max"}
-    if rep.get("lat_kind") == "inter-arrival":
-        info_only |= {"lat_p50"}
-    if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
-        info_only |= {"lat_p50"}
+    info_only = info_metrics(rep)
     rounds = rounds_of(rows, config)
     out = []
-    n_pairs = 0
     for key, disp, _, better in METRICS:
         info = key in info_only
         floor = PAIRED_FLOOR.get(key, PAIRED_FLOOR_PCT)
@@ -362,7 +359,6 @@ def compute_replicated(rows, config, labels):
             bmap = paired_map(rows, config, base, key, rnd)
             lmap = paired_map(rows, config, latest, key, rnd)
             pairs = sorted(set(bmap) & set(lmap))
-            n_pairs = max(n_pairs, len(pairs))
             all_b += [bmap[p] for p in pairs]
             all_l += [lmap[p] for p in pairs]
             deltas = [(lmap[p] - bmap[p]) / bmap[p] * 100.0 for p in pairs if bmap[p]]
@@ -401,7 +397,7 @@ def compute_replicated(rows, config, labels):
             else:
                 m["verdict"] = "~noise"
         out.append(m)
-    return base, latest, n_pairs, rounds, out
+    return base, latest, rounds, out
 
 
 def print_replicated_table(base, latest, rounds, comp, kind=None, qos0_pub=False):
@@ -527,7 +523,7 @@ def main():
                 print_drift(rows, config, labels)
                 if config in paired_comp:
                     any_paired = True
-                    base, latest, n_pairs, rounds, comp = paired_comp[config]
+                    base, latest, rounds, comp = paired_comp[config]
                     rep0 = crows[0]
                     qos0_pub = rep0.get("mode") == "pub-throughput" and rep0.get("qos") in (0, "0")
                     print_replicated_table(base, latest, rounds, comp, kind, qos0_pub)
