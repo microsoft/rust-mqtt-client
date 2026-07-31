@@ -106,12 +106,15 @@ In each config's **paired A/B** table (comparing ≥ 2 builds) the column that m
 the change *after* correcting for run-to-run jitter (`0.0` = indistinguishable from noise; non-zero =
 the real delta). The **`verdict`** summarises it:
 
-- **`better` / `WORSE`** — significant **and coherent**: the move is corroborated either by the
-  config's transport-contrast sibling (e.g. `pub-tput-tcp` ↔ `pub-tput-tls`) or by a within-config
-  partner metric (co-moving latency percentiles, or throughput ↔ `cpu/msg`). This is the only hard signal.
-- **`~noise*`** — significant but **isolated** (nothing corroborates it). Treated as noise, because a lone
-  metric moving with no support is almost always chance; the `*` just flags it for the curious. `raw Δ%`
-  still shows the blip's size; `adj Δ%` is `0.0`.
+- **`better` / `WORSE`** — significant **and coherent**: corroborated by the config's transport-contrast
+  sibling (e.g. `pub-tput-tcp` ↔ `pub-tput-tls`) or a within-config partner metric (co-moving latency
+  percentiles, or throughput ↔ `cpu/msg`). A metric that has **no** possible corroborator (e.g. `max rss`
+  in a config with no sibling) also lands here on a significant move — there's nothing to wait for. This
+  is the only hard signal.
+- **`~noise*`** — significant, but a metric that **could** have been corroborated wasn't: nothing a real
+  regression would move alongside it budged. A lone move with no support is almost always chance, so it's
+  treated as noise; the `*` just flags it for the curious. `raw Δ%` still shows the blip's size; `adj Δ%`
+  is `0.0`.
 - **`~noise`** — didn't clear the significance/floor gate at all.
 - **`info`** — a metric that isn't gated (shown for context only).
 

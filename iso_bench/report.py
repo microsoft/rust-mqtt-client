@@ -376,13 +376,16 @@ def coherence(comp_by_config, reps_by_config):
     """Confirm each fired flag by CORROBORATION -- a real regression is coherent, a chance flag is
     isolated. A flag is confirmed if the SAME metric moves the same way in the config's transport-
     contrast sibling, OR a within-config partner metric (WITHIN_PARTNERS) fires the same direction.
-    Uncorroborated significant flags are downgraded to `~noise*` in the report output."""
+    A metric with NO possible corroborator here (no gated partner and no sibling -- e.g. max_rss in a
+    transport-only-one config) is confirmed on its own, since there is nothing that could back it up.
+    Only flags that COULD have been corroborated but weren't are downgraded to `~noise*`."""
     fired = {c: {m["key"]: m["direction"] for m in comp if m["fired"]} for c, comp in comp_by_config.items()}
     factors = {c: config_factors(reps_by_config[c]) for c in comp_by_config}
     transport = {c: reps_by_config[c].get("transport") for c in comp_by_config}
     confirmed = {}
     for c, comp in comp_by_config.items():
         sibs = [o for o in comp_by_config if o != c and factors[o] == factors[c] and transport[o] != transport[c]]
+        gated = {m["key"] for m in comp if not m["info"]}
         conf = set()
         for m in comp:
             if not m["fired"]:
@@ -390,7 +393,8 @@ def coherence(comp_by_config, reps_by_config):
             k, d = m["key"], m["direction"]
             within = any(fired[c].get(p) == d for p in WITHIN_PARTNERS.get(k, ()))
             cross = any(fired[s].get(k) == d for s in sibs)
-            if within or cross:
+            corroboratable = bool(WITHIN_PARTNERS.get(k, set()) & gated) or bool(sibs)
+            if within or cross or not corroboratable:
                 conf.add(k)
         confirmed[c] = conf
     return confirmed
@@ -415,7 +419,7 @@ def print_paired_table(base, latest, n_pairs, comp, confirmed, kind=None, qos0_p
             adj_str = f"{adj_delta(m['deltas']):.1f}"
         else:
             p_str = "<.001" if m["p"] < 0.001 else f"{m['p']:.3f}"
-            # significant but isolated (no sibling/partner) is almost always chance -> noise, marked '*'
+            # fired but corroboration was possible and absent -> almost always chance -> noise, marked '*'
             verdict, adj_str = ("~noise*" if m["fired"] else "~noise"), "0.0"
         print(f"  {m['disp']:<12}{cells}{m['med_d']:>9.1f}%{p_str:>8}{adj_str:>8}{verdict:>11}")
     if kind == "inter-arrival":
@@ -544,10 +548,11 @@ def main():
             print(" read it as 'the real change is ~this %'. A metric passes the gate when p<0.05 AND")
             print(" |raw Δ%| >= its floor; the verdict is then better/WORSE only if COHERENT -- corroborated")
             print(" by its transport-contrast sibling or a within-config partner metric (co-moving latency")
-            print(" percentiles, throughput<->cpu/msg). A significant but ISOLATED flag (nothing corroborates")
-            print(" it) is marked '~noise*' -- treated as noise, since a lone metric moving with no support is")
-            print(" almost always chance; re-run or find a coherent pattern to promote it. adj Δ% is 0.0")
-            print(" unless coherent. Non-interleaved configs flag deltas larger than baseline CV.")
+            print(" percentiles, throughput<->cpu/msg), or if the metric has NO possible corroborator here")
+            print(" (no partner and no sibling, e.g. max rss in a transport-only-one config). A flag that")
+            print(" COULD have been corroborated but wasn't is marked '~noise*' -- treated as noise, since a")
+            print(" lone move with no support is almost always chance. adj Δ% is 0.0 unless it counts as a")
+            print(" verdict. Non-interleaved configs flag deltas larger than baseline CV.")
         else:
             print(" 'verdict' compares the LATEST label to the baseline and flags deltas larger than the")
             print(" baseline's run-to-run CV (a rough signal, not a formal significance test).")
