@@ -27,7 +27,9 @@
 #   REF_LABEL     tag for the reference build (report BASELINE)      (default: reference)
 #   CUR_SHA / REF_SHA   provenance git SHA per binary                (default: unknown)
 #   PEER_BIN      prebuilt bench_peer; built here if unset
-#   REPS          interleaved PAIRS per config                       (default 10)
+#   REPS          interleaved PAIRS per config per round             (default 10)
+#   ROUNDS        replication rounds: whole suite run this many times (default 2). A verdict needs the
+#                 effect to reproduce across rounds -- rounds are a full suite apart so arm-luck differs.
 #   WARMUP_REPS   throwaway CPU-saturating warm-up runs first        (default 8; 0 = skip)
 #   RESULTS_FILE  JSONL accumulator                                  (default: ./results.jsonl)
 #   RESET         1 = truncate RESULTS_FILE first                    (default 1)
@@ -55,6 +57,7 @@ REF_LABEL="${REF_LABEL:-reference}"
 CUR_SHA="${CUR_SHA:-unknown}"
 REF_SHA="${REF_SHA:-unknown}"
 REPS="${REPS:-10}"
+ROUNDS="${ROUNDS:-2}"  # whole-suite replication rounds; report.py requires a verdict to reproduce across them
 WARMUP_REPS="${WARMUP_REPS:-8}"
 RESULTS_FILE="${RESULTS_FILE:-$script_dir/results.jsonl}"
 RESET="${RESET:-1}"
@@ -88,9 +91,9 @@ prov_host="$(hostname 2>/dev/null || echo unknown)"
 
 [[ "$RESET" == "1" ]] && : >"$RESULTS_FILE"
 
-# Run one measured rep of one binary and append its record (tagged with the pair index).
+# Run one measured rep of one binary and append its record (tagged with the pair index and round).
 run_and_record() {
-    local bin="$1" label="$2" sha="$3" pair="$4" cfg="$5" cfg_name="$6"
+    local bin="$1" label="$2" sha="$3" pair="$4" cfg="$5" cfg_name="$6" round="$7"
     local err_log out result_line cpu_line
     err_log="$(mktemp)"
     # shellcheck disable=SC2086
@@ -109,7 +112,7 @@ run_and_record() {
         exit 1
     }
     RESULT_JSON="${result_line#RESULT }" CPU_JSON="${cpu_line#CPU }" \
-        REC_LABEL="$label" REC_CONFIG="$cfg_name" REP="$pair" REC_PAIR="$pair" OUT_FILE="$RESULTS_FILE" \
+        REC_LABEL="$label" REC_CONFIG="$cfg_name" REP="$pair" REC_PAIR="$pair" REC_ROUND="$round" OUT_FILE="$RESULTS_FILE" \
         PROV_SHA="$sha" PROV_DIRTY=0 PROV_RUSTC="$prov_rustc" PROV_HOST="$prov_host" \
         python3 "$script_dir/record.py" >/dev/null
 }
@@ -134,7 +137,7 @@ make_order() {
     done
 }
 
-echo "== iso_bench COMPARE (interleaved): [$CUR_LABEL] vs baseline [$REF_LABEL], reps=$REPS configs=${#suite[@]} ==" >&2
+echo "== iso_bench COMPARE (interleaved): [$CUR_LABEL] vs baseline [$REF_LABEL], reps=$REPS rounds=$ROUNDS configs=${#suite[@]} ==" >&2
 
 # Warm the box (CPU-saturating throughput-TLS), alternating binaries so both crypto paths warm; not
 # recorded. See bench.sh for why latency warm-ups don't ramp turbo.
@@ -150,26 +153,32 @@ if ((WARMUP_REPS > 0)); then
     echo "   warm-up done          " >&2
 fi
 
-i=0
-for cfg in "${suite[@]}"; do
-    i=$((i + 1))
-    cfg_name="${cfg%% *}"
-    cfg_name="${cfg_name#CONFIG=}"
-    echo "" >&2
-    echo ">>> config [$i/${#suite[@]}]: $cfg_name" >&2
-    make_order
-    for ((p = 1; p <= REPS; p++)); do
-        printf '   [pair %d/%d] interleaving %s / %s ...\r' "$p" "$REPS" "$CUR_LABEL" "$REF_LABEL" >&2
-        # Balanced shuffled order (see make_order): no build is systematically the 2nd runner.
-        if ((order[p - 1] == 0)); then
-            run_and_record "$CUR_BIN" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name"
-            run_and_record "$REF_BIN" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name"
-        else
-            run_and_record "$REF_BIN" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name"
-            run_and_record "$CUR_BIN" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name"
-        fi
+# Rounds are the OUTER loop so each config's two rounds are a full suite apart in time -- their
+# arm-luck (fast per-pair scheduling variance) is then independent, which is what lets report.py
+# use round agreement as corroboration. Duplicating a config back-to-back would NOT achieve that.
+for ((round = 1; round <= ROUNDS; round++)); do
+    ((ROUNDS > 1)) && echo "" >&2 && echo "=== round $round/$ROUNDS ===" >&2
+    i=0
+    for cfg in "${suite[@]}"; do
+        i=$((i + 1))
+        cfg_name="${cfg%% *}"
+        cfg_name="${cfg_name#CONFIG=}"
+        echo "" >&2
+        echo ">>> [round $round/$ROUNDS] config [$i/${#suite[@]}]: $cfg_name" >&2
+        make_order
+        for ((p = 1; p <= REPS; p++)); do
+            printf '   [pair %d/%d] interleaving %s / %s ...\r' "$p" "$REPS" "$CUR_LABEL" "$REF_LABEL" >&2
+            # Balanced shuffled order (see make_order): no build is systematically the 2nd runner.
+            if ((order[p - 1] == 0)); then
+                run_and_record "$CUR_BIN" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round"
+                run_and_record "$REF_BIN" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round"
+            else
+                run_and_record "$REF_BIN" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round"
+                run_and_record "$CUR_BIN" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round"
+            fi
+        done
+        echo "   $cfg_name: $REPS pairs done                        " >&2
     done
-    echo "   $cfg_name: $REPS pairs done                        " >&2
 done
 
 echo "" >&2

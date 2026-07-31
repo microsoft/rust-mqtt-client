@@ -160,9 +160,14 @@ def series(rows, config, label, metric):
 
 
 def print_summary_table(rows, config, labels, kind):
+    # cv% below is POOLED over all rounds (a single number, not per-round). This blends within-round
+    # noise with any between-round drift -- an honest total-variability read. Revisit if a per-round
+    # split is wanted (round consistency is already visible in the paired table's rndN columns).
+    nr = len(rounds_of(rows, config))
     for label in labels:
         n = sum(1 for r in rows if config_of(r) == config and r["label"] == label)
-        print(f"\n  [{label}]  {n} reps   (latency rows = {kind})")
+        rtag = f"  ({nr} rounds × {n // nr})" if nr >= 2 and n % nr == 0 else ""
+        print(f"\n  [{label}]  {n} reps{rtag}   (latency rows = {kind})")
         print(
             f"  {'metric':<12}{'unit':>7}{'median':>13}{'mean':>13}"
             f"{'min':>13}{'max':>13}{'cv%':>7}"
@@ -230,13 +235,21 @@ def has_pairs(rows, config):
     return any(config_of(r) == config and r.get("pair") is not None for r in rows)
 
 
-def paired_map(rows, config, label, key):
-    """pair index -> metric value, for one (config, label). First value wins per pair."""
+def paired_map(rows, config, label, key, rnd=None):
+    """pair index -> metric value, for one (config, label[, round]). First value wins per pair."""
     out = {}
     for r in rows:
         if config_of(r) == config and r.get("label") == label and r.get("pair") is not None and r.get(key) is not None:
+            if rnd is not None and r.get("round", 1) != rnd:
+                continue
             out.setdefault(r["pair"], r[key])
     return out
+
+
+def rounds_of(rows, config):
+    """Sorted distinct replication rounds present for a config (default [1] when records are untagged)."""
+    rs = sorted({r.get("round", 1) for r in rows if config_of(r) == config and r.get("pair") is not None})
+    return rs or [1]
 
 
 def _two_sided_p_from_z(z):
@@ -304,35 +317,28 @@ def adj_delta(deltas):
     return med * max(0.0, 1.0 - 1.0 / snr2)
 
 
-# Within-config corroboration partners: metrics that a REAL regression moves together, so a lone flag
-# is suspect. Latency percentiles co-move (a shifted distribution lifts several); throughput and
-# cpu/msg are inversely linked (fewer msg/s <-> more us/msg). msgs<->mib are the same signal so they
-# do NOT corroborate each other; max_rss has no within-config partner (sibling-only).
-WITHIN_PARTNERS = {
-    "lat_p50": {"lat_p90", "lat_p99"},
-    "lat_p90": {"lat_p50", "lat_p99"},
-    "lat_p99": {"lat_p50", "lat_p90"},
-    "msgs_per_s": {"cpu_us_per_msg"},
-    "mib_per_s": {"cpu_us_per_msg"},
-    "cpu_us_per_msg": {"msgs_per_s", "mib_per_s"},
-}
-
-
+# Within-config corroboration (partner + sibling coherence) was removed in favour of REPLICATION:
+# a verdict now requires the effect to reproduce across rounds (see compute_replicated). config_factors
+# is kept only so the sibling / code-path 'family' idea can be reintroduced without re-deriving the axes.
 def config_factors(rep):
-    """The workload axes of a config EXCEPT transport -- two configs with equal factors and different
-    transport are a transport-contrast pair (see suite.sh matrix)."""
-    return (
-        rep.get("mode"),
-        str(rep.get("qos")),
-        rep.get("payload_bytes"),
-        1 if (rep.get("target_rate") or 0) > 0 else 0,  # paced / open-loop
-    )
+    """The workload axes that define a config: mode, transport, qos, payload, and paced/open-loop.
+    Currently UNUSED by the verdict (pure replication) -- retained as the taxonomy for a future
+    sibling/family grouping so configs can be sorted/related without rebuilding this."""
+    return {
+        "mode": rep.get("mode"),
+        "transport": rep.get("transport"),
+        "qos": str(rep.get("qos")),
+        "payload_bytes": rep.get("payload_bytes"),
+        "paced": bool((rep.get("target_rate") or 0) > 0),
+    }
 
 
-def compute_paired(rows, config, labels):
-    """Per-metric paired stats for one config (no printing). `fired` = passes the raw significance gate
-    (Wilcoxon p<0.05 and |median delta| over the floor); `direction` is better/WORSE. Corroboration
-    (coherence) decides later whether a fired flag becomes a verdict or a soft 'watch'."""
+def compute_replicated(rows, config, labels):
+    """Per-metric REPLICATED verdict for one config. The significance gate (Wilcoxon p<0.05 and |median
+    delta| over the floor) runs SEPARATELY per replication round; a metric earns better/WORSE only if it
+    fires the SAME direction in EVERY round (reproduced). Fires in some-but-not-all rounds -> '~noise*';
+    none or contradictory -> '~noise'. With a single round (no replication) it falls back to
+    fire -> verdict, uncorroborated. Each metric dict carries per-round p/direction for display."""
     base, latest = labels[0], labels[-1]
     rep = next((r for r in rows if config_of(r) == config), {})
     # Not gated (shown as 'info'): lat_max is a single worst sample (p99/p90 carry the tail); inter-arrival
@@ -345,83 +351,79 @@ def compute_paired(rows, config, labels):
         info_only |= {"lat_p50"}
     if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):
         info_only |= {"lat_p50"}
+    rounds = rounds_of(rows, config)
     out = []
     n_pairs = 0
     for key, disp, _, better in METRICS:
-        bmap = paired_map(rows, config, base, key)
-        lmap = paired_map(rows, config, latest, key)
-        pairs = sorted(set(bmap) & set(lmap))
-        n_pairs = max(n_pairs, len(pairs))
-        m = {"key": key, "disp": disp, "better": better, "info": key in info_only,
-             "bmed": None, "lmed": None, "med_d": 0.0, "deltas": [], "p": None,
-             "fired": False, "direction": None}
-        if len(pairs) >= 2:
-            m["bmed"] = st.median([bmap[p] for p in pairs])
-            m["lmed"] = st.median([lmap[p] for p in pairs])
+        info = key in info_only
+        floor = PAIRED_FLOOR.get(key, PAIRED_FLOOR_PCT)
+        per_round, all_deltas, all_b, all_l = [], [], [], []
+        for rnd in rounds:
+            bmap = paired_map(rows, config, base, key, rnd)
+            lmap = paired_map(rows, config, latest, key, rnd)
+            pairs = sorted(set(bmap) & set(lmap))
+            n_pairs = max(n_pairs, len(pairs))
+            all_b += [bmap[p] for p in pairs]
+            all_l += [lmap[p] for p in pairs]
             deltas = [(lmap[p] - bmap[p]) / bmap[p] * 100.0 for p in pairs if bmap[p]]
-            m["deltas"] = deltas
-            m["med_d"] = st.median(deltas) if deltas else 0.0
-            if not m["info"] and deltas:
-                p = wilcoxon_p(deltas)
-                m["p"] = p
-                if p < 0.05 and abs(m["med_d"]) >= PAIRED_FLOOR.get(key, PAIRED_FLOOR_PCT):
-                    improved = (m["med_d"] > 0) if better == "up" else (m["med_d"] < 0)
-                    m["fired"] = True
-                    m["direction"] = "better" if improved else "WORSE"
+            all_deltas += deltas
+            if len(deltas) >= 2 and not info:
+                p, med = wilcoxon_p(deltas), st.median(deltas)
+                improved = (med > 0) if better == "up" else (med < 0)
+                per_round.append({"p": p, "arrow": "↑" if med > 0 else "↓",
+                                  "dir": "better" if improved else "WORSE",
+                                  "fired": p < 0.05 and abs(med) >= floor})
+            else:
+                per_round.append(None)
+        m = {"key": key, "disp": disp, "info": info, "per_round": per_round,
+             "bmed": st.median(all_b) if all_b else None,
+             "lmed": st.median(all_l) if all_l else None,
+             "raw_med": st.median(all_deltas) if all_deltas else 0.0,
+             "verdict": "-", "adj": None}
+        fired = [pr for pr in per_round if pr and pr["fired"]]
+        dirs = {pr["dir"] for pr in fired}
+        if info:
+            m["verdict"] = "info"
+        elif m["bmed"] is None or all(pr is None for pr in per_round):
+            m["verdict"] = "-"
+        elif len(rounds) >= 2:
+            if len(fired) == len(rounds) and len(dirs) == 1:      # reproduced in every round
+                m["verdict"], m["adj"] = next(iter(dirs)), adj_delta(all_deltas)
+            elif len(dirs) > 1:                                   # rounds disagree on direction
+                m["verdict"] = "~noise"
+            elif fired:                                           # fired in some rounds, not all
+                m["verdict"] = "~noise*"
+            else:
+                m["verdict"] = "~noise"
+        else:                                                     # single round: no replication
+            if fired:
+                m["verdict"], m["adj"] = fired[0]["dir"], adj_delta(all_deltas)
+            else:
+                m["verdict"] = "~noise"
         out.append(m)
-    return base, latest, n_pairs, out
+    return base, latest, n_pairs, rounds, out
 
 
-def coherence(comp_by_config, reps_by_config):
-    """Confirm each fired flag by CORROBORATION -- a real regression is coherent, a chance flag is
-    isolated. A flag is confirmed if the SAME metric moves the same way in the config's transport-
-    contrast sibling, OR a within-config partner metric (WITHIN_PARTNERS) fires the same direction.
-    A metric with NO possible corroborator here (no gated partner and no sibling -- e.g. max_rss in a
-    transport-only-one config) is confirmed on its own, since there is nothing that could back it up.
-    Only flags that COULD have been corroborated but weren't are downgraded to `~noise*`."""
-    fired = {c: {m["key"]: m["direction"] for m in comp if m["fired"]} for c, comp in comp_by_config.items()}
-    factors = {c: config_factors(reps_by_config[c]) for c in comp_by_config}
-    transport = {c: reps_by_config[c].get("transport") for c in comp_by_config}
-    confirmed = {}
-    for c, comp in comp_by_config.items():
-        sibs = [o for o in comp_by_config if o != c and factors[o] == factors[c] and transport[o] != transport[c]]
-        gated = {m["key"] for m in comp if not m["info"]}
-        conf = set()
-        for m in comp:
-            if not m["fired"]:
-                continue
-            k, d = m["key"], m["direction"]
-            within = any(fired[c].get(p) == d for p in WITHIN_PARTNERS.get(k, ()))
-            cross = any(fired[s].get(k) == d for s in sibs)
-            corroboratable = bool(WITHIN_PARTNERS.get(k, set()) & gated) or bool(sibs)
-            if within or cross or not corroboratable:
-                conf.add(k)
-        confirmed[c] = conf
-    return confirmed
-
-
-def print_paired_table(base, latest, n_pairs, comp, confirmed, kind=None, qos0_pub=False):
-    print(f"\n  PAIRED A/B  (interleaved; baseline=[{base}], delta=[{latest}], {n_pairs} pairs)")
-    print(f"  {'metric':<12}{('[' + base + ']'):>14}{('[' + latest + ']'):>14}{'raw Δ%':>10}{'p':>8}{'adj Δ%':>8}{'verdict':>11}")
-    print(f"  {rule('-', 12 + 28 + 10 + 8 + 8 + 11)}")
+def print_replicated_table(base, latest, rounds, comp, kind=None, qos0_pub=False):
+    rnd_hdr = "".join(f"{('rnd' + str(r) + ' p'):>8}" for r in rounds)
+    tag = f"×{len(rounds)} rounds" if len(rounds) >= 2 else "1 round"
+    print(f"\n  PAIRED A/B  (interleaved {tag}; baseline=[{base}], delta=[{latest}])")
+    print(f"  {'metric':<12}{('[' + base + ']'):>12}{('[' + latest + ']'):>12}{'raw Δ%':>8}{rnd_hdr}{'adj Δ%':>7}{'verdict':>10}")
+    print(f"  {rule('-', 61 + 8 * len(rounds))}")
     for m in comp:
         if m["bmed"] is None:
-            print(f"  {m['disp']:<12}{'-':>14}{'-':>14}{'-':>10}{'-':>8}{'-':>8}{'-':>11}")
+            dash = "".join(f"{'-':>8}" for _ in rounds)
+            print(f"  {m['disp']:<12}{'-':>12}{'-':>12}{'-':>8}{dash}{'-':>7}{'-':>10}")
             continue
-        cells = f"{fmt_num(m['bmed']):>14}{fmt_num(m['lmed']):>14}"
-        if m["info"]:
-            verdict, p_str, adj_str = "info", "-", "-"
-        elif m["p"] is None:
-            verdict, p_str, adj_str = "-", "-", "-"
-        elif m["fired"] and m["key"] in confirmed:
-            p_str = "<.001" if m["p"] < 0.001 else f"{m['p']:.3f}"
-            verdict = m["direction"]
-            adj_str = f"{adj_delta(m['deltas']):.1f}"
-        else:
-            p_str = "<.001" if m["p"] < 0.001 else f"{m['p']:.3f}"
-            # fired but corroboration was possible and absent -> almost always chance -> noise, marked '*'
-            verdict, adj_str = ("~noise*" if m["fired"] else "~noise"), "0.0"
-        print(f"  {m['disp']:<12}{cells}{m['med_d']:>9.1f}%{p_str:>8}{adj_str:>8}{verdict:>11}")
+        rnd_cells = ""
+        for pr in m["per_round"]:
+            if pr is None or m["info"]:
+                rnd_cells += f"{'·':>8}"
+            else:
+                ps = "<.001" if pr["p"] < 0.001 else f"{pr['p']:.3f}"
+                rnd_cells += f"{(pr['arrow'] + ps):>8}"
+        adj_str = f"{m['adj']:.1f}" if m["adj"] is not None else ("-" if m["info"] else "0.0")
+        print(f"  {m['disp']:<12}{fmt_num(m['bmed']):>12}{fmt_num(m['lmed']):>12}{m['raw_med']:>7.1f}%{rnd_cells}{adj_str:>7}{m['verdict']:>10}")
     if kind == "inter-arrival":
         print("    note: inter-arrival = the gap between consecutive deliveries. p50 is intra-burst")
         print("    packing (a read-batch artifact) so it's 'info'; throughput carries the rate and")
@@ -493,9 +495,9 @@ def main():
     if not args.hist_only:
         print_overview(rows, configs)
 
-    # Paired stats are computed for ALL configs first so the coherence pass can corroborate a flag
-    # against its transport-contrast sibling (a cross-config check) before any verdict is printed.
-    paired_comp, reps_by_config = {}, {}
+    # Interleaved (paired) stats per config -- PURE REPLICATION: a verdict requires the effect to
+    # reproduce across rounds (no cross-config coherence; config_factors retained for a future family hook).
+    paired_comp = {}
     for config in configs:
         crows = [r for r in rows if config_of(r) == config]
         if not has_pairs(crows, config):
@@ -503,9 +505,7 @@ def main():
         labels = ordered(r["label"] for r in crows)
         if args.baseline and args.baseline in labels:
             labels = [args.baseline] + [l for l in labels if l != args.baseline]
-        paired_comp[config] = compute_paired(rows, config, labels)
-        reps_by_config[config] = crows[0]
-    confirmed_map = coherence({c: paired_comp[c][3] for c in paired_comp}, reps_by_config)
+        paired_comp[config] = compute_replicated(rows, config, labels)
 
     any_ab = False
     any_paired = False
@@ -527,10 +527,10 @@ def main():
                 print_drift(rows, config, labels)
                 if config in paired_comp:
                     any_paired = True
-                    base, latest, n_pairs, comp = paired_comp[config]
+                    base, latest, n_pairs, rounds, comp = paired_comp[config]
                     rep0 = crows[0]
                     qos0_pub = rep0.get("mode") == "pub-throughput" and rep0.get("qos") in (0, "0")
-                    print_paired_table(base, latest, n_pairs, comp, confirmed_map[config], kind, qos0_pub)
+                    print_replicated_table(base, latest, rounds, comp, kind, qos0_pub)
                 else:
                     print_comparison(rows, config, labels)
 
@@ -542,17 +542,13 @@ def main():
         print(f"\n{rule('-')}")
         print(" Reading A/B: latency_* / cpu_us_per_msg UP = regression; throughput DOWN = regression.")
         if any_paired:
-            print(" PAIRED A/B (interleaved): raw Δ% is the MEDIAN per-pair delta; p is the Wilcoxon")
-            print(" signed-rank p-value; adj Δ% is the noise-corrected change -- 0.0 when indistinguishable")
-            print(" from noise, else the raw delta shrunk toward zero by its residual jitter (James-Stein);")
-            print(" read it as 'the real change is ~this %'. A metric passes the gate when p<0.05 AND")
-            print(" |raw Δ%| >= its floor; the verdict is then better/WORSE only if COHERENT -- corroborated")
-            print(" by its transport-contrast sibling or a within-config partner metric (co-moving latency")
-            print(" percentiles, throughput<->cpu/msg), or if the metric has NO possible corroborator here")
-            print(" (no partner and no sibling, e.g. max rss in a transport-only-one config). A flag that")
-            print(" COULD have been corroborated but wasn't is marked '~noise*' -- treated as noise, since a")
-            print(" lone move with no support is almost always chance. adj Δ% is 0.0 unless it counts as a")
-            print(" verdict. Non-interleaved configs flag deltas larger than baseline CV.")
+            print(" PAIRED A/B (interleaved, replicated): raw Δ% is the MEDIAN per-pair delta, pooled over")
+            print(" rounds; each 'rndN p' is that round's Wilcoxon p with an arrow for direction. A round")
+            print(" FIRES when p<0.05 AND |Δ| clears its floor. A metric earns better/WORSE only if it fires")
+            print(" the SAME direction in EVERY round (reproduced); some-but-not-all rounds -> '~noise*';")
+            print(" none or contradictory -> '~noise'. adj Δ% is the noise-corrected effect (James-Stein),")
+            print(" shown only for a reproduced verdict. Tip: a real regression usually moves throughput and")
+            print(" cpu/msg together -- read them as a pair. Non-interleaved configs flag deltas over baseline CV.")
         else:
             print(" 'verdict' compares the LATEST label to the baseline and flags deltas larger than the")
             print(" baseline's run-to-run CV (a rough signal, not a formal significance test).")

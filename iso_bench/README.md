@@ -102,23 +102,21 @@ measures one kind of latency — the table header says which: *op latency* for c
 In the **single-build** tables (`bench.sh`) the columns are **median / mean / min / max** across reps
 and **CV%** (coefficient of variation = run-to-run noise; a low CV means a stable metric).
 
-In each config's **paired A/B** table (comparing ≥ 2 builds) the column that matters is **`adj Δ%`** —
-the change *after* correcting for run-to-run jitter (`0.0` = indistinguishable from noise; non-zero =
-the real delta). The **`verdict`** summarises it:
+In each config's **paired A/B** table (comparing ≥ 2 builds) the verdict is decided by **replication**:
+`bench-compare.sh` runs the whole suite **twice** (2 rounds, a full suite apart), and the significance
+gate (Wilcoxon `p < 0.05` and `|Δ|` over the floor) runs *per round*. The `rnd1 p` / `rnd2 p` columns
+show each round's p with an arrow for direction; **`raw Δ%`** is the pooled per-pair median and
+**`adj Δ%`** the noise-corrected effect. The **`verdict`**:
 
-- **`better` / `WORSE`** — significant **and coherent**: corroborated by the config's transport-contrast
-  sibling (e.g. `pub-tput-tcp` ↔ `pub-tput-tls`) or a within-config partner metric (co-moving latency
-  percentiles, or throughput ↔ `cpu/msg`). A metric that has **no** possible corroborator (e.g. `max rss`
-  in a config with no sibling) also lands here on a significant move — there's nothing to wait for. This
-  is the only hard signal.
-- **`~noise*`** — significant, but a metric that **could** have been corroborated wasn't: nothing a real
-  regression would move alongside it budged. A lone move with no support is almost always chance, so it's
-  treated as noise; the `*` just flags it for the curious. `raw Δ%` still shows the blip's size; `adj Δ%`
-  is `0.0`.
-- **`~noise`** — didn't clear the significance/floor gate at all.
+- **`better` / `WORSE`** — the metric fires the **same direction in every round** (reproduced). This is
+  the only hard signal — an effect that shows up independently in both passes.
+- **`~noise*`** — fired in **some but not all** rounds. Seen once, didn't replicate → treated as noise;
+  the `*` flags it for the curious. `raw Δ%` still shows the size; `adj Δ%` is `0.0`.
+- **`~noise`** — didn't fire, or fired in **opposite** directions across rounds (contradicted).
 - **`info`** — a metric that isn't gated (shown for context only).
 
-`raw Δ%` is the raw measured delta and `p` its Wilcoxon significance — context for `adj Δ%`.
+> Tip: a real regression usually moves **throughput and `cpu/msg` together** — read them as a pair.
+> (A single-pass run — e.g. `bench.sh` — falls back to "fires → verdict" with no replication check.)
 
 ## Advanced usage
 *The canonical use of this tool is the simple usage above. It is not recommended to use these more granular pieces of the tooling directly.*
@@ -131,6 +129,13 @@ masquerade as a regression. `bench-compare.sh` alternates the two builds **rep-b
 order** against one shared peer, so the drift is common to each adjacent pair and **cancels in the
 per-pair delta**. `report.py` then uses a **paired** test (Wilcoxon signed-rank on the per-pair
 deltas) whose threshold self-calibrates per config — far tighter than the CV band.
+
+**Why replicated.** The paired delta cancels drift but not *arm-luck* — the fast per-pair scheduling
+variance that, over one config's pairs, can push a correlated group of metrics off zero by chance. So
+`bench-compare.sh` runs the whole suite **twice** (`ROUNDS`, default 2), a full suite apart, and a
+verdict requires the effect to **reproduce in both rounds**. Arm-luck is independent between rounds, so
+it rarely agrees twice; a real regression reproduces. This is what replaced the earlier cross-metric
+"coherence" gate (`config_factors` is retained for a possible future sibling/family grouping).
 
 **Different library APIs compare fine.** Each binary carries its own copy of the harness compiled
 against its own library API, so you only adapt `bench_client`'s call sites on the changed branch; the
@@ -293,14 +298,14 @@ contention — it's the sharpest signal for crypto/copy-path regressions.
 
 [`report.py`](report.py) turns a results file into a human report: an **overview**, then per-config
 **statistic tables** (median / mean / min / max / CV% for throughput, latency percentiles, and
-`cpu_us_per_msg` / `max_rss_kb`), an **A/B comparison** when a config has ≥ 2 labels (`raw Δ%` + `p`
-+ noise-corrected `adj Δ%` + a coherence-gated `better` / `WORSE` / `~noise*` / `~noise` verdict),
-and a **text histogram** of each distribution (summed from the per-rep `hist_ns` HdrHistogram buckets
-— `[upper_bound_ns, count]` — so it reconstructs offline without keeping raw samples).
+`cpu_us_per_msg` / `max_rss_kb`), an **A/B comparison** when a config has ≥ 2 labels (`raw Δ%` +
+per-round `p` + noise-corrected `adj Δ%` + a replication-gated `better` / `WORSE` / `~noise*` / `~noise`
+verdict), and a **text histogram** of each distribution (summed from the per-rep `hist_ns` HdrHistogram
+buckets — `[upper_bound_ns, count]` — so it reconstructs offline without keeping raw samples).
 
-A `better` / `WORSE` verdict requires the flagged metric to pass the significance gate **and** be
-corroborated (its transport-contrast sibling or a within-config partner metric moves the same way);
-an isolated significant flag is demoted to `~noise*` — see the [Reading the report](#reading-the-report)
+A `better` / `WORSE` verdict requires the flagged metric to **reproduce** — fire the same direction in
+every replication round (`bench-compare.sh` runs the suite twice by default). A metric that fires in
+some-but-not-all rounds is demoted to `~noise*` — see the [Reading the report](#reading-the-report)
 verdict list for the full scale.
 
 ```bash
@@ -336,8 +341,9 @@ by hand afterward for the full view including histograms.
 through); the per-config workloads are a curated list in `suite.sh`.
 
 **`bench-compare.sh`** — `CUR_BIN` `REF_BIN` (required, prebuilt binaries) `CUR_LABEL` `REF_LABEL`
-`CUR_SHA` `REF_SHA` `PEER_BIN` `REPS` `WARMUP_REPS` `RESULTS_FILE` `RESET`; interleaves the two
-binaries and renders a paired A/B (`report.py --baseline $REF_LABEL`).
+`CUR_SHA` `REF_SHA` `PEER_BIN` `REPS` `ROUNDS` (replication rounds — whole suite run this many times,
+default 2; a verdict must reproduce across them) `WARMUP_REPS` `RESULTS_FILE` `RESET`; interleaves the
+two binaries and renders a paired A/B (`report.py --baseline $REF_LABEL`).
 
 Pass `--help` (or `HELP=1`) to either binary, or `-h` to any script, for the full list.
 

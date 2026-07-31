@@ -9,3 +9,7 @@ certs/
 # Accumulated benchmark results from bench-workload.sh — local run data, not committed.
 results.jsonl
 *.jsonl
+
+# Python bytecode cache (created when report.py/record.py are imported, e.g. by analysis scripts).
+__pycache__/
+*.pyc

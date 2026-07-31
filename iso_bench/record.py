@@ -7,7 +7,8 @@
 # (interleaved A/B) so the record schema lives in exactly one place. Prints the config name.
 #
 # Env in: RESULT_JSON (required, the JSON after "RESULT "), CPU_JSON (optional), REC_LABEL,
-# REC_CONFIG, REP, REC_PAIR (optional; interleave pair index), OUT_FILE, PROV_SHA/DIRTY/RUSTC/HOST.
+# REC_CONFIG, REP, REC_PAIR (optional; interleave pair index), REC_ROUND (optional; replication
+# round), OUT_FILE, PROV_SHA/DIRTY/RUSTC/HOST.
 import json
 import os
 
@@ -17,6 +18,9 @@ rec = {"label": os.environ["REC_LABEL"], "rep": int(os.environ["REP"])}
 pair = os.environ.get("REC_PAIR")
 if pair:
     rec["pair"] = int(pair)
+rnd = os.environ.get("REC_ROUND")
+if rnd:
+    rec["round"] = int(rnd)  # replication round (bench-compare runs the suite twice)
 for k in ("mode", "transport", "qos", "payload_bytes", "count", "inflight", "target_rate", "msgs_per_s", "mib_per_s", "lat_kind", "hist_ns"):
     if k in res:
         rec[k] = res[k]
