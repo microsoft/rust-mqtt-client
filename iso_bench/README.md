@@ -391,6 +391,19 @@ the **client**.
 > pinning + interleaved A/B (`bench-compare.sh`) + reading the right metrics**, not from power
 > settings.
 
+> **Do NOT hard-isolate the bench cores (`isolcpus` / `nosmt` / `rcu_nocbs`).** It was tried and
+> measured: on a same-build noise run it *collapsed* the throughput and open-loop configs
+> (throughput −28% to −56%; `pub-lat-open-tcp` could no longer sustain its target rate, p50 latency
+> went from ~63 µs to ~1.9 s, and RSS ballooned to ~267 MB from send-queue backlog). Cause:
+> `isolcpus` walls the pinned cores off from the scheduler so **network softirq/IRQ processing can
+> no longer run on them**, and `nosmt` halves logical CPUs — together they starve the throughput
+> path of the aggregate CPU it needs. The *only* thing that improved was single-thread latency
+> (cpu/msg −23%), purely from turbo headroom with fewer active cores — not worth breaking half the
+> matrix. Since `%steal` is already ~0 on a dedicated F16 (host floor is clean), the payoff is nil.
+> Keep hyperthreading **on**, no `isolcpus`; rely on pinning + interleaved A/B. At most, quiet the
+> box by hand (THP → `never`, stop background timers/`unattended-upgrades`) — but even that showed no
+> clear tail win here, so the stock VM is the recommended configuration.
+
 ### Getting trustworthy numbers
 
 - **Warm the box first — this matters more than reps.** A cold/fresh VM (post-boot, or right after
@@ -458,6 +471,5 @@ iso_bench/                # detached cargo workspace (not part of the library's 
   report.py               # human report: overview + stat tables + A/B (paired) + histograms
   test_report.py          # requirement-based tests for report.py (python3 -m unittest test_report.py)
   install-prereqs.sh      # detect + install build/run prerequisites (apt/dnf/yum)
-  vm-prep.sh              # dedicated-VM jitter tuning: isolate/quiet the bench cores; report the floor
   gen-test-certs.sh       # self-signed TLS cert generator (local testing only)
 ```
