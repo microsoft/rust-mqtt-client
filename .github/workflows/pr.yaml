@@ -125,7 +125,7 @@ jobs:
   # independent (hand-rolled MQTT, no dep on ms-mqtt-client). It only *builds* (`cargo check`) --
   # running requires a peer and a tuned host, a manual out-of-CI activity (see iso_bench/).
   iso-bench-compile:
-    name: Bench tooling compiles (pinned toolchain)
+    name: Isolation bench tooling compiles (pinned toolchain)
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
 
@@ -150,6 +150,21 @@ jobs:
 
     - name: Check bench tooling
       run: cargo check --manifest-path iso_bench/Cargo.toml
+
+  # iso_bench's Python verdict engine (report.py) drives the A/B regression verdicts; its stdlib
+  # unittest suite (test_report.py) pins that behaviour (replication gate, per-metric floors,
+  # info-metric gating). Runs on the runner's python3 -- no toolchain or deps.
+  iso-bench-test:
+    name: Isolation bench tooling tests
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Run iso_bench unit tests
+      working-directory: iso_bench
+      run: python3 -m unittest -v test_report.py
 
   # Full test suite across the supported toolchains (the MSRV declared in
   # Cargo.toml's `rust-version` and the latest stable) crossed with the

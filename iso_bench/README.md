@@ -29,6 +29,7 @@ On a fresh VM, run [`install-prereqs.sh`](install-prereqs.sh) to detect and inst
 ```
 
 - A Rust toolchain (the repo pins one via `rust-toolchain.toml`).
+- `curl` — to fetch the Rust toolchain installer (rustup) on a fresh machine.
 - A C compiler + `pkg-config` + libssl headers (`libssl-dev` / `openssl-devel`) — to build the
   `openssl` crate.
 - `taskset` (from `util-linux`) — for core pinning.
