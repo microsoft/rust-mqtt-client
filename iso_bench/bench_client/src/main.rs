@@ -48,7 +48,7 @@
 //!   HOST         broker hostname                       (default: localhost)
 //!   PORT         broker port                           (default: 1883, or 8883 when TRANSPORT=tls)
 //!   TRANSPORT    tcp | tls                             (default: tcp)
-//!   CLIENT_ID    MQTT client id                        (default: perf-harness-<pid>)
+//!   CLIENT_ID    MQTT client id                        (default: perf-harness)
 //!   USERNAME     MQTT username                         (optional)
 //!   PASSWORD     MQTT password                         (optional)
 //!   CA_FILE      PEM CA trust bundle path (TLS)        (optional; empty = use system defaults off)
@@ -61,7 +61,7 @@
 //! Workload:
 //!   MODE         pub-latency | pub-throughput | recv-throughput | recv-latency (default: pub-latency)
 //!   QOS          0 | 1                                 (default: 1; QoS 2 not implemented)
-//!   TOPIC        topic to publish/subscribe            (default: perf/harness/<pid>)
+//!   TOPIC        topic to publish/subscribe            (default: perf/harness)
 //!   PAYLOAD_BYTES payload size in bytes                (default: 64)
 //!   COUNT        measured operations                   (default: 10000)
 //!   WARMUP       discarded warmup operations           (default: 1000)

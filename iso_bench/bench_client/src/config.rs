@@ -84,7 +84,6 @@ impl Config {
             return Err("QOS 2 is not implemented by this harness; use QOS=0 or QOS=1".to_string());
         }
 
-        let pid = std::process::id();
         let payload_bytes = env_usize("PAYLOAD_BYTES", 64);
         let default_port: u16 = if tls { 8883 } else { 1883 };
 
@@ -107,7 +106,9 @@ impl Config {
             host: env_str("HOST", "localhost"),
             port: env_u64("PORT", u64::from(default_port)) as u16,
             tls,
-            client_id: env_str("CLIENT_ID", &format!("perf-harness-{pid}")),
+            // Fixed, not pid-derived: a varying id changes the CONNECT size and every packet's
+            // topic length, which perturbs the very numbers this harness compares.
+            client_id: env_str("CLIENT_ID", "perf-harness"),
             username: std::env::var("USERNAME").ok().filter(|s| !s.is_empty()),
             password: std::env::var("PASSWORD").ok().filter(|s| !s.is_empty()),
             ca,
@@ -117,7 +118,7 @@ impl Config {
             keepalive_secs: env_u64("KEEPALIVE_SECS", 0) as u16,
             mode,
             qos,
-            topic: env_str("TOPIC", &format!("perf/harness/{pid}")),
+            topic: env_str("TOPIC", "perf/harness"),
             payload: Bytes::from(vec![b'x'; payload_bytes]),
             payload_bytes,
             count: env_usize("COUNT", 10_000),

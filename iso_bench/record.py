@@ -8,7 +8,7 @@
 #
 # Env in: RESULT_JSON (required, the JSON after "RESULT "), CPU_JSON (optional), REC_LABEL,
 # REC_CONFIG, REP, REC_PAIR (optional; interleave pair index), REC_ROUND (optional; replication
-# round), OUT_FILE, PROV_SHA/DIRTY/RUSTC/HOST.
+# round), OUT_FILE, PROV_SHA/DIRTY/RUSTC/HOST, PROV_SEED (optional; interleave shuffle seed).
 import json
 import os
 
@@ -36,6 +36,9 @@ rec["git_sha"] = os.environ.get("PROV_SHA") or "unknown"
 rec["git_dirty"] = os.environ.get("PROV_DIRTY") == "1"
 rec["rustc"] = os.environ.get("PROV_RUSTC") or "unknown"
 rec["host"] = os.environ.get("PROV_HOST") or "unknown"
+seed = os.environ.get("PROV_SEED")
+if seed:
+    rec["seed"] = int(seed)  # replay an identical interleave order with SEED=<this>
 with open(os.environ["OUT_FILE"], "a") as f:
     f.write(json.dumps(rec) + "\n")
 print(rec["config"])

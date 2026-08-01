@@ -28,6 +28,8 @@
 #   CUR_SHA / REF_SHA   provenance git SHA per binary                (default: unknown)
 #   PEER_BIN      prebuilt bench_peer; built here if unset
 #   REPS          interleaved PAIRS per config per round             (default 10)
+#   SEED          seed for the per-config interleave shuffle         (default: random)
+#                 Recorded into every JSONL record; reuse it to replay an identical run order.
 #   ROUNDS        replication rounds: whole suite run this many times (default 2). A verdict needs the
 #                 effect to reproduce across rounds -- rounds are a full suite apart so arm-luck differs.
 #   WARMUP_REPS   throwaway CPU-saturating warm-up runs first        (default 8; 0 = skip)
@@ -58,6 +60,8 @@ CUR_SHA="${CUR_SHA:-unknown}"
 REF_SHA="${REF_SHA:-unknown}"
 REPS="${REPS:-10}"
 ROUNDS="${ROUNDS:-2}"  # whole-suite replication rounds; report.py requires a verdict to reproduce across them
+SEED="${SEED:-$RANDOM}"
+RANDOM="$SEED"  # seed once: the whole run's shuffle sequence is then a function of SEED alone
 WARMUP_REPS="${WARMUP_REPS:-8}"
 RESULTS_FILE="${RESULTS_FILE:-$script_dir/results.jsonl}"
 RESET="${RESET:-1}"
@@ -113,7 +117,7 @@ run_and_record() {
     }
     RESULT_JSON="${result_line#RESULT }" CPU_JSON="${cpu_line#CPU }" \
         REC_LABEL="$label" REC_CONFIG="$cfg_name" REP="$pair" REC_PAIR="$pair" REC_ROUND="$round" OUT_FILE="$RESULTS_FILE" \
-        PROV_SHA="$sha" PROV_DIRTY=0 PROV_RUSTC="$prov_rustc" PROV_HOST="$prov_host" \
+        PROV_SHA="$sha" PROV_DIRTY=0 PROV_RUSTC="$prov_rustc" PROV_HOST="$prov_host" PROV_SEED="$SEED" \
         python3 "$script_dir/record.py" >/dev/null
 }
 
@@ -137,7 +141,7 @@ make_order() {
     done
 }
 
-echo "== iso_bench COMPARE (interleaved): [$CUR_LABEL] vs baseline [$REF_LABEL], reps=$REPS rounds=$ROUNDS configs=${#suite[@]} ==" >&2
+echo "== iso_bench COMPARE (interleaved): [$CUR_LABEL] vs baseline [$REF_LABEL], reps=$REPS rounds=$ROUNDS configs=${#suite[@]} seed=$SEED ==" >&2
 
 # Warm the box (CPU-saturating throughput-TLS), alternating binaries so both crypto paths warm; not
 # recorded. See bench.sh for why latency warm-ups don't ramp turbo.

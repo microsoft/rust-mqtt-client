@@ -91,6 +91,9 @@ def print_overview(rows, configs):
     print(rule())
     print(f" builds (labels): {', '.join(labels)}")
     print(f" configs:         {len(configs)}")
+    seeds = ordered(r["seed"] for r in rows if r.get("seed") is not None)
+    if seeds:
+        print(f" interleave seed: {', '.join(str(s) for s in seeds)}   (replay with SEED=<seed>)")
 
     # Per-build provenance -- so cross-branch comparisons are auditable. A/B assumes the harness /
     # workload is identical across labels; differing toolchain or host is a confound worth flagging.

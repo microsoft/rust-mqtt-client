@@ -292,15 +292,25 @@ where
                 };
             }
         }
-        if let Some(off) = stamp_off {
-            // Stamp the current send time (epoch nanos) into each frame's payload for recv-latency.
-            let ts = epoch_nanos().to_le_bytes();
+        // Each frame carries the epoch time of ITS OWN write. One shared per-batch stamp would
+        // charge the whole batch's transmission time to every frame after the first, inflating
+        // recv-latency by an amount that varies with socket/TLS backpressure.
+        let write_res = if let Some(off) = stamp_off {
+            let mut res = Ok(());
             for i in 0..cfg.batch {
-                let p = i * frame_len + off;
-                batch[p..p + 8].copy_from_slice(&ts);
+                let start = i * frame_len;
+                let p = start + off;
+                batch[p..p + 8].copy_from_slice(&epoch_nanos().to_le_bytes());
+                res = wr.write_all(&batch[start..start + frame_len]).await;
+                if res.is_err() {
+                    break;
+                }
             }
-        }
-        if wr.write_all(&batch).await.is_err() {
+            res
+        } else {
+            wr.write_all(&batch).await
+        };
+        if write_res.is_err() {
             break; // client disconnected
         }
         sent += batch_msgs;
