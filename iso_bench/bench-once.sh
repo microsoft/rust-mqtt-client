@@ -24,6 +24,8 @@
 #   Peer:      BATCH RATE            (feed only)
 #   Pinning:   CLIENT_CORES PEER_CORES   (taskset masks; defaults suit a 16-vCPU F16s_v2)
 #   Extras:    NETEM_DELAY (e.g. 5ms, needs root)  CERT_DIR (TLS)
+#              LAYOUT_PAD  pad argv+env to a fixed size so the two A/B arms get identical stack
+#                          layout (default 512; 0 disables) -- see the padding block below
 #
 # Usage: ./bench-once.sh            (all via env)
 #        MODE=recv-throughput PAYLOAD_BYTES=256 COUNT=200000 ./bench-once.sh
@@ -68,6 +70,9 @@ CLIENT_CORES="${CLIENT_CORES:-2,4}"
 PEER_CORES="${PEER_CORES:-8,10}"
 NETEM_DELAY="${NETEM_DELAY:-}"
 CERT_DIR="${CERT_DIR:-$script_dir/certs}"
+# Target byte-count for the client's layout-sensitive argv/env fields; see the padding block below.
+# 0 disables padding. Raise it if the warning there fires.
+LAYOUT_PAD="${LAYOUT_PAD:-512}"
 
 # Default port by transport.
 if [[ -z "$PORT" ]]; then
@@ -211,6 +216,25 @@ client_env=(
     "${client_tls_env[@]}"
 )
 [[ -n "$LABEL" ]] && client_env+=(LABEL="$LABEL")
+
+# argv and environ are copied onto the top of the initial stack, so their TOTAL byte count shifts
+# every stack address below them and with it cache-set/alignment behaviour (Mytkowicz et al., ASPLOS
+# '09, measured up to ~10% swings from environment size alone). In an interleaved A/B the two arms
+# differ in exactly the fields below -- CLIENT_BIN path and LABEL -- so one arm would carry a fixed
+# layout offset in EVERY rep. That is a systematic bias, not noise: it survives pairing and it
+# reproduces across rounds, which is precisely what report.py reads as a real regression. Pad the
+# variable-length fields to a constant total so both arms get identical layout.
+if ((LAYOUT_PAD > 0)); then
+    # argv[0] and CLIENT_BIN= both carry the path, hence 2x.
+    pad_len=$((LAYOUT_PAD - 2 * ${#client_bin} - ${#LABEL}))
+    if ((pad_len < 0)); then
+        echo "warning: LAYOUT_PAD=$LAYOUT_PAD too small for this binary path; A/B arms may differ in" >&2
+        echo "         stack layout. Raise it above $((2 * ${#client_bin} + ${#LABEL}))." >&2
+    else
+        printf -v pad_str '%*s' "$pad_len" ''
+        client_env+=(ISO_BENCH_PAD="${pad_str// /x}")
+    fi
+fi
 
 if [[ -n "$TIME_BIN" ]]; then
     env "${client_env[@]}" "$TIME_BIN" -v -o "$time_out" \
