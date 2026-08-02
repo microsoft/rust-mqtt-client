@@ -134,8 +134,9 @@ def first_with(rows, label, key):
 DRIFT_KEYS = ["mode", "transport", "qos", "payload_bytes", "count", "inflight", "target_rate"]
 
 
-def print_drift(rows, config, labels):
-    """Warn if the workload definition drifted across labels. Returns True if drift was found."""
+def workload_drift(rows, config, labels):
+    """Workload params that differ across labels for one config -> [(key, {label: value})]; [] = clean.
+    Shared by the human report and --json so both read drift from the same place."""
     drifted = []
     for key in DRIFT_KEYS:
         per_label = {}
@@ -145,6 +146,12 @@ def print_drift(rows, config, labels):
                 per_label[lbl] = vals[0]
         if len({str(v) for v in per_label.values()}) > 1:
             drifted.append((key, per_label))
+    return drifted
+
+
+def print_drift(rows, config, labels):
+    """Warn if the workload definition drifted across labels. Returns True if drift was found."""
+    drifted = workload_drift(rows, config, labels)
     if drifted:
         print("\n  !! WORKLOAD DRIFT across labels -- this A/B compares different workloads:")
         for key, per_label in drifted:
@@ -465,6 +472,101 @@ def print_histogram(rows, config, label, kind):
         lower = upper_us
 
 
+# ---- machine-readable output -----------------------------------------------------------------------
+# --json emits the SAME verdicts the tables show -- compute_replicated() stays the single source of
+# truth for the statistics, this only serialises what it already returned. Automation must never scrape
+# the ASCII tables: those column widths are formatting, and a width change would silently break callers.
+JSON_SCHEMA = 1
+
+_METRIC_META = {key: (unit, better) for key, _, unit, better in METRICS}
+
+
+def json_payload(rows, configs, paired_comp, path):
+    """The whole run as one JSON object: per-config/per-metric verdicts plus a family-wise summary.
+
+    `summary.any_flagged` is deliberately top-level because it is the number a user actually
+    experiences -- a suite run either shows a non-'~noise' verdict somewhere or it doesn't. On an A/A
+    run (identical binary both arms) every flagged cell is a false positive by construction, so the
+    rate of any_flagged over repeated A/A runs IS the family-wise false-positive rate. Per-cell counts
+    are kept alongside it to show WHICH configs/metrics are the noisy ones."""
+    labels = ordered(r["label"] for r in rows)
+    prov = {}
+    for lbl in labels:
+        r = first_with(rows, lbl, "git_sha") or {}
+        prov[lbl] = {"git_sha": r.get("git_sha"), "git_dirty": bool(r.get("git_dirty")),
+                     "rustc": r.get("rustc"), "host": r.get("host")}
+    # Same confounds print_overview warns about: differing toolchain/host means the two labels were
+    # not measured by the same instrument.
+    confounds = []
+    for field, what in (("rustc", "toolchain"), ("host", "host")):
+        vals = {prov[l][field] for l in labels if prov[l].get(field) is not None}
+        if len(vals) > 1:
+            confounds.append({"kind": what, "field": field, "values": sorted(map(str, vals))})
+
+    out_configs, flagged = [], []
+    n_gated = n_flagged = n_soft = 0
+    for config in configs:
+        crows = [r for r in rows if config_of(r) == config]
+        clabels = ordered(r["label"] for r in crows)
+        desc, kind = config_meta(crows)
+        entry = {
+            "config": config, "desc": desc, "lat_kind": kind, "labels": clabels,
+            "paired": config in paired_comp,
+            "reps": {l: sum(1 for r in crows if r["label"] == l) for l in clabels},
+            "workload": {k: crows[0].get(k) for k in DRIFT_KEYS},
+            "workload_drift": [{"key": k, "values": {l: v for l, v in pl.items()}}
+                               for k, pl in workload_drift(rows, config, clabels)],
+        }
+        if config in paired_comp:
+            base, latest, rounds, comp = paired_comp[config]
+            entry.update(baseline=base, latest=latest, rounds=list(rounds))
+            metrics = []
+            for m in comp:
+                unit, better = _METRIC_META[m["key"]]
+                metrics.append({
+                    "key": m["key"], "display": m["disp"], "unit": unit, "better": better,
+                    "info": m["info"], "verdict": m["verdict"],
+                    "baseline_median": m["bmed"], "latest_median": m["lmed"],
+                    "raw_delta_pct": m["raw_med"], "adj_delta_pct": m["adj"],
+                    "per_round": [
+                        None if pr is None else
+                        {"round": rnd, "p": pr["p"], "fired": pr["fired"],
+                         "delta_sign": "up" if pr["arrow"] == "↑" else "down", "dir": pr["dir"]}
+                        for rnd, pr in zip(rounds, m["per_round"])],
+                })
+                if not m["info"] and m["verdict"] != "-":     # a gated cell: eligible to fire
+                    n_gated += 1
+                    if m["verdict"] in ("better", "WORSE"):
+                        n_flagged += 1
+                        flagged.append({"config": config, "metric": m["key"], "verdict": m["verdict"],
+                                        "raw_delta_pct": m["raw_med"], "adj_delta_pct": m["adj"]})
+                    elif m["verdict"] == "~noise*":
+                        n_soft += 1
+            entry["metrics"] = metrics
+        out_configs.append(entry)
+
+    return {
+        "schema": JSON_SCHEMA,
+        "path": path,
+        "records": len(rows),
+        "labels": labels,
+        "provenance": prov,
+        "confounds": confounds,
+        "seeds": ordered(r["seed"] for r in rows if r.get("seed") is not None),
+        "configs": out_configs,
+        "summary": {
+            "n_configs": len(out_configs),
+            "gated_cells": n_gated,          # cells that COULD fire (excludes 'info' and no-data)
+            "flagged_cells": n_flagged,      # better/WORSE
+            "soft_cells": n_soft,            # '~noise*': fired in some rounds, not all
+            "any_flagged": n_flagged > 0,    # the family-wise event
+            "flagged": flagged,
+            # Any of these means the verdicts above are not trustworthy -- check before counting them.
+            "confounded": bool(confounds) or any(c["workload_drift"] for c in out_configs),
+        },
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Render an iso_bench results.jsonl file for human reading."
@@ -476,6 +578,8 @@ def main():
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--no-hist", action="store_true", help="tables only (no histograms)")
     g.add_argument("--hist-only", action="store_true", help="histograms only (no tables)")
+    g.add_argument("--json", action="store_true",
+                   help="emit verdicts as JSON on stdout instead of tables (for automation)")
     args = ap.parse_args()
 
     try:
@@ -491,11 +595,9 @@ def main():
 
     configs = ordered(config_of(r) for r in rows)
 
-    if not args.hist_only:
-        print_overview(rows, configs)
-
     # Interleaved (paired) stats per config -- PURE REPLICATION: a verdict requires the effect to
     # reproduce across rounds (no cross-config coherence; config_factors retained for a future family hook).
+    # Computed before any printing so --json can return without emitting a byte of human output.
     paired_comp = {}
     for config in configs:
         crows = [r for r in rows if config_of(r) == config]
@@ -505,6 +607,14 @@ def main():
         if args.baseline and args.baseline in labels:
             labels = [args.baseline] + [l for l in labels if l != args.baseline]
         paired_comp[config] = compute_replicated(rows, config, labels)
+
+    if args.json:
+        json.dump(json_payload(rows, configs, paired_comp, args.path), sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return
+
+    if not args.hist_only:
+        print_overview(rows, configs)
 
     any_ab = False
     any_paired = False

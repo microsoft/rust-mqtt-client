@@ -189,5 +189,97 @@ class TestEndToEnd(unittest.TestCase):
             os.unlink(path)
 
 
+class TestJsonOutput(unittest.TestCase):
+    """--json is what automation reads, so it must carry the SAME verdicts the tables show and must
+    never regress into needing a scraper. (The tables genuinely cannot be scraped: 'max rss' contains
+    a space, and msgs_per_s/mib_per_s BOTH render as 'throughput' -- indistinguishable by name.)"""
+
+    # One clean config, one with a reproduced throughput+cpu regression, one that fires in round 1 only.
+    def _payload(self, extra_args=()):
+        rows = make_rows("clean-tcp", [{}, {}])
+        reg = {"cpu_us_per_msg": steady(6.0), "msgs_per_s": steady(-5.0)}
+        rows += make_rows("regressed-tcp", [reg, reg], mode="pub-throughput")
+        rows += make_rows("flaky-tls", [{"lat_p99": steady(4.0)}, {}], transport="tls")
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+            path = f.name
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            out = subprocess.run([sys.executable, os.path.join(here, "report.py"), path,
+                                  "--baseline", "main", "--json", *extra_args],
+                                 capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return rows, json.loads(out.stdout)   # parses => stdout was pure JSON, no human output
+        finally:
+            os.unlink(path)
+
+    def test_verdicts_match_compute_replicated(self):
+        """The serialiser must not re-derive anything -- every cell equals compute_replicated()."""
+        rows, doc = self._payload()
+        for c in doc["configs"]:
+            _, _, _, out = report.compute_replicated(rows, c["config"], ["main", "branch"])
+            self.assertEqual([m["verdict"] for m in c["metrics"]], [m["verdict"] for m in out],
+                             f"{c['config']}: json verdicts diverged from compute_replicated")
+            self.assertEqual([m["key"] for m in c["metrics"]], [m["key"] for m in out])
+
+    def test_ambiguous_display_names_are_distinguishable(self):
+        rows, doc = self._payload()
+        reg = next(c for c in doc["configs"] if c["config"] == "regressed-tcp")
+        by_key = {m["key"]: m for m in reg["metrics"]}
+        self.assertEqual(by_key["msgs_per_s"]["verdict"], "WORSE")
+        self.assertEqual(by_key["mib_per_s"]["verdict"], "~noise")   # same display name, different cell
+        self.assertEqual(by_key["cpu_us_per_msg"]["verdict"], "WORSE")
+
+    def test_family_wise_summary(self):
+        """summary is the FP/FN ledger's input: gated cells, flagged cells, and the family-wise event."""
+        _, doc = self._payload()
+        s = doc["summary"]
+        self.assertEqual(s["gated_cells"], 3 * len(GATED_METRICS))   # every metric gated in these configs
+        self.assertEqual(s["flagged_cells"], 2)                      # msgs_per_s + cpu_us_per_msg
+        self.assertEqual(s["soft_cells"], 1)                         # lat_p99 fired one round -> ~noise*
+        self.assertTrue(s["any_flagged"])
+        self.assertFalse(s["confounded"])
+        self.assertEqual({(f["config"], f["metric"]) for f in s["flagged"]},
+                         {("regressed-tcp", "msgs_per_s"), ("regressed-tcp", "cpu_us_per_msg")})
+
+    def test_clean_run_reports_no_flags(self):
+        """The A/A shape: identical arms must yield any_flagged=False, or the FP rate is meaningless."""
+        rows = make_rows("aa-tcp", [{}, {}])
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+            path = f.name
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            out = subprocess.run([sys.executable, os.path.join(here, "report.py"), path,
+                                  "--baseline", "main", "--json"], capture_output=True, text=True)
+            doc = json.loads(out.stdout)
+            self.assertFalse(doc["summary"]["any_flagged"])
+            self.assertEqual(doc["summary"]["flagged_cells"], 0)
+        finally:
+            os.unlink(path)
+
+    def test_confound_is_surfaced(self):
+        """A toolchain mismatch invalidates the comparison -- automation must see it without parsing text."""
+        rows = make_rows("c", [{}, {}])
+        for r in rows:
+            if r["label"] == "branch":
+                r["rustc"] = "1.99.0"
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+            path = f.name
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            out = subprocess.run([sys.executable, os.path.join(here, "report.py"), path,
+                                  "--baseline", "main", "--json"], capture_output=True, text=True)
+            doc = json.loads(out.stdout)
+            self.assertTrue(doc["summary"]["confounded"])
+            self.assertEqual([c["kind"] for c in doc["confounds"]], ["toolchain"])
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()
