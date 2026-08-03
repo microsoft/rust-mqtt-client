@@ -6,6 +6,9 @@
 # This is the readiness signal the broker contract promises, and it is deliberately not
 # left to container healthchecks: not every broker image ships a client to probe with, and
 # a reconciled Kubernetes resource can still race its forwarded port.
+#
+# Callers always probe loopback. Provisioning is local by definition, so the suite's
+# MQTT_HOST -- which may point somewhere else entirely -- deliberately does not apply here.
 wait_for_port() {
     local host="${1:-127.0.0.1}"
     local port="${2:-1883}"
