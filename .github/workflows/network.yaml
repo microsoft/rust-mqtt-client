@@ -1,0 +1,112 @@
+# Network: live tests against real MQTT brokers.
+#
+# Guiding principles (kept consistent with `pr.yaml`, `nightly.yaml`, `fuzz.yaml`):
+#
+#   1. Why this isn't the gate's `test` job. These suites need a broker running
+#      alongside the runner, so they can't ride that job's toolchain x deps
+#      matrix. But unlike fuzzing or advisory scans, a containerized broker is
+#      DETERMINISTIC with respect to our code -- a red run is actionable by the
+#      PR author -- so this workflow does gate pull requests. It is separate
+#      only because the broker lifecycle doesn't fit the matrix, and so that a
+#      broker image outage is legible as its own failure rather than a
+#      mysterious `make test` break.
+#
+#   2. Broker matrix. The test suite is broker-agnostic -- it connects to whatever
+#      MQTT_HOST/MQTT_PORT point at -- so each matrix entry only swaps which
+#      broker gets provisioned. Every broker directory exposes `up.sh`/`down.sh`,
+#      which is what lets brokers with completely different runtimes share one
+#      job: Mosquitto is a container, while AIO MQ is a Helm chart that needs a
+#      k3d cluster. `kubernetes: true` just asks for that extra tooling.
+#
+#   3. Containerized vs. hosted brokers. Everything here runs from a local
+#      container. A HOSTED broker (e.g. Azure Event Grid) needs credentials,
+#      which GitHub withholds from fork pull requests -- so those must arrive as
+#      schedule-only entries behind an `environment:` gate, never as
+#      `pull_request` ones. Keeping the matrix per-broker makes that a config
+#      change rather than a rewrite.
+
+name: 'Network'
+
+on:
+  workflow_dispatch:
+  pull_request:
+  # Mirrors pr.yaml: `pull_request` covers feature branches, so `push` is scoped
+  # to the default branch to validate the post-merge result without double runs.
+  push:
+    branches: [main]
+
+# Only allow one run per branch at a time; cancel superseded runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  network:
+    name: Network (${{ matrix.broker }})
+    runs-on: 'ubuntu-24.04'
+    # Generous because the AIO MQ leg stands up a k3d cluster and Helm-installs an
+    # operator before a single test runs; Mosquitto starts in seconds.
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - broker: mosquitto
+          - broker: emqx
+          - broker: hivemq-ce
+          - broker: aio-mq
+            kubernetes: true
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    # kubectl ships with the runner image; helm is pinned and k3d isn't present at all.
+    - name: Install Helm
+      if: matrix.kubernetes
+      uses: azure/setup-helm@v4
+      with:
+        version: 'v3.16.3'
+
+    - name: Install k3d
+      if: matrix.kubernetes
+      run: |
+        curl -fsSL -o /usr/local/bin/k3d \
+          https://github.com/k3d-io/k3d/releases/download/v5.7.5/k3d-linux-amd64
+        chmod +x /usr/local/bin/k3d
+        k3d version
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        # Swatinem/rust-cache (below) handles caching, including target/.
+        cache: false
+        # Don't let the action inject its default `RUSTFLAGS=-D warnings`;
+        # warning-denial belongs to `make check` (see pr.yaml).
+        rustflags: ''
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: network
+
+    # The broker lifecycle is split into explicit steps rather than using
+    # `make network-test`: teardown then gets its own `if: always()` step, so it
+    # still runs if the job is cancelled, and each phase fails distinctly.
+    - name: Start broker
+      run: tests/network/brokers/${{ matrix.broker }}/up.sh
+
+    - name: Test
+      env:
+        MQTT_BROKER: ${{ matrix.broker }}
+      run: cargo test --features __network --test network
+
+    - name: Stop broker
+      if: always()
+      run: tests/network/brokers/${{ matrix.broker }}/down.sh
