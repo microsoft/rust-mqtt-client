@@ -1,15 +1,14 @@
-# Network: live tests against real MQTT brokers.
+# Network: scheduled live tests against the full matrix of real MQTT brokers.
 #
 # Guiding principles (kept consistent with `pr.yaml`, `nightly.yaml`, `fuzz.yaml`):
 #
-#   1. Why this isn't the gate's `test` job. These suites need a broker running
-#      alongside the runner, so they can't ride that job's toolchain x deps
-#      matrix. But unlike fuzzing or advisory scans, a containerized broker is
-#      DETERMINISTIC with respect to our code -- a red run is actionable by the
-#      PR author -- so this workflow does gate pull requests. It is separate
-#      only because the broker lifecycle doesn't fit the matrix, and so that a
-#      broker image outage is legible as its own failure rather than a
-#      mysterious `make test` break.
+#   1. Gate vs. scheduled. The PR gate already tests against Mosquitto (the
+#      `network-mosquitto` job in pr.yaml), which is what proves a change didn't break
+#      talking to a real server. This workflow adds the BREADTH the gate can't hold
+#      stable: other implementations, and a broker pulled from a build registry that
+#      can rotate independently of our code. A red run here often means the outside
+#      world moved, so -- like `nightly.yaml` -- it must not block a PR, and a
+#      `notify` job files the failure since no author is watching.
 #
 #   2. Broker matrix. The test suite is broker-agnostic -- it connects to whatever
 #      MQTT_HOST/MQTT_PORT point at -- so each matrix entry only swaps which
@@ -19,25 +18,22 @@
 #      k3d cluster. `kubernetes: true` just asks for that extra tooling.
 #
 #   3. Containerized vs. hosted brokers. Everything here runs from a local
-#      container. A HOSTED broker (e.g. Azure Event Grid) needs credentials,
-#      which GitHub withholds from fork pull requests -- so those must arrive as
-#      schedule-only entries behind an `environment:` gate, never as
-#      `pull_request` ones. Keeping the matrix per-broker makes that a config
-#      change rather than a rewrite.
+#      container. A HOSTED broker (e.g. Azure Event Grid) needs credentials, which
+#      GitHub withholds from fork pull requests -- another reason this workflow,
+#      not the gate, is where such entries belong, behind an `environment:` gate.
 
 name: 'Network'
 
 on:
+  schedule:
+    # 13:00 UTC (06:00 PT) daily -- staggered an hour after `fuzz.yaml` so the
+    # scheduled workloads don't pile onto the same runner minute.
+    - cron: '0 13 * * *'
   workflow_dispatch:
-  pull_request:
-  # Mirrors pr.yaml: `pull_request` covers feature branches, so `push` is scoped
-  # to the default branch to validate the post-merge result without double runs.
-  push:
-    branches: [main]
 
-# Only allow one run per branch at a time; cancel superseded runs.
+# One scheduled run at a time.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}
   cancel-in-progress: true
 
 permissions:
@@ -53,6 +49,11 @@ jobs:
     # Generous because the AIO MQ leg stands up a k3d cluster and Helm-installs an
     # operator before a single test runs; Mosquitto starts in seconds.
     timeout-minutes: 25
+    # AIO MQ pulls its chart from a build registry rather than a distribution
+    # endpoint, so it can fail for reasons unrelated to us. Letting it go red
+    # without failing the workflow keeps it from masking a real regression in
+    # another broker; the `notify` job still reports genuine failures.
+    continue-on-error: ${{ matrix.broker == 'aio-mq' }}
 
     strategy:
       fail-fast: false
@@ -110,3 +111,36 @@ jobs:
     - name: Stop broker
       if: always()
       run: tests/network/brokers/${{ matrix.broker }}/down.sh
+
+  # Scheduled runs have no PR to turn red and no author watching, so surface
+  # failures by opening (or updating) a tracking issue. The AIO MQ leg is
+  # neutralized by continue-on-error above and won't reach here.
+  notify:
+    name: Report failure
+    needs: [network]
+    if: failure()
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+    - name: Open or update tracking issue
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        title="Network workflow failed"
+        body="The scheduled network workflow failed. Run: ${RUN_URL}"
+        number="$(
+          gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --json number,title \
+            --jq "[.[] | select(.title == \"${title}\")][0].number // empty"
+        )"
+        if [ -n "${number}" ]; then
+          gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+        else
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+        fi

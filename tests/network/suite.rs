@@ -23,33 +23,7 @@ use ms_mqtt_client::topic::TopicFilter;
 
 const DEFAULT_PORT: u16 = 1883;
 
-// Real clock on purpose: unlike the offline suites, this drives actual network I/O.
-#[tokio::test]
-async fn connect_disconnect() {
-    // Boxed because the client's connection state makes this future large (clippy::large_futures).
-    with_timeout(Box::pin(async {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
-        let live = connect_tcp(&endpoint, "connect_disconnect").await;
-
-        assert!(
-            live.connack.is_success(),
-            "broker refused the connection: {:?}",
-            live.connack
-        );
-
-        live.disconnect_handle
-            .disconnect(&DisconnectProperties::default())
-            .expect("connection should still be running");
-
-        let (_connect_handle, event) = live.connection.run_until_disconnect().await;
-        assert!(
-            matches!(event, DisconnectedEvent::ApplicationDisconnect),
-            "expected a client-initiated disconnect, got {event:?}"
-        );
-    }))
-    .await;
-}
-
+// TODO: Consider moving elsewhere, as this is not really a client test
 // Guards the inventory in `common::capabilities` against drift: if a broker gains or loses a
 // feature, this fails instead of tests being silently skipped forever.
 #[tokio::test]
@@ -74,6 +48,33 @@ async fn inventory_matches_broker() {
             .disconnect(&DisconnectProperties::default())
             .expect("connection should still be running");
         let _ = live.connection.run_until_disconnect().await;
+    }))
+    .await;
+}
+
+// Real clock on purpose: unlike the offline suites, this drives actual network I/O.
+#[tokio::test]
+async fn connect_disconnect() {
+    // Boxed because the client's connection state makes this future large (clippy::large_futures).
+    with_timeout(Box::pin(async {
+        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let live = connect_tcp(&endpoint, "connect_disconnect").await;
+
+        assert!(
+            live.connack.is_success(),
+            "broker refused the connection: {:?}",
+            live.connack
+        );
+
+        live.disconnect_handle
+            .disconnect(&DisconnectProperties::default())
+            .expect("connection should still be running");
+
+        let (_connect_handle, event) = live.connection.run_until_disconnect().await;
+        assert!(
+            matches!(event, DisconnectedEvent::ApplicationDisconnect),
+            "expected a client-initiated disconnect, got {event:?}"
+        );
     }))
     .await;
 }

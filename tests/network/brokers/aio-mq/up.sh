@@ -5,8 +5,8 @@
 # reconciles Broker/BrokerListener CRs, so this stands up a throwaway k3d cluster rather
 # than a container. Approach adapted from the Azure-NBC CI scripts.
 #
-# The chart's "simple" example is used as-is: port 1883, no auth, no TLS. That is what
-# makes MQ interchangeable with Mosquitto for this suite.
+# The chart supplies the operator and CRDs; the broker itself comes from broker.yaml, which
+# exposes plaintext 1883 with no auth -- what makes MQ interchangeable with the other brokers.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -53,22 +53,8 @@ for _ in $(seq 1 12); do
     sleep 5
 done
 
-log "Applying the 'simple' broker deployment..."
-kubectl apply -f "$WORKDIR/aio-broker/examples/deployment.simple.yaml"
-
-# The example's listener is a ClusterIP service, which the published host port would accept
-# connections on and then immediately drop. LoadBalancer makes k3s ServiceLB bind the node
-# port and forward to the broker.
-log "Switching the listener to a LoadBalancer service..."
-for _ in $(seq 1 12); do
-    listener_name="$(kubectl get brokerlistener -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-    if [ -n "$listener_name" ]; then
-        break
-    fi
-    sleep 5
-done
-kubectl patch brokerlistener "${listener_name:-listener}" --type merge \
-    -p '{"spec":{"serviceType":"LoadBalancer"}}'
+log "Applying the broker definition..."
+kubectl apply -f broker.yaml
 
 log "Waiting for the broker to reach Running..."
 for _ in $(seq 1 30); do
