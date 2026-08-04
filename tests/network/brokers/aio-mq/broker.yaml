@@ -1,0 +1,45 @@
+# Broker definition for the live network suite: plaintext 1883, no auth, no TLS.
+# Adapted from the chart's examples/deployment.simple.yaml, with two deliberate changes:
+#
+#   - The listener is LoadBalancer from the start. The example uses the default ClusterIP,
+#     which is cluster-internal only, so the published host port accepts connections and
+#     then drops them. Declaring it here avoids applying the example and patching it after.
+#   - Cardinality and memory are at their minimum. The example provisions 2 frontends and
+#     2 backend chains of 2; this suite runs a handful of clients on small CI runners.
+#
+# At least one BrokerListener must exist before the Broker, or the Broker reports a
+# missing-listener failure -- hence the ordering below.
+---
+apiVersion: mqttbroker.iotoperations.azure.com/v1
+kind: BrokerListener
+metadata:
+  name: listener
+  namespace: default
+spec:
+  brokerRef: broker
+  serviceName: aio-broker
+  serviceType: LoadBalancer
+  ports:
+    - port: 1883
+
+---
+apiVersion: mqttbroker.iotoperations.azure.com/v1
+kind: Broker
+metadata:
+  name: broker
+  namespace: default
+spec:
+  advanced:
+    # Internal TLS would pull in cert-manager, which this deployment doesn't install.
+    encryptInternalTraffic: Disabled
+  cardinality:
+    frontend:
+      replicas: 1
+      workers: 1
+    backendChain:
+      redundancyFactor: 1
+      partitions: 1
+      workers: 1
+  generateResourceLimits:
+    cpu: Disabled
+  memoryProfile: "Tiny"

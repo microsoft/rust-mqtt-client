@@ -1,0 +1,18 @@
+# One of the brokers the live network suite can run against.
+# Brought up and torn down by `make network-test BROKER=mosquitto` (the default).
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      # Relative paths resolve against this file's directory, so `-f` from the repo root works.
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      # The image ships the mosquitto clients; a successful publish proves the listener is
+      # accepting connections, which is what `up --wait` needs to gate on.
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-p", "1883", "-t", "healthcheck", "-m", "ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s

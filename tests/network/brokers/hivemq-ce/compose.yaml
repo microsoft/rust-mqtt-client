@@ -1,0 +1,10 @@
+# One of the brokers the live network suite can run against.
+# Brought up and torn down by `make network-test BROKER=hivemq-ce`.
+services:
+  hivemq:
+    image: hivemq/hivemq-ce:2026.5
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    environment:
+      # The image defaults to this, but the suite depends on it, so make it explicit.
+      HIVEMQ_ALLOW_ALL_CLIENTS: "true"

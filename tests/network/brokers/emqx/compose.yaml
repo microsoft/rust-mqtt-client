@@ -1,0 +1,13 @@
+# One of the brokers the live network suite can run against.
+# Brought up and torn down by `make network-test BROKER=emqx`.
+services:
+  emqx:
+    image: emqx/emqx:6.2.2
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+      start_period: 10s
