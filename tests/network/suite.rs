@@ -11,15 +11,18 @@
 //! test. Add a new area of coverage as another module here.
 
 mod common;
+mod pubsub;
 
 use std::num::NonZeroU32;
-use std::pin::pin;
 
+use bytes::Bytes;
 use common::capabilities::{Feature, broker_name, supports};
 use common::{Endpoint, connect_tcp, with_timeout};
-use ms_mqtt_client::client::DisconnectedEvent;
-use ms_mqtt_client::packet::{DisconnectProperties, QoS, RetainOptions, SubscribeProperties};
-use ms_mqtt_client::topic::TopicFilter;
+use ms_mqtt_client::client::{DisconnectedEvent, ManualAcknowledgement};
+use ms_mqtt_client::packet::{
+    DisconnectProperties, PublishProperties, QoS, RetainOptions, SubscribeProperties,
+};
+use ms_mqtt_client::topic::{TopicFilter, TopicName};
 
 const DEFAULT_PORT: u16 = 1883;
 
@@ -85,13 +88,15 @@ async fn subscribe_with_subscription_identifier() {
     require_feature!(Feature::SubscriptionIdentifiers);
     with_timeout(Box::pin(async {
         let endpoint = Endpoint::from_env(DEFAULT_PORT);
-        let live = connect_tcp(&endpoint, "subscribe_with_subscription_identifier").await;
-        let mut connection = pin!(live.connection.run_until_disconnect());
+        let mut live = connect_tcp(&endpoint, "subscribe_with_subscription_identifier")
+            .await
+            .start();
+        let topic = "ms-mqtt-client/network/subid";
 
         let token = live
             .client
             .subscribe(
-                TopicFilter::new("ms-mqtt-client/network/subid").unwrap(),
+                TopicFilter::new(topic).unwrap(),
                 QoS::AtLeastOnce,
                 false,
                 RetainOptions::default(),
@@ -103,21 +108,38 @@ async fn subscribe_with_subscription_identifier() {
             .await
             .expect("client should still be attached");
 
-        // Packets only move while the connection is polled, so race the two.
-        let mut token = pin!(token);
-        let suback = tokio::select! {
-            result = &mut token => result.expect("SUBSCRIBE should complete"),
-            _ = &mut connection => panic!("connection ended before the SUBACK arrived"),
-        };
+        let suback = token.await.expect("SUBSCRIBE should complete");
         assert!(
             suback.is_success(),
             "broker rejected the subscription: {suback:?}"
         );
 
-        live.disconnect_handle
-            .disconnect(&DisconnectProperties::default())
-            .expect("connection should still be running");
-        let _ = connection.await;
+        live.client
+            .publish_qos0(
+                TopicName::new(topic).unwrap(),
+                Bytes::from_static(b"subscription identifier"),
+                false,
+                PublishProperties::default(),
+            )
+            .await
+            .expect("client should still be attached")
+            .await
+            .expect("PUBLISH should be sent");
+        let (publish, acknowledgement) = live
+            .receiver
+            .recv()
+            .await
+            .expect("subscription should receive the PUBLISH");
+        assert_eq!(
+            publish.properties.subscription_identifiers,
+            vec![NonZeroU32::new(1).unwrap()]
+        );
+        assert!(matches!(acknowledgement, ManualAcknowledgement::QoS0));
+
+        assert!(matches!(
+            live.disconnect().await,
+            DisconnectedEvent::ApplicationDisconnect
+        ));
     }))
     .await;
 }

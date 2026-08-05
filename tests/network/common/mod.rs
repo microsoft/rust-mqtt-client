@@ -16,9 +16,10 @@ use std::time::Duration;
 
 use ms_mqtt_client::client::{
     Client, ClientOptions, ConnectResult, Connection, ConnectionTransportConfig,
-    ConnectionTransportType, DisconnectHandle, KeepAliveConfig, Receiver, new_client,
+    ConnectionTransportType, DisconnectHandle, DisconnectedEvent, KeepAliveConfig, Receiver,
+    new_client,
 };
-use ms_mqtt_client::packet::{ConnAck, ConnectProperties};
+use ms_mqtt_client::packet::{ConnAck, ConnectProperties, DisconnectProperties};
 
 /// Bounds each test so an unreachable broker fails fast rather than hanging the suite.
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -50,6 +51,49 @@ pub(crate) struct LiveConnection {
     pub(crate) connection: Connection,
     pub(crate) connack: ConnAck,
     pub(crate) disconnect_handle: DisconnectHandle,
+}
+
+/// A live connection whose packet loop is running in a test task.
+pub(crate) struct RunningConnection {
+    pub(crate) client: Client,
+    pub(crate) receiver: Receiver,
+    pub(crate) connack: ConnAck,
+    disconnect_handle: DisconnectHandle,
+    runner: tokio::task::JoinHandle<DisconnectedEvent>,
+}
+
+impl LiveConnection {
+    pub(crate) fn start(self) -> RunningConnection {
+        let Self {
+            client,
+            receiver,
+            connection,
+            connack,
+            disconnect_handle,
+        } = self;
+        let runner = tokio::spawn(async move {
+            let (_connect_handle, event) = connection.run_until_disconnect().await;
+            event
+        });
+        RunningConnection {
+            client,
+            receiver,
+            connack,
+            disconnect_handle,
+            runner,
+        }
+    }
+}
+
+impl RunningConnection {
+    pub(crate) async fn disconnect(self) -> DisconnectedEvent {
+        self.disconnect_handle
+            .disconnect(&DisconnectProperties::default())
+            .expect("connection should still be running");
+        self.runner
+            .await
+            .expect("connection runner should not panic")
+    }
 }
 
 pub(crate) async fn with_timeout<F: Future>(f: F) -> F::Output {

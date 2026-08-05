@@ -17,16 +17,23 @@ pub(crate) enum Feature {
     Qos2,
     /// Subscription identifiers returned on matching publishes.
     SubscriptionIdentifiers,
+    /// Topic filters containing single-level or multi-level wildcards.
+    WildcardSubscriptions,
 }
 
 impl Feature {
-    pub(crate) const ALL: &'static [Feature] = &[Feature::Qos2, Feature::SubscriptionIdentifiers];
+    pub(crate) const ALL: &'static [Feature] = &[
+        Feature::Qos2,
+        Feature::SubscriptionIdentifiers,
+        Feature::WildcardSubscriptions,
+    ];
 
     /// Whether the broker's own CONNACK claims this feature.
     pub(crate) fn advertised_by(self, properties: &ConnAckProperties) -> bool {
         match self {
             Feature::Qos2 => properties.maximum_qos == QoS::ExactlyOnce,
             Feature::SubscriptionIdentifiers => properties.subscription_identifiers_available,
+            Feature::WildcardSubscriptions => properties.wildcard_subscription_available,
         }
     }
 }
