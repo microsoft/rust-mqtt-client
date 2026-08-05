@@ -481,6 +481,19 @@ JSON_SCHEMA = 1
 _METRIC_META = {key: (unit, better) for key, _, unit, better in METRICS}
 
 
+def unreplicated_configs(paired_comp):
+    """Configs whose verdicts come from a single round, i.e. were never replicated.
+
+    The suite is built around ROUNDS>=2: compute_replicated only calls a metric better/WORSE if it
+    fires the same direction in EVERY round. With one round there is nothing to reproduce against, so
+    it falls back to fire -> verdict -- and that verdict prints identically to a replicated one while
+    being far weaker. Measured on the F16 lab: the per-cell false-positive rate is 2.61% at ROUNDS=1
+    versus 0.03% at ROUNDS=2, and 28 of 35 otherwise-clean A/A runs would have shown a spurious flag.
+    bench-compare.sh defaults to ROUNDS=2; single-round data is off the intended path, so say so
+    rather than let the output imply the usual guarantee."""
+    return sorted(c for c, (_, _, rounds, _) in paired_comp.items() if len(rounds) < 2)
+
+
 def json_payload(rows, configs, paired_comp, path):
     """The whole run as one JSON object: per-config/per-metric verdicts plus a family-wise summary.
 
@@ -561,6 +574,8 @@ def json_payload(rows, configs, paired_comp, path):
             "soft_cells": n_soft,            # '~noise*': fired in some rounds, not all
             "any_flagged": n_flagged > 0,    # the family-wise event
             "flagged": flagged,
+            # Verdicts on these configs were never replicated across rounds -- see unreplicated_configs.
+            "unreplicated_configs": unreplicated_configs(paired_comp),
             # Any of these means the verdicts above are not trustworthy -- check before counting them.
             "confounded": bool(confounds) or any(c["workload_drift"] for c in out_configs),
         },
@@ -615,6 +630,15 @@ def main():
 
     if not args.hist_only:
         print_overview(rows, configs)
+
+    # Printed once, before any table, because it qualifies every verdict below it.
+    unrep = unreplicated_configs(paired_comp)
+    if unrep:
+        scope = "all configs" if len(unrep) == len(paired_comp) else f"{len(unrep)} config(s)"
+        print(f"\n  NOTE: single round ({scope}) -- verdicts below are NOT replicated. The suite is"
+              f"\n        meant to run ROUNDS>=2 (bench-compare.sh default), where a verdict must"
+              f"\n        reproduce in every round; measured per-cell false-positive rate is 2.61%"
+              f"\n        at one round vs 0.03% at two. Treat these as unconfirmed.")
 
     any_ab = False
     any_paired = False

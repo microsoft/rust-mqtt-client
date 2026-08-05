@@ -281,5 +281,40 @@ class TestJsonOutput(unittest.TestCase):
             os.unlink(path)
 
 
+class TestUnreplicatedNotice(unittest.TestCase):
+    """A single-round run still emits verdicts, and they LOOK identical to replicated ones. The
+    per-cell false-positive rate is ~90x worse there (2.61% vs 0.03%), so both output paths must
+    say so -- the tables in prose, the JSON as a field automation can branch on."""
+
+    def _run(self, per_round, *extra_args):
+        rows = make_rows("c-tcp", per_round, tag_round=len(per_round) > 1)
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+            path = f.name
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            out = subprocess.run([sys.executable, os.path.join(here, "report.py"), path,
+                                  "--baseline", "main", *extra_args], capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return out.stdout
+        finally:
+            os.unlink(path)
+
+    def test_single_round_warns_in_tables(self):
+        self.assertIn("NOTE: single round", self._run([{"cpu_us_per_msg": steady(6.0)}]))
+
+    def test_two_rounds_do_not_warn(self):
+        reg = {"cpu_us_per_msg": steady(6.0)}
+        self.assertNotIn("NOTE: single round", self._run([reg, reg]))
+
+    def test_json_carries_the_same_fact(self):
+        reg = {"cpu_us_per_msg": steady(6.0)}
+        one = json.loads(self._run([reg], "--json"))
+        two = json.loads(self._run([reg, reg], "--json"))
+        self.assertEqual(one["summary"]["unreplicated_configs"], ["c-tcp"])
+        self.assertEqual(two["summary"]["unreplicated_configs"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

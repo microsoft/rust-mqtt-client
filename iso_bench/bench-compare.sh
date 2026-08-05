@@ -147,10 +147,16 @@ echo "== iso_bench COMPARE (interleaved): [$CUR_LABEL] vs baseline [$REF_LABEL],
 # recorded. See bench.sh for why latency warm-ups don't ramp turbo.
 if ((WARMUP_REPS > 0)); then
     echo "== warm-up: $WARMUP_REPS discarded CPU-saturating runs (skip with WARMUP_REPS=0) ==" >&2
+    # Coin-flip which arm LEADS the alternation. Alternating from a fixed start means the arm that runs
+    # LAST before the measured phase is always the same one (CUR, at even WARMUP_REPS), so it enters
+    # measurement with marginally warmer caches -- small, but a fixed-sign advantage to one build, which
+    # is exactly the kind of asymmetry make_order goes to some trouble to avoid in the measured pairs.
+    # The flip keeps the ref/cur split exact for even WARMUP_REPS while randomising who goes last.
+    warm_lead=$((RANDOM % 2))
     for ((w = 1; w <= WARMUP_REPS; w++)); do
         printf '   warm-up %d/%d\r' "$w" "$WARMUP_REPS" >&2
         warm_bin="$REF_BIN"
-        ((w % 2 == 0)) && warm_bin="$CUR_BIN"
+        (((w + warm_lead) % 2 == 0)) && warm_bin="$CUR_BIN"
         env MODE=pub-throughput QOS=1 TRANSPORT=tls PAYLOAD_BYTES=16384 INFLIGHT=64 COUNT=300000 \
             CLIENT_BIN="$warm_bin" PEER_BIN="$PEER_BIN" ./bench-once.sh >/dev/null 2>&1 || true
     done
