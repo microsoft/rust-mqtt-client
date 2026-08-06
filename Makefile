@@ -43,11 +43,26 @@ network-test:
 coverage:
 	cargo llvm-cov clean --workspace
 	cargo llvm-cov --no-report --lib
-	set -eu; \
 	# Run tests with different feature sets to get coverage for all code paths.
+	set -eu; \
 	for feature_set in '__integration' 'websockets,__integration'; do \
 		cargo llvm-cov --no-report --features "$$feature_set" --tests; \
 	done
+	cargo llvm-cov report --html
+	cargo llvm-cov report --summary-only
+
+
+.PHONY: network-coverage
+network-coverage: coverage
+	$(NETWORK_BROKER_DIR)/up.sh
+	# Append the live suite's profiles, then refresh the source-only report.
+	set -u; \
+	MQTT_BROKER=$(BROKER) cargo llvm-cov --no-report --features __network --test network; \
+	test_status=$$?; \
+	$(NETWORK_BROKER_DIR)/down.sh; \
+	down_status=$$?; \
+	if test "$$test_status" -ne 0; then exit "$$test_status"; fi; \
+	exit "$$down_status"
 	cargo llvm-cov report --html
 	cargo llvm-cov report --summary-only
 
