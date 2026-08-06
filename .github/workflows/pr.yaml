@@ -269,7 +269,8 @@ jobs:
         tool: cargo-llvm-cov
 
     - name: Coverage
-      run: make coverage
+      # Network tests are needed to cover I/O stack that is currently bypassed by the integration test injection pattern
+      run: make network-coverage BROKER=mosquitto
 
     - name: Upload coverage report
       uses: actions/upload-artifact@v7

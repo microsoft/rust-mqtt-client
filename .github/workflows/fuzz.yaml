@@ -90,7 +90,7 @@ jobs:
     # run, save it back. This is what makes fuzzing compound over time rather
     # than starting cold each run.
     - name: Restore/persist fuzz corpus
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: fuzz/corpus/${{ matrix.target }}
         key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}

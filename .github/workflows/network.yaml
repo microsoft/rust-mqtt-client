@@ -71,7 +71,7 @@ jobs:
     # kubectl ships with the runner image; helm is pinned and k3d isn't present at all.
     - name: Install Helm
       if: matrix.kubernetes
-      uses: azure/setup-helm@v4
+      uses: azure/setup-helm@v5
       with:
         version: 'v3.16.3'
 
