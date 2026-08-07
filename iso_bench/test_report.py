@@ -20,14 +20,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import report  # noqa: E402
 
 ALL_METRICS = {m[0] for m in report.METRICS}   # every metric report.py knows about
-GATED_METRICS = ALL_METRICS - {"lat_max"}      # lat_max is the only always-'info' metric
+# Always-'info', for two different reasons: lat_max is a single worst sample (p90/p99 carry the tail),
+# and mib_per_s is msgs_per_s times a per-config constant, so gating it tested the same measurement
+# twice -- 96 of 97 throughput findings in the corpus fired as a duplicate pair.
+ALWAYS_INFO = {"lat_max", "mib_per_s"}
+GATED_METRICS = ALL_METRICS - ALWAYS_INFO
 
 # Per gated metric: (floor %, "up"|"down" = which direction is BETTER). Hard-coded independently of
 # report.py (deriving it from report.py would assert nothing); the single source for the floor and
 # direction axes below. Kept in sync with report.py by TestMetricCoverage.
 METRIC_SPEC = {
     "msgs_per_s":     (0.5, "up"),
-    "mib_per_s":      (0.5, "up"),
     "lat_p50":        (0.5, "down"),
     "lat_p90":        (0.5, "down"),
     "lat_p99":        (0.5, "down"),
@@ -96,11 +99,11 @@ class TestInfoMetrics(unittest.TestCase):
 
     # (config rep, expected info set). Equality => everything not listed is gated.
     CASES = [
-        ({"mode": "pub-latency",     "qos": 1, "lat_kind": "op latency"},       {"lat_max"}),
-        ({"mode": "pub-throughput",  "qos": 1, "lat_kind": "op latency"},       {"lat_max"}),
-        ({"mode": "recv-latency",    "qos": 0, "lat_kind": "delivery latency"}, {"lat_max"}),
-        ({"mode": "recv-throughput", "qos": 0, "lat_kind": "inter-arrival"},    {"lat_max", "lat_p50"}),
-        ({"mode": "pub-throughput",  "qos": 0, "lat_kind": "op latency"},       {"lat_max", "lat_p50"}),
+        ({"mode": "pub-latency",     "qos": 1, "lat_kind": "op latency"},       ALWAYS_INFO),
+        ({"mode": "pub-throughput",  "qos": 1, "lat_kind": "op latency"},       ALWAYS_INFO),
+        ({"mode": "recv-latency",    "qos": 0, "lat_kind": "delivery latency"}, ALWAYS_INFO),
+        ({"mode": "recv-throughput", "qos": 0, "lat_kind": "inter-arrival"},    ALWAYS_INFO | {"lat_p50"}),
+        ({"mode": "pub-throughput",  "qos": 0, "lat_kind": "op latency"},       ALWAYS_INFO | {"lat_p50"}),
     ]
 
     def test_info_set_per_config(self):
@@ -228,7 +231,10 @@ class TestJsonOutput(unittest.TestCase):
         reg = next(c for c in doc["configs"] if c["config"] == "regressed-tcp")
         by_key = {m["key"]: m for m in reg["metrics"]}
         self.assertEqual(by_key["msgs_per_s"]["verdict"], "WORSE")
-        self.assertEqual(by_key["mib_per_s"]["verdict"], "~noise")   # same display name, different cell
+        # Same display name ("throughput"), so the JSON must still separate them by key -- but
+        # mib_per_s is no longer a verdict of its own. In real data it CANNOT disagree with
+        # msgs_per_s; this fixture gives it a different delta only to prove the keys don't collide.
+        self.assertEqual(by_key["mib_per_s"]["verdict"], "info")
         self.assertEqual(by_key["cpu_us_per_msg"]["verdict"], "WORSE")
 
     def test_family_wise_summary(self):
