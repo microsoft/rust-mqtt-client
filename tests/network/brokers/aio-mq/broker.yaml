@@ -1,4 +1,5 @@
-# Broker definition for the live network suite: plaintext 1883, no auth, no TLS.
+# Stage 0 of the AIO MQ 1.6.0 workaround documented in up.sh: bootstrap the Broker with
+# plaintext MQTT only. The later manifests update this same BrokerListener after Running.
 # Adapted from the chart's examples/deployment.simple.yaml, with two deliberate changes:
 #
 #   - The listener is LoadBalancer from the start. The example uses the default ClusterIP,

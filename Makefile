@@ -20,8 +20,8 @@ test:
 	done
 
 
-# Live tests against a real broker. BROKER selects only which broker gets
-# provisioned -- the suite itself is broker-agnostic. Each broker directory exposes
+# Live tests against a real MQTT server. BROKER selects which broker implementation gets
+# provisioned -- the suite itself is server-agnostic. Each broker directory exposes
 # up.sh/down.sh, so a broker that isn't a container (AIO MQ needs a k3d cluster)
 # plugs in the same way.
 # Deliberately not part of `test`: these need a broker running.
@@ -33,7 +33,7 @@ network-test:
 	$(NETWORK_BROKER_DIR)/up.sh
 # Teardown shares one shell with the test run so it happens even on failure.
 	set -u; \
-	MQTT_BROKER=$(BROKER) cargo test --features __network --test network; \
+	MQTT_SERVER=$(BROKER) cargo test --features __network,websockets --test network; \
 	status=$$?; \
 	$(NETWORK_BROKER_DIR)/down.sh; \
 	exit $$status
@@ -42,22 +42,20 @@ network-test:
 .PHONY: coverage
 coverage:
 	cargo llvm-cov clean --workspace
-	cargo llvm-cov --no-report --lib
-	# Run tests with different feature sets to get coverage for all code paths.
-	set -eu; \
-	for feature_set in '__integration' 'websockets,__integration'; do \
-		cargo llvm-cov --no-report --features "$$feature_set" --tests; \
-	done
+	cargo llvm-cov --no-report --features websockets,__integration --tests
 	cargo llvm-cov report --html
 	cargo llvm-cov report --summary-only
 
 
 .PHONY: network-coverage
-network-coverage: coverage
+network-coverage:
+	cargo llvm-cov clean --workspace
 	$(NETWORK_BROKER_DIR)/up.sh
-	# Append the live suite's profiles, then refresh the source-only report.
+	# Run every test with one feature set so LLVM coverage maps stay compatible.
 	set -u; \
-	MQTT_BROKER=$(BROKER) cargo llvm-cov --no-report --features __network --test network; \
+	MQTT_SERVER=$(BROKER) cargo llvm-cov --no-report \
+		--features websockets,__integration,__network \
+		--tests; \
 	test_status=$$?; \
 	$(NETWORK_BROKER_DIR)/down.sh; \
 	down_status=$$?; \

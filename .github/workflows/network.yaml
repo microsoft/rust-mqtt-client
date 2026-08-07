@@ -10,7 +10,7 @@
 #      world moved, so -- like `nightly.yaml` -- it must not block a PR, and a
 #      `notify` job files the failure since no author is watching.
 #
-#   2. Broker matrix. The test suite is broker-agnostic -- it connects to whatever
+#   2. Broker matrix. The test suite is server-agnostic -- it connects to whatever
 #      MQTT_HOST/MQTT_PORT point at -- so each matrix entry only swaps which
 #      broker gets provisioned. Every broker directory exposes `up.sh`/`down.sh`,
 #      which is what lets brokers with completely different runtimes share one
@@ -105,7 +105,7 @@ jobs:
 
     - name: Test
       env:
-        MQTT_BROKER: ${{ matrix.broker }}
+        MQTT_SERVER: ${{ matrix.broker }}
       run: cargo test --features __network --test network
 
     - name: Stop broker

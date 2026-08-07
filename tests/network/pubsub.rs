@@ -14,11 +14,11 @@ use ms_mqtt_client::packet::{
 use ms_mqtt_client::topic::{TopicFilter, TopicName};
 
 use crate::common::capabilities::Feature;
-use crate::common::{Endpoint, RunningConnection, connect_tcp, with_timeout};
+use crate::common::{Endpoint, RunningConnection, connect_tcp};
 
 const DEFAULT_PORT: u16 = 1883;
 
-async fn connect_pair(test_name: &str) -> (RunningConnection, RunningConnection) {
+async fn connect_pair_and_start(test_name: &str) -> (RunningConnection, RunningConnection) {
     let endpoint = Endpoint::from_env(DEFAULT_PORT);
     let subscriber = connect_tcp(&endpoint, &format!("{test_name}_subscriber"))
         .await
@@ -29,8 +29,8 @@ async fn connect_pair(test_name: &str) -> (RunningConnection, RunningConnection)
     (subscriber, publisher)
 }
 
-async fn subscribe(subscriber: &RunningConnection, filter: &str, qos: QoS) {
-    subscribe_with_options(
+async fn subscribe_and_expect_success(subscriber: &RunningConnection, filter: &str, qos: QoS) {
+    subscribe_with_options_and_expect_success(
         subscriber,
         filter,
         qos,
@@ -40,7 +40,7 @@ async fn subscribe(subscriber: &RunningConnection, filter: &str, qos: QoS) {
     .await;
 }
 
-async fn subscribe_with_options(
+async fn subscribe_with_options_and_expect_success(
     subscriber: &RunningConnection,
     filter: &str,
     qos: QoS,
@@ -62,11 +62,11 @@ async fn subscribe_with_options(
         .expect("SUBSCRIBE should complete");
     assert!(
         suback.is_success(),
-        "broker rejected the subscription: {suback:?}"
+        "server rejected the subscription: {suback:?}"
     );
 }
 
-async fn publish_qos0(
+async fn publish_qos0_and_expect_success(
     publisher: &RunningConnection,
     topic: &str,
     payload: Bytes,
@@ -81,7 +81,7 @@ async fn publish_qos0(
         .expect("QoS 0 PUBLISH should be sent");
 }
 
-async fn publish_qos1(
+async fn publish_qos1_and_expect_success(
     publisher: &RunningConnection,
     topic: &str,
     payload: Bytes,
@@ -96,11 +96,11 @@ async fn publish_qos1(
         .expect("QoS 1 PUBLISH should complete");
     assert!(
         puback.is_success(),
-        "broker rejected the PUBLISH: {puback:?}"
+        "server rejected the PUBLISH: {puback:?}"
     );
 }
 
-async fn receive_qos1(subscriber: &mut RunningConnection) -> Publish {
+async fn receive_qos1_and_ack(subscriber: &mut RunningConnection) -> Publish {
     let (publish, acknowledgement) = subscriber
         .receiver
         .recv()
@@ -118,7 +118,10 @@ async fn receive_qos1(subscriber: &mut RunningConnection) -> Publish {
     publish
 }
 
-async fn disconnect_pair(subscriber: RunningConnection, publisher: RunningConnection) {
+async fn disconnect_pair_and_expect_application_disconnect(
+    subscriber: RunningConnection,
+    publisher: RunningConnection,
+) {
     assert!(matches!(
         subscriber.disconnect().await,
         DisconnectedEvent::ApplicationDisconnect
@@ -129,14 +132,16 @@ async fn disconnect_pair(subscriber: RunningConnection, publisher: RunningConnec
     ));
 }
 
+/// Verifies that a QoS 0 publication is routed to a subscriber with the expected topic,
+/// payload, delivery QoS, and no acknowledgement token.
 #[tokio::test]
 async fn publish_receive_qos0() {
-    with_timeout(Box::pin(async {
-        let (mut subscriber, publisher) = connect_pair("publish_receive_qos0").await;
+    crate::test_timeout! {
+        let (mut subscriber, publisher) = connect_pair_and_start("publish_receive_qos0").await;
         let topic = "ms-mqtt-client/network/qos0";
-        subscribe(&subscriber, topic, QoS::AtMostOnce).await;
+        subscribe_and_expect_success(&subscriber, topic, QoS::AtMostOnce).await;
 
-        publish_qos0(
+        publish_qos0_and_expect_success(
             &publisher,
             topic,
             Bytes::from_static(b"qos0 payload"),
@@ -154,19 +159,20 @@ async fn publish_receive_qos0() {
         assert_eq!(publish.qos, DeliveryQoS::AtMostOnce);
         assert!(matches!(acknowledgement, ManualAcknowledgement::QoS0));
 
-        disconnect_pair(subscriber, publisher).await;
-    }))
-    .await;
+        disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
+    }
 }
 
+/// Verifies end-to-end QoS 1 delivery, including the publisher's PUBACK and the subscriber's
+/// explicit acknowledgement of the received publication.
 #[tokio::test]
 async fn publish_receive_qos1() {
-    with_timeout(Box::pin(async {
-        let (mut subscriber, publisher) = connect_pair("publish_receive_qos1").await;
+    crate::test_timeout! {
+        let (mut subscriber, publisher) = connect_pair_and_start("publish_receive_qos1").await;
         let topic = "ms-mqtt-client/network/qos1";
-        subscribe(&subscriber, topic, QoS::AtLeastOnce).await;
+        subscribe_and_expect_success(&subscriber, topic, QoS::AtLeastOnce).await;
 
-        publish_qos1(
+        publish_qos1_and_expect_success(
             &publisher,
             topic,
             Bytes::from_static(b"qos1 payload"),
@@ -174,24 +180,26 @@ async fn publish_receive_qos1() {
         )
         .await;
 
-        let publish = receive_qos1(&mut subscriber).await;
+        let publish = receive_qos1_and_ack(&mut subscriber).await;
         assert_eq!(publish.topic_name, TopicName::new(topic).unwrap());
         assert_eq!(publish.payload, Bytes::from_static(b"qos1 payload"));
         assert!(matches!(publish.qos, DeliveryQoS::AtLeastOnce(_)));
 
-        disconnect_pair(subscriber, publisher).await;
-    }))
-    .await;
+        disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
+    }
 }
 
+/// Verifies that a successful UNSUBSCRIBE stops subsequent publications from reaching the
+/// former subscriber.
 #[tokio::test]
 async fn unsubscribe_stops_delivery() {
-    with_timeout(Box::pin(async {
-        let (mut subscriber, publisher) = connect_pair("unsubscribe_stops_delivery").await;
+    crate::test_timeout! {
+        let (mut subscriber, publisher) =
+            connect_pair_and_start("unsubscribe_stops_delivery").await;
         let topic = "ms-mqtt-client/network/unsubscribe";
-        subscribe(&subscriber, topic, QoS::AtLeastOnce).await;
+        subscribe_and_expect_success(&subscriber, topic, QoS::AtLeastOnce).await;
 
-        publish_qos1(
+        publish_qos1_and_expect_success(
             &publisher,
             topic,
             Bytes::from_static(b"before unsubscribe"),
@@ -199,7 +207,7 @@ async fn unsubscribe_stops_delivery() {
         )
         .await;
         assert_eq!(
-            receive_qos1(&mut subscriber).await.payload,
+            receive_qos1_and_ack(&mut subscriber).await.payload,
             Bytes::from_static(b"before unsubscribe")
         );
 
@@ -215,10 +223,10 @@ async fn unsubscribe_stops_delivery() {
             .expect("UNSUBSCRIBE should complete");
         assert!(
             unsuback.is_success(),
-            "broker rejected the unsubscription: {unsuback:?}"
+            "server rejected the unsubscription: {unsuback:?}"
         );
 
-        publish_qos1(
+        publish_qos1_and_expect_success(
             &publisher,
             topic,
             Bytes::from_static(b"after unsubscribe"),
@@ -232,17 +240,18 @@ async fn unsubscribe_stops_delivery() {
             "subscriber received a PUBLISH after unsubscribing"
         );
 
-        disconnect_pair(subscriber, publisher).await;
-    }))
-    .await;
+        disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
+    }
 }
 
+/// Verifies that MQTT 5 publication metadata survives an end-to-end server round trip.
 #[tokio::test]
 async fn publish_properties_round_trip() {
-    with_timeout(Box::pin(async {
-        let (mut subscriber, publisher) = connect_pair("publish_properties_round_trip").await;
+    crate::test_timeout! {
+        let (mut subscriber, publisher) =
+            connect_pair_and_start("publish_properties_round_trip").await;
         let topic = "ms-mqtt-client/network/properties";
-        subscribe(&subscriber, topic, QoS::AtLeastOnce).await;
+        subscribe_and_expect_success(&subscriber, topic, QoS::AtLeastOnce).await;
         let properties = PublishProperties {
             payload_format_indicator: PayloadFormatIndicator::UTF8,
             response_topic: Some(
@@ -257,34 +266,35 @@ async fn publish_properties_round_trip() {
             ..Default::default()
         };
 
-        publish_qos1(
+        publish_qos1_and_expect_success(
             &publisher,
             topic,
             Bytes::from_static(br#"{"value":42}"#),
             properties.clone(),
         )
         .await;
-        let publish = receive_qos1(&mut subscriber).await;
+        let publish = receive_qos1_and_ack(&mut subscriber).await;
         assert_eq!(publish.properties, properties);
 
-        disconnect_pair(subscriber, publisher).await;
-    }))
-    .await;
+        disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
+    }
 }
 
+/// Verifies that single-level (`+`) and multi-level (`#`) wildcard subscriptions route
+/// publications from matching topics.
 #[tokio::test]
 async fn wildcard_subscriptions_route_matching_topics() {
-    crate::require_feature!(Feature::WildcardSubscriptions);
-    with_timeout(Box::pin(async {
+    crate::require_server_feature!(Feature::WildcardSubscriptions);
+    crate::test_timeout! {
         let (mut subscriber, publisher) =
-            connect_pair("wildcard_subscriptions_route_matching_topics").await;
-        subscribe(
+            connect_pair_and_start("wildcard_subscriptions_route_matching_topics").await;
+        subscribe_and_expect_success(
             &subscriber,
             "ms-mqtt-client/network/wildcard/+/reading",
             QoS::AtMostOnce,
         )
         .await;
-        subscribe(
+        subscribe_and_expect_success(
             &subscriber,
             "ms-mqtt-client/network/wildcard/events/#",
             QoS::AtMostOnce,
@@ -292,7 +302,7 @@ async fn wildcard_subscriptions_route_matching_topics() {
         .await;
 
         let plus_topic = "ms-mqtt-client/network/wildcard/device-1/reading";
-        publish_qos0(
+        publish_qos0_and_expect_success(
             &publisher,
             plus_topic,
             Bytes::from_static(b"plus"),
@@ -307,7 +317,7 @@ async fn wildcard_subscriptions_route_matching_topics() {
         assert_eq!(plus_publish.topic_name, TopicName::new(plus_topic).unwrap());
 
         let hash_topic = "ms-mqtt-client/network/wildcard/events/site/online";
-        publish_qos0(
+        publish_qos0_and_expect_success(
             &publisher,
             hash_topic,
             Bytes::from_static(b"hash"),
@@ -321,17 +331,19 @@ async fn wildcard_subscriptions_route_matching_topics() {
             .expect("# subscription should receive a matching PUBLISH");
         assert_eq!(hash_publish.topic_name, TopicName::new(hash_topic).unwrap());
 
-        disconnect_pair(subscriber, publisher).await;
-    }))
-    .await;
+        disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
+    }
 }
 
+/// Verifies that a no-local subscription receives remote publications but suppresses
+/// publications sent by the same client.
 #[tokio::test]
 async fn no_local_suppresses_self_publish() {
-    with_timeout(Box::pin(async {
-        let (mut subscriber, publisher) = connect_pair("no_local_suppresses_self_publish").await;
+    crate::test_timeout! {
+        let (mut subscriber, publisher) =
+            connect_pair_and_start("no_local_suppresses_self_publish").await;
         let topic = "ms-mqtt-client/network/no-local";
-        subscribe_with_options(
+        subscribe_with_options_and_expect_success(
             &subscriber,
             topic,
             QoS::AtLeastOnce,
@@ -340,7 +352,7 @@ async fn no_local_suppresses_self_publish() {
         )
         .await;
 
-        publish_qos1(
+        publish_qos1_and_expect_success(
             &publisher,
             topic,
             Bytes::from_static(b"remote"),
@@ -348,11 +360,11 @@ async fn no_local_suppresses_self_publish() {
         )
         .await;
         assert_eq!(
-            receive_qos1(&mut subscriber).await.payload,
+            receive_qos1_and_ack(&mut subscriber).await.payload,
             Bytes::from_static(b"remote")
         );
 
-        publish_qos1(
+        publish_qos1_and_expect_success(
             &subscriber,
             topic,
             Bytes::from_static(b"local"),
@@ -366,7 +378,6 @@ async fn no_local_suppresses_self_publish() {
             "no-local subscription received its own PUBLISH"
         );
 
-        disconnect_pair(subscriber, publisher).await;
-    }))
-    .await;
+        disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
+    }
 }
