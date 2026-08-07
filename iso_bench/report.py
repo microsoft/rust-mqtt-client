@@ -209,8 +209,17 @@ def info_metrics(rep):
     """Metrics shown as 'info' (context only, never gated) for a config. lat_max is a single worst
     sample (p99/p90 carry the tail); inter-arrival p50 is recv-throughput delivery cadence (throughput
     carries the rate, p90/p99 the jitter); QoS 0 op-latency p50 is queue-ADMISSION time, not send cost.
-    QoS 0 THROUGHPUT stays gated -- its publish queue is bounded, so its rate tracks the real send rate."""
-    info = {"lat_max"}
+    QoS 0 THROUGHPUT stays gated -- its publish queue is bounded, so its rate tracks the real send rate.
+
+    mib_per_s is not an independent measurement: it is msgs_per_s * payload_bytes / 1 MiB, and
+    payload_bytes is fixed within a config, so the two carry IDENTICAL percentage deltas. Gating both
+    double-counted every throughput result -- measured across the 242-run corpus, 96 of 97 throughput
+    findings fired as a msgs_per_s/mib_per_s pair and mib_per_s never once fired alone, making 96 of
+    649 flagged cells (14.8%) duplicates of a cell already counted. That inflated both the apparent
+    weight of evidence for a throughput change and the family-wise false-positive rate, and it
+    overstated the family size (106 gated cells -> 90 independent). Keep it displayed: MiB/s is the
+    useful unit for the byte-rate configs. Just do not test it twice."""
+    info = {"lat_max", "mib_per_s"}
     if rep.get("lat_kind") == "inter-arrival":
         info.add("lat_p50")
     if rep.get("mode") == "pub-throughput" and rep.get("qos") in (0, "0"):

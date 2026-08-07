@@ -5,7 +5,7 @@ Licensed under the MIT License.
 
 # Sensitivity of `iso_bench` — what it can and cannot catch
 
-Measured over 236 suite runs on two dedicated Azure `F16s_v2` VMs, 2026-08-01 to 2026-08-07. Every
+Measured over 242 suite runs on two dedicated Azure `F16s_v2` VMs, 2026-08-01 to 2026-08-07. Every
 number here is recomputed from raw `results.jsonl` by `consolidate.py`; none is carried forward from
 an earlier claim.
 
@@ -17,14 +17,19 @@ effectively blind. That is the useful half of the answer.
 The other half is less comfortable and matters more for CI use: **there is no such thing as a
 performance-neutral source change at this precision.** Editing one line — even dead code, even in a
 function that never executes — shifts inlining and code layout enough to produce a real, reproducible
-0.5–1% difference that the suite correctly detects. So a comparison of two builds that "should not"
-differ in performance will often flag something, and the flag is not a measurement error.
+difference that the suite correctly detects.
+
+That difference is small in the typical cell and long-tailed across cells. For the three one-line
+controls below, the *median* gated cell moves **0.19–0.31%** while the *p90* cell moves
+**0.58–1.16%** and the worst single cell reaches 4.6–21%. So a comparison of two builds that "should
+not" differ in performance will often flag something, and the flag is not a measurement error — but
+the "0.5–1%" figure quoted for this effect elsewhere is the p90, not what a typical cell does.
 
 ## The power curve
 
 `P(flag)` is the probability that a single suite run reports at least one `better`/`WORSE` verdict.
 "True cost" is the change's actual effect, established by arm swap (see [Method](#method-the-arm-swap))
-and summarised as the p90 of |per-cell effect| across all 106 gated cells.
+and summarised as the p90 of |per-cell effect| across all gated cells.
 
 | change | true cost | host | runs | P(flag) |
 |---|---|---|---|---|
@@ -84,12 +89,36 @@ will flag with high probability regardless of whether it regresses anything.
 
 Options, roughly in order of cost:
 
-1. **Raise the gate threshold above the perturbation floor** (~2%). Simple; forfeits detection of
-   genuine 1% regressions.
+1. **Raise the gate threshold above the perturbation floor** — but *per metric*, not globally. A
+   single number cannot serve all seven; see the table below. Forfeits detection below whatever
+   floor is chosen.
 2. **Treat flags as advisory** and triage by hand, using the per-cell output to see whether the cells
    that fired are ones the change could plausibly affect.
 3. **Require repetition** — run the comparison 2–3 times and act only on cells that fire every time.
    Costs 2–3× wall clock and reduces sensitivity, but suppresses cells that fire sporadically.
+
+### The floor is per metric, not one number
+
+|E| by metric, pooled over the arm-swapped rungs (one-line and dead-code edits, i.e. changes whose
+*intended* cost is nothing):
+
+| metric | cells | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| `lat_p99` | 64 | 0.462% | 1.133% | 7.293% | 21.079% |
+| `lat_p90` | 64 | 0.262% | 1.122% | 3.401% | 5.156% |
+| `lat_p50` | 40 | 0.263% | 0.972% | 1.463% | 1.525% |
+| `msgs_per_s` | 64 | 0.201% | 0.964% | 2.261% | 2.991% |
+| `cpu_us_per_msg` | 64 | 0.262% | 0.714% | 1.427% | 2.575% |
+| `max_rss_kb` | 64 | 0.000% | 0.467% | 1.815% | 2.640% |
+
+`lat_p99` is perturbed an order of magnitude more than `max_rss_kb` at the tail. Any single global
+threshold is therefore either far too tight for p99 or far too loose for RSS — the current
+`PAIRED_FLOOR_PCT = 0.5` with a `max_rss_kb` override of 2.0 has the *shape* right and the values
+unvalidated.
+
+**These floors are not settled and should not be copied into a gate yet.** They come from three
+injection rungs on two hosts; `lat_p99`'s 21% maximum in particular rests on the `null` rung on one
+host. The point of the table is that the floor is metric-shaped, not that these are the numbers.
 
 **Thresholds are not portable between machines.** The same source change measured 2.5× more expensive
 on one VM than another with identical specs (same Xeon Platinum 8168 stepping, same topology, same
@@ -108,5 +137,18 @@ two; `report.py` now says so explicitly when given single-round data.
   identical (median CV 1.23% vs 1.16%), so it is not simple noise. Co-tenant pressure changing the
   marginal cost of work is the leading hypothesis, untested.
 - All results are from `F16s_v2` in one region. Nothing here transfers to other hardware.
-- 191 of the 236 runs predate a warm-up fix that removed a small fixed-sign advantage to the candidate
+- 191 of the runs predate a warm-up fix that removed a small fixed-sign advantage to the candidate
   arm. The arm-swap results are immune to it; the single-orientation results are not.
+- **Every `cpu_us_per_msg` and `max_rss_kb` number here was measured with process-wide accounting**,
+  before those two metrics were windowed to the measured loop. Both arms of a run shared the same
+  `WARMUP`, so the contamination is common-mode and the *paired* deltas remain valid — but the
+  numerator carried a large constant (startup, TLS handshake, every warm-up op), which dilutes any
+  real per-message change. Sensitivity on `cpu_us_per_msg` is therefore **understated** here, and
+  `max_rss_kb` worse than understated: a peak is not diluted but misattributed, so a measured-phase
+  regression smaller than the warm-up peak was invisible. Both need remeasuring.
+- **The gated-cell count changed from 106 to 90.** `mib_per_s` was gated alongside `msgs_per_s`
+  despite being the same measurement scaled by a per-config constant, so every throughput result was
+  counted twice: across the corpus, 96 of 97 throughput findings fired as a pair and `mib_per_s`
+  never fired alone. It is now info-only. No run-level flag decision changes (no run was ever flagged
+  by `mib_per_s` alone), so the power curve above stands — but per-cell rates computed against 106
+  are inflated for throughput, and the family size for any multiple-comparison reasoning is 90.
