@@ -82,7 +82,7 @@ __network = []
 [[test]]
 name = "network"
 path = "tests/network/suite.rs"
-required-features = ["__network"]
+required-features = ["__network", "websockets"]
 
 [lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
