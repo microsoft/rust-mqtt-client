@@ -19,7 +19,8 @@ use ms_mqtt_client::topic::{TopicFilter, TopicName};
 use test_case::{test_case, test_matrix};
 
 use crate::common::{
-    RunningConnection, TCP_PORT, TLS_PORT, WS_PORT, WSS_PORT, acquire_fixture_guard_if_necessary,
+    ENV_MQTT_HOST, ENV_MQTT_PORT, ENV_MQTT_TLS_PORT, ENV_MQTT_WS_PORT, ENV_MQTT_WSS_PORT, TCP_PORT,
+    TLS_PORT, TestConnection, WS_PORT, WSS_PORT, acquire_fixture_guard_if_necessary,
     connect_with_transport, empty_tls_config, port_from_env, reconnect_with_transport, tls_config,
 };
 
@@ -166,21 +167,21 @@ impl ConnectionProfile {
     }
 
     fn transport(self) -> ConnectionTransportType {
-        let hostname = std::env::var("MQTT_HOST").unwrap_or_else(|_| "localhost".to_string());
+        let hostname = std::env::var(ENV_MQTT_HOST).unwrap_or_else(|_| "localhost".to_string());
         match self {
             Self::Tcp => ConnectionTransportType::Tcp {
                 hostname,
-                port: port_from_env("MQTT_PORT", TCP_PORT),
+                port: port_from_env(ENV_MQTT_PORT, TCP_PORT),
             },
             Self::Tls => ConnectionTransportType::Tls {
                 hostname,
-                port: port_from_env("MQTT_TLS_PORT", TLS_PORT),
+                port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
                 config: tls_config(),
             },
             Self::WebSocket => ConnectionTransportType::Ws {
                 request: format!(
                     "ws://{hostname}:{}/mqtt",
-                    port_from_env("MQTT_WS_PORT", WS_PORT)
+                    port_from_env(ENV_MQTT_WS_PORT, WS_PORT)
                 )
                 .into_client_request()
                 .expect("WebSocket URL should be valid"),
@@ -189,7 +190,7 @@ impl ConnectionProfile {
             Self::SecureWebSocket => ConnectionTransportType::Ws {
                 request: format!(
                     "wss://{hostname}:{}/mqtt",
-                    port_from_env("MQTT_WSS_PORT", WSS_PORT)
+                    port_from_env(ENV_MQTT_WSS_PORT, WSS_PORT)
                 )
                 .into_client_request()
                 .expect("secure WebSocket URL should be valid"),
@@ -199,21 +200,20 @@ impl ConnectionProfile {
     }
 }
 
-async fn connect_and_start(
+async fn connect(
     profile: ConnectionProfile,
     role: &str,
     keep_alive: KeepAliveConfig,
-) -> RunningConnection {
+) -> TestConnection {
     connect_with_transport(
         profile.transport(),
         &format!("transport_io_{}_{}", profile.name(), role),
         keep_alive,
     )
     .await
-    .start()
 }
 
-async fn subscribe_and_expect_success(connection: &RunningConnection, topic: &str) {
+async fn subscribe_and_expect_success(connection: &TestConnection, topic: &str) {
     let suback = connection
         .client
         .subscribe(
@@ -230,7 +230,7 @@ async fn subscribe_and_expect_success(connection: &RunningConnection, topic: &st
     assert!(suback.is_success(), "server rejected SUBSCRIBE: {suback:?}");
 }
 
-async fn receive_qos1_and_acknowledge(connection: &mut RunningConnection) -> Publish {
+async fn receive_qos1_and_acknowledge(connection: &mut TestConnection) -> Publish {
     let (publish, acknowledgement) = connection
         .receiver
         .recv()
@@ -274,8 +274,8 @@ fn assert_publication_matches(publish: &Publish, topic: &str, publication: &Publ
 }
 
 async fn disconnect_pair_and_expect_application_disconnect(
-    first: RunningConnection,
-    second: RunningConnection,
+    first: TestConnection,
+    second: TestConnection,
 ) {
     let (first_event, second_event) = tokio::join!(first.disconnect(), second.disconnect());
     assert!(matches!(
@@ -315,9 +315,9 @@ async fn read_write(profile: ConnectionProfile, publication_shape: PublicationSh
         let subscriber_role = format!("{}_subscriber", publication_shape.name());
         let publisher_role = format!("{}_publisher", publication_shape.name());
         let mut subscriber =
-            connect_and_start(profile, &subscriber_role, KeepAliveConfig::Infinite).await;
+            connect(profile, &subscriber_role, KeepAliveConfig::Infinite).await;
         let publisher =
-            connect_and_start(profile, &publisher_role, KeepAliveConfig::Infinite).await;
+            connect(profile, &publisher_role, KeepAliveConfig::Infinite).await;
         let topic = format!(
             "ms-mqtt-client/network/transport-io/{}/{}",
             profile.topic_code(),
@@ -356,7 +356,7 @@ async fn reconnect_cycles(profile: ConnectionProfile) {
     let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let mut connection =
-            connect_and_start(profile, "reconnect", KeepAliveConfig::Infinite).await;
+            connect(profile, "reconnect", KeepAliveConfig::Infinite).await;
 
         for cycle in 0..CYCLE_COUNT {
             let topic = format!(
@@ -384,8 +384,7 @@ async fn reconnect_cycles(profile: ConnectionProfile) {
                 profile.transport(),
                 KeepAliveConfig::Infinite,
             )
-            .await
-            .start();
+            .await;
         }
     }
 }
@@ -412,9 +411,9 @@ async fn mixed_publication_shapes(profile: ConnectionProfile) {
     let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let mut subscriber =
-            connect_and_start(profile, "mixed_subscriber", KeepAliveConfig::Infinite).await;
+            connect(profile, "mixed_subscriber", KeepAliveConfig::Infinite).await;
         let publisher =
-            connect_and_start(profile, "mixed_publisher", KeepAliveConfig::Infinite).await;
+            connect(profile, "mixed_publisher", KeepAliveConfig::Infinite).await;
         let topic = format!(
             "ms-mqtt-client/network/transport-io/{}/mixed",
             profile.topic_code()
@@ -450,9 +449,9 @@ async fn back_to_back_ordering(profile: ConnectionProfile, burst_size: BurstSize
         let subscriber_role = format!("{}_burst_subscriber", burst_size.name());
         let publisher_role = format!("{}_burst_publisher", burst_size.name());
         let mut subscriber =
-            connect_and_start(profile, &subscriber_role, KeepAliveConfig::Infinite).await;
+            connect(profile, &subscriber_role, KeepAliveConfig::Infinite).await;
         let publisher =
-            connect_and_start(profile, &publisher_role, KeepAliveConfig::Infinite).await;
+            connect(profile, &publisher_role, KeepAliveConfig::Infinite).await;
         let topic = format!(
             "ms-mqtt-client/network/transport-io/{}/burst/{}",
             profile.topic_code(),
@@ -504,9 +503,9 @@ async fn concurrent_bidirectional(profile: ConnectionProfile) {
     let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let mut first =
-            connect_and_start(profile, "concurrent_first", KeepAliveConfig::Infinite).await;
+            connect(profile, "concurrent_first", KeepAliveConfig::Infinite).await;
         let mut second =
-            connect_and_start(profile, "concurrent_second", KeepAliveConfig::Infinite).await;
+            connect(profile, "concurrent_second", KeepAliveConfig::Infinite).await;
         let first_topic = format!(
             "ms-mqtt-client/network/transport-io/{}/concurrent/first",
             profile.topic_code()
@@ -575,7 +574,7 @@ async fn keepalive(profile: ConnectionProfile) {
             ping_after: NonZeroU16::new(5).unwrap(),
             response_timeout: Duration::from_secs(2),
         };
-        let mut connection = connect_and_start(profile, "keepalive", keep_alive).await;
+        let mut connection = connect(profile, "keepalive", keep_alive).await;
         let topic = format!(
             "ms-mqtt-client/network/transport-io/{}/keepalive",
             profile.name()

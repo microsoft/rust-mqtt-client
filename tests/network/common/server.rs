@@ -3,16 +3,24 @@
 
 //! Which MQTT server supports what.
 //!
-//! Servers do not inherently implement all of MQTT 5, so tests declare the features they need and are
-//! skipped where those are missing. [`UNSUPPORTED`] is the inventory consulted when skipping;
+//! Servers do not inherently implement all of MQTT 5, so tests declare the features they need
+//! and are skipped where those are missing. [`UNSUPPORTED`] is the inventory consulted when skipping;
 //! because MQTT 5 makes servers advertise these in CONNACK, `inventory_matches_server`
 //! checks the inventory against reality so it cannot drift silently.
 
 use ms_mqtt_client::packet::{ConnAckProperties, QoS};
 
+use super::ENV_MQTT_SERVER;
+
+pub(crate) const MOSQUITTO: &str = "mosquitto";
+pub(crate) const EMQX: &str = "emqx";
+pub(crate) const HIVEMQ_CE: &str = "hivemq-ce";
+pub(crate) const AIO_MQ: &str = "aio-mq";
+pub(crate) const KNOWN_SERVERS: &[&str] = &[MOSQUITTO, EMQX, HIVEMQ_CE, AIO_MQ];
+
 /// An MQTT server behavior that some servers don't implement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Feature {
+pub(crate) enum ServerFeature {
     /// QoS 2, exactly-once delivery.
     Qos2,
     /// Subscription identifiers returned on matching publishes.
@@ -21,36 +29,40 @@ pub(crate) enum Feature {
     WildcardSubscriptions,
 }
 
-impl Feature {
-    pub(crate) const ALL: &'static [Feature] = &[
-        Feature::Qos2,
-        Feature::SubscriptionIdentifiers,
-        Feature::WildcardSubscriptions,
+impl ServerFeature {
+    pub(crate) const ALL: &'static [ServerFeature] = &[
+        ServerFeature::Qos2,
+        ServerFeature::SubscriptionIdentifiers,
+        ServerFeature::WildcardSubscriptions,
     ];
 
     /// Whether the server's own CONNACK claims this feature.
     pub(crate) fn advertised_by(self, properties: &ConnAckProperties) -> bool {
         match self {
-            Feature::Qos2 => properties.maximum_qos == QoS::ExactlyOnce,
-            Feature::SubscriptionIdentifiers => properties.subscription_identifiers_available,
-            Feature::WildcardSubscriptions => properties.wildcard_subscription_available,
+            ServerFeature::Qos2 => properties.maximum_qos == QoS::ExactlyOnce,
+            ServerFeature::SubscriptionIdentifiers => properties.subscription_identifiers_available,
+            ServerFeature::WildcardSubscriptions => properties.wildcard_subscription_available,
         }
     }
 }
 
 /// Features each server fixture lacks. Servers absent from this list are assumed to support
 /// everything.
-const UNSUPPORTED: &[(&str, &[Feature])] =
-    &[("aio-mq", &[Feature::Qos2, Feature::SubscriptionIdentifiers])];
+const UNSUPPORTED: &[(&str, &[ServerFeature])] = &[(
+    AIO_MQ,
+    &[ServerFeature::Qos2, ServerFeature::SubscriptionIdentifiers],
+)];
 
 /// The server fixture under test, from `MQTT_SERVER` (set by `make network-test`).
 pub(crate) fn server_name() -> Option<String> {
-    std::env::var("MQTT_SERVER").ok().filter(|n| !n.is_empty())
+    std::env::var(ENV_MQTT_SERVER)
+        .ok()
+        .filter(|n| !n.is_empty())
 }
 
 /// An unnamed server is assumed to support everything: a real failure is more useful than a
 /// silent skip.
-pub(crate) fn supports(feature: Feature) -> bool {
+pub(crate) fn supports(feature: ServerFeature) -> bool {
     let Some(server) = server_name() else {
         return true;
     };
@@ -63,11 +75,11 @@ pub(crate) fn supports(feature: Feature) -> bool {
 #[macro_export]
 macro_rules! require_server_feature {
     ($feature:expr) => {
-        if !$crate::common::capabilities::supports($feature) {
+        if !$crate::common::server::supports($feature) {
             // Printed rather than silent so a skip is visible with --nocapture.
             println!(
                 "SKIP: {} does not support {:?}",
-                $crate::common::capabilities::server_name().unwrap_or_else(|| "<unknown>".into()),
+                $crate::common::server::server_name().unwrap_or_else(|| "<unknown>".into()),
                 $feature,
             );
             return;

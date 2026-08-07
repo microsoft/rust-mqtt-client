@@ -11,9 +11,9 @@
 //! test. Add a new area of coverage as another module here.
 
 mod common;
-mod leftovers;
+mod messaging;
 mod meta;
-mod pubsub;
+mod session;
 #[cfg(feature = "websockets")]
 mod transport_configuration;
 #[cfg(feature = "websockets")]

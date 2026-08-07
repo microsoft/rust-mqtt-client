@@ -47,6 +47,30 @@ openssl x509 -req -days 30 \
     -copy_extensions copy \
     >/dev/null 2>&1
 
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
+    -keyout certs/untrusted-ca.key \
+    -out certs/untrusted-ca.crt \
+    -subj "/CN=ms-mqtt-network-untrusted-ca" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    >/dev/null 2>&1
+
+openssl req -newkey rsa:2048 -nodes \
+    -keyout certs/untrusted-client.key \
+    -out certs/untrusted-client.csr \
+    -subj "/CN=ms-mqtt-network-untrusted-client" \
+    -addext "extendedKeyUsage=clientAuth" \
+    >/dev/null 2>&1
+
+openssl x509 -req -days 30 \
+    -in certs/untrusted-client.csr \
+    -CA certs/untrusted-ca.crt \
+    -CAkey certs/untrusted-ca.key \
+    -CAcreateserial \
+    -out certs/untrusted-client.crt \
+    -copy_extensions copy \
+    >/dev/null 2>&1
+
 openssl pkcs12 -export \
     -in certs/server.crt \
     -inkey certs/server.key \
@@ -56,4 +80,4 @@ openssl pkcs12 -export \
     -out certs/server.p12 \
     >/dev/null 2>&1
 
-chmod 644 certs/server.key certs/client.key certs/server.p12
+chmod 644 certs/server.key certs/client.key certs/untrusted-client.key certs/server.p12

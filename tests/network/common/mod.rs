@@ -9,19 +9,28 @@
 
 #![allow(unused)] // Not every test uses every helper.
 
-pub(crate) mod capabilities;
-pub(crate) mod fixtures;
+pub(crate) mod fixture;
+pub(crate) mod server;
 
 use std::time::Duration;
 
 use ms_mqtt_client::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResult, Connection, ConnectionTransportConfig,
+    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
     ConnectionTransportTlsConfig, ConnectionTransportType, DisconnectHandle, DisconnectedEvent,
     KeepAliveConfig, Receiver, new_client,
 };
-use ms_mqtt_client::packet::{ConnAck, ConnectProperties, DisconnectProperties};
+use ms_mqtt_client::packet::{ConnAck, ConnectProperties, DisconnectProperties, Will};
 
-use fixtures::{FixtureQuirk, has_quirk};
+use fixture::{FixtureQuirk, has_quirk};
+
+pub(crate) const ENV_MQTT_CERT_DIR: &str = "MQTT_CERT_DIR";
+pub(crate) const ENV_MQTT_HOST: &str = "MQTT_HOST";
+pub(crate) const ENV_MQTT_MTLS_PORT: &str = "MQTT_MTLS_PORT";
+pub(crate) const ENV_MQTT_PORT: &str = "MQTT_PORT";
+pub(crate) const ENV_MQTT_SERVER: &str = "MQTT_SERVER";
+pub(crate) const ENV_MQTT_TLS_PORT: &str = "MQTT_TLS_PORT";
+pub(crate) const ENV_MQTT_WS_PORT: &str = "MQTT_WS_PORT";
+pub(crate) const ENV_MQTT_WSS_PORT: &str = "MQTT_WSS_PORT";
 
 pub(crate) const TCP_PORT: u16 = 1883;
 pub(crate) const TLS_PORT: u16 = 8883;
@@ -57,7 +66,7 @@ pub(crate) fn port_from_env(name: &str, default: u16) -> u16 {
 }
 
 fn certificate(name: &str) -> Vec<u8> {
-    let directory = std::env::var("MQTT_CERT_DIR")
+    let directory = std::env::var(ENV_MQTT_CERT_DIR)
         .unwrap_or_else(|_| "tests/network/brokers/certs".to_string());
     let path = format!("{directory}/{name}");
     std::fs::read(&path)
@@ -75,14 +84,30 @@ pub(crate) fn empty_tls_config() -> ConnectionTransportTlsConfig {
 }
 
 pub(crate) fn mutual_tls_config() -> ConnectionTransportTlsConfig {
+    mutual_tls_config_with_identity("client.crt", "client.key")
+}
+
+pub(crate) fn mutual_tls_config_with_untrusted_client() -> ConnectionTransportTlsConfig {
+    mutual_tls_config_with_identity("untrusted-client.crt", "untrusted-client.key")
+}
+
+pub(crate) fn mutual_tls_config_with_server_only_certificate() -> ConnectionTransportTlsConfig {
+    mutual_tls_config_with_identity("server.crt", "server.key")
+}
+
+fn mutual_tls_config_with_identity(
+    certificate_name: &str,
+    key_name: &str,
+) -> ConnectionTransportTlsConfig {
     ConnectionTransportTlsConfig::from_pem(
-        Some((&certificate("client.crt"), &certificate("client.key"))),
+        Some((&certificate(certificate_name), &certificate(key_name))),
         &certificate("ca.crt"),
     )
     .expect("test client identity and CA certificate should be valid")
 }
 
-pub(crate) async fn acquire_fixture_guard_if_necessary() -> Option<futures_util::lock::MutexGuard<'static, ()>> {
+pub(crate) async fn acquire_fixture_guard_if_necessary()
+-> Option<futures_util::lock::MutexGuard<'static, ()>> {
     if has_quirk(FixtureQuirk::RequiresSerialTransportTests) {
         Some(TRANSPORT_TEST_LOCK.lock().await)
     } else {
@@ -99,54 +124,47 @@ pub(crate) struct Endpoint {
 impl Endpoint {
     /// Reads `MQTT_HOST`/`MQTT_PORT`, which select the server endpoint under test.
     pub(crate) fn from_env(default_port: u16) -> Self {
-        let hostname = std::env::var("MQTT_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let port = match std::env::var("MQTT_PORT") {
-            Ok(port) => port.parse().expect("MQTT_PORT must be a valid port number"),
+        let hostname = std::env::var(ENV_MQTT_HOST).unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = match std::env::var(ENV_MQTT_PORT) {
+            Ok(port) => port
+                .parse()
+                .unwrap_or_else(|_| panic!("{ENV_MQTT_PORT} must be a valid port number")),
             Err(_) => default_port,
         };
         Self { hostname, port }
     }
 }
 
-/// A live session and every handle needed to drive it.
-pub(crate) struct LiveConnection {
-    pub(crate) client: Client,
-    pub(crate) receiver: Receiver,
-    pub(crate) connection: Connection,
-    pub(crate) connack: ConnAck,
-    pub(crate) disconnect_handle: DisconnectHandle,
-}
-
-/// A live connection whose packet loop is running in a test task.
-pub(crate) struct RunningConnection {
+/// A connected test client whose packet loop runs in an abort-on-drop task.
+pub(crate) struct TestConnection {
     pub(crate) client: Client,
     pub(crate) receiver: Receiver,
     pub(crate) connack: ConnAck,
     disconnect_handle: DisconnectHandle,
-    runner: tokio::task::JoinHandle<(ConnectHandle, DisconnectedEvent)>,
+    runner: AbortOnDropTask<(ConnectHandle, DisconnectedEvent)>,
 }
 
-impl LiveConnection {
-    pub(crate) fn start(self) -> RunningConnection {
-        let Self {
-            client,
-            receiver,
-            connection,
-            connack,
-            disconnect_handle,
-        } = self;
-        let runner = tokio::spawn(async move { connection.run_until_disconnect().await });
-        RunningConnection {
-            client,
-            receiver,
-            connack,
-            disconnect_handle,
-            runner,
+struct AbortOnDropTask<T>(Option<tokio::task::JoinHandle<T>>);
+
+impl<T> AbortOnDropTask<T> {
+    fn new(handle: tokio::task::JoinHandle<T>) -> Self {
+        Self(Some(handle))
+    }
+
+    async fn join(mut self) -> Result<T, tokio::task::JoinError> {
+        self.0.take().expect("task already joined").await
+    }
+}
+
+impl<T> Drop for AbortOnDropTask<T> {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.0 {
+            handle.abort();
         }
     }
 }
 
-impl RunningConnection {
+impl TestConnection {
     pub(crate) async fn disconnect(self) -> DisconnectedEvent {
         let (_, _, _, event) = self.disconnect_for_reconnect().await;
         event
@@ -160,6 +178,7 @@ impl RunningConnection {
             .expect("connection should still be running");
         let (connect_handle, event) = self
             .runner
+            .join()
             .await
             .expect("connection runner should not panic");
         (self.client, self.receiver, connect_handle, event)
@@ -170,7 +189,7 @@ impl RunningConnection {
 ///
 /// `client_id` must be unique per test: tests run concurrently, and a server is required to
 /// evict the existing session when a second connection reuses its identifier.
-pub(crate) async fn connect_tcp(endpoint: &Endpoint, client_id: &str) -> LiveConnection {
+pub(crate) async fn connect_tcp(endpoint: &Endpoint, client_id: &str) -> TestConnection {
     connect_with_transport(
         ConnectionTransportType::Tcp {
             hostname: endpoint.hostname.clone(),
@@ -182,19 +201,53 @@ pub(crate) async fn connect_tcp(endpoint: &Endpoint, client_id: &str) -> LiveCon
     .await
 }
 
+pub(crate) async fn connect_tcp_with_will(
+    endpoint: &Endpoint,
+    client_id: &str,
+    will: Will,
+) -> TestConnection {
+    connect_new_client(
+        ConnectionTransportType::Tcp {
+            hostname: endpoint.hostname.clone(),
+            port: endpoint.port,
+        },
+        client_id,
+        KeepAliveConfig::Infinite,
+        Some(will),
+    )
+    .await
+}
+
 /// Connects with the selected transport and starts a clean MQTT session.
 pub(crate) async fn connect_with_transport(
     transport_type: ConnectionTransportType,
     client_id: &str,
     keep_alive: KeepAliveConfig,
-) -> LiveConnection {
+) -> TestConnection {
+    connect_new_client(transport_type, client_id, keep_alive, None).await
+}
+
+async fn connect_new_client(
+    transport_type: ConnectionTransportType,
+    client_id: &str,
+    keep_alive: KeepAliveConfig,
+    will: Option<Will>,
+) -> TestConnection {
     let options = ClientOptions {
         client_id: Some(client_id.to_string()),
         ..Default::default()
     };
     let (client, connect_handle, receiver) = new_client(options);
 
-    reconnect_with_transport(client, connect_handle, receiver, transport_type, keep_alive).await
+    establish_connection(
+        client,
+        connect_handle,
+        receiver,
+        transport_type,
+        keep_alive,
+        will,
+    )
+    .await
 }
 
 /// Reconnects an existing client with the selected transport and a clean MQTT session.
@@ -204,7 +257,26 @@ pub(crate) async fn reconnect_with_transport(
     receiver: Receiver,
     transport_type: ConnectionTransportType,
     keep_alive: KeepAliveConfig,
-) -> LiveConnection {
+) -> TestConnection {
+    establish_connection(
+        client,
+        connect_handle,
+        receiver,
+        transport_type,
+        keep_alive,
+        None,
+    )
+    .await
+}
+
+async fn establish_connection(
+    client: Client,
+    connect_handle: ConnectHandle,
+    receiver: Receiver,
+    transport_type: ConnectionTransportType,
+    keep_alive: KeepAliveConfig,
+    will: Option<Will>,
+) -> TestConnection {
     match connect_handle
         .connect(
             ConnectionTransportConfig {
@@ -213,7 +285,7 @@ pub(crate) async fn reconnect_with_transport(
             },
             true,
             keep_alive,
-            None,
+            will,
             None,
             None,
             ConnectProperties::default(),
@@ -221,13 +293,18 @@ pub(crate) async fn reconnect_with_transport(
         )
         .await
     {
-        ConnectResult::Success(connection, connack, disconnect_handle) => LiveConnection {
-            client,
-            receiver,
-            connection,
-            connack,
-            disconnect_handle,
-        },
+        ConnectResult::Success(connection, connack, disconnect_handle) => {
+            let runner = AbortOnDropTask::new(tokio::spawn(async move {
+                connection.run_until_disconnect().await
+            }));
+            TestConnection {
+                client,
+                receiver,
+                connack,
+                disconnect_handle,
+                runner,
+            }
+        }
         ConnectResult::Failure(_, err) => panic!("MQTT CONNECT failed: {err}"),
     }
 }

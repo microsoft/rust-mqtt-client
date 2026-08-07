@@ -13,10 +13,13 @@ use ms_mqtt_client::client::{
 use ms_mqtt_client::error::ConnectError;
 use ms_mqtt_client::packet::ConnectProperties;
 
-use crate::common::fixtures::{FixtureCapability, FixtureQuirk};
+use crate::common::fixture::{FixtureCapability, FixtureQuirk};
 use crate::common::{
-    MTLS_PORT, TCP_PORT, TLS_PORT, acquire_fixture_guard_if_necessary, connect_with_transport, empty_tls_config,
-    mutual_tls_config, port_from_env, tls_config,
+    ENV_MQTT_MTLS_PORT, ENV_MQTT_PORT, ENV_MQTT_TLS_PORT, ENV_MQTT_WS_PORT, ENV_MQTT_WSS_PORT,
+    MTLS_PORT, TCP_PORT, TLS_PORT, WS_PORT, WSS_PORT, acquire_fixture_guard_if_necessary,
+    connect_with_transport, empty_tls_config, mutual_tls_config,
+    mutual_tls_config_with_server_only_certificate, mutual_tls_config_with_untrusted_client,
+    port_from_env, tls_config,
 };
 
 async fn connect_and_expect_failure(
@@ -49,6 +52,53 @@ async fn connect_and_expect_failure(
     }
 }
 
+async fn connect_and_expect_application_disconnect(
+    transport_type: ConnectionTransportType,
+    client_id: &str,
+) {
+    let connection =
+        connect_with_transport(transport_type, client_id, KeepAliveConfig::Infinite).await;
+    assert!(matches!(
+        connection.disconnect().await,
+        DisconnectedEvent::ApplicationDisconnect
+    ));
+}
+
+/// Verifies that TLS accepts a server certificate signed by the configured trusted CA.
+#[tokio::test]
+async fn tls_accepts_trusted_server_certificate() {
+    let _guard = acquire_fixture_guard_if_necessary().await;
+    connect_and_expect_application_disconnect(
+        ConnectionTransportType::Tls {
+            hostname: "localhost".to_string(),
+            port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
+            config: tls_config(),
+        },
+        "transport_tls_trusted",
+    )
+    .await;
+}
+
+/// Verifies that secure WebSocket accepts a server certificate signed by the configured trusted
+/// CA and completes the HTTP Upgrade handshake.
+#[tokio::test]
+async fn secure_websocket_accepts_trusted_server_certificate() {
+    let _guard = acquire_fixture_guard_if_necessary().await;
+    connect_and_expect_application_disconnect(
+        ConnectionTransportType::Ws {
+            request: format!(
+                "wss://localhost:{}/mqtt",
+                port_from_env(ENV_MQTT_WSS_PORT, WSS_PORT)
+            )
+            .into_client_request()
+            .expect("secure WebSocket URL should be valid"),
+            tls_config: tls_config(),
+        },
+        "transport_wss_trusted",
+    )
+    .await;
+}
+
 /// Verifies that a client certificate accepted by the mTLS fixture can connect and disconnect
 /// cleanly.
 #[tokio::test]
@@ -58,14 +108,13 @@ async fn mutual_tls_connect_disconnect() {
     let connection = connect_with_transport(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
-            port: port_from_env("MQTT_MTLS_PORT", MTLS_PORT),
+            port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
             config: mutual_tls_config(),
         },
         "transport_mutual_tls",
         KeepAliveConfig::Infinite,
     )
-    .await
-    .start();
+    .await;
     assert!(matches!(
         connection.disconnect().await,
         DisconnectedEvent::ApplicationDisconnect
@@ -81,7 +130,7 @@ async fn tls_rejects_untrusted_server_certificate() {
     let error = connect_and_expect_failure(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
-            port: port_from_env("MQTT_TLS_PORT", TLS_PORT),
+            port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
             config: empty_tls_config(),
         },
         "transport_tls_untrusted",
@@ -102,7 +151,7 @@ async fn tls_rejects_hostname_mismatch() {
     let error = connect_and_expect_failure(
         ConnectionTransportType::Tls {
             hostname: "127.0.0.1".to_string(),
-            port: port_from_env("MQTT_TLS_PORT", TLS_PORT),
+            port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
             config: tls_config(),
         },
         "transport_tls_hostname_mismatch",
@@ -122,10 +171,75 @@ async fn mutual_tls_requires_client_certificate() {
     let error = connect_and_expect_failure(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
-            port: port_from_env("MQTT_MTLS_PORT", MTLS_PORT),
+            port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
             config: tls_config(),
         },
         "transport_mutual_tls_missing_identity",
+    )
+    .await;
+    assert!(
+        matches!(error, ConnectError::Io(_)),
+        "unexpected error: {error}"
+    );
+}
+
+/// Verifies that an mTLS listener rejects a client certificate signed by an untrusted CA.
+#[tokio::test]
+async fn mutual_tls_rejects_untrusted_client_certificate() {
+    crate::require_fixture_capability!(FixtureCapability::MutualTls);
+    let _guard = acquire_fixture_guard_if_necessary().await;
+    let error = connect_and_expect_failure(
+        ConnectionTransportType::Tls {
+            hostname: "localhost".to_string(),
+            port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
+            config: mutual_tls_config_with_untrusted_client(),
+        },
+        "transport_mutual_tls_untrusted_client",
+    )
+    .await;
+    assert!(
+        matches!(error, ConnectError::Io(_)),
+        "unexpected error: {error}"
+    );
+}
+
+/// Verifies that an mTLS listener rejects a certificate limited to server authentication rather
+/// than client authentication.
+#[tokio::test]
+async fn mutual_tls_rejects_certificate_without_client_authentication_eku() {
+    crate::require_fixture_capability!(FixtureCapability::MutualTls);
+    let _guard = acquire_fixture_guard_if_necessary().await;
+    let error = connect_and_expect_failure(
+        ConnectionTransportType::Tls {
+            hostname: "localhost".to_string(),
+            port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
+            config: mutual_tls_config_with_server_only_certificate(),
+        },
+        "transport_mutual_tls_wrong_eku",
+    )
+    .await;
+    assert!(
+        matches!(error, ConnectError::Io(_)),
+        "unexpected error: {error}"
+    );
+}
+
+/// Verifies that a WebSocket listener rejects an HTTP Upgrade request for an unconfigured path.
+#[tokio::test]
+async fn websocket_rejects_wrong_path() {
+    crate::require_fixture_capability!(FixtureCapability::WebSocketPathValidation);
+    let _guard = acquire_fixture_guard_if_necessary().await;
+    let error = connect_and_expect_failure(
+        ConnectionTransportType::Ws {
+            request: format!(
+                "ws://localhost:{}/not-mqtt",
+                port_from_env(ENV_MQTT_WS_PORT, WS_PORT)
+            )
+            .into_client_request()
+            .expect("WebSocket URL should be valid"),
+            tls_config: empty_tls_config(),
+        },
+        "transport_websocket_wrong_path",
     )
     .await;
     assert!(
@@ -143,7 +257,7 @@ async fn websocket_rejects_plain_mqtt_endpoint() {
         ConnectionTransportType::Ws {
             request: format!(
                 "ws://localhost:{}/mqtt",
-                port_from_env("MQTT_PORT", TCP_PORT)
+                port_from_env(ENV_MQTT_PORT, TCP_PORT)
             )
             .into_client_request()
             .expect("WebSocket URL should be valid"),
