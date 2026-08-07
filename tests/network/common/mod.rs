@@ -131,6 +131,20 @@ pub(crate) struct TestConnection {
     runner: AbortOnDropTask<(ConnectHandle, DisconnectedEvent)>,
 }
 
+pub(crate) struct SessionOptions {
+    pub(crate) clean_start: bool,
+    pub(crate) properties: ConnectProperties,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            clean_start: true,
+            properties: ConnectProperties::default(),
+        }
+    }
+}
+
 struct AbortOnDropTask<T>(Option<tokio::task::JoinHandle<T>>);
 
 impl<T> AbortOnDropTask<T> {
@@ -157,11 +171,29 @@ impl TestConnection {
         event
     }
 
+    pub(crate) async fn disconnect_with_properties(
+        self,
+        properties: DisconnectProperties,
+    ) -> DisconnectedEvent {
+        let (_, _, _, event) = self
+            .disconnect_for_reconnect_with_properties(properties)
+            .await;
+        event
+    }
+
     pub(crate) async fn disconnect_for_reconnect(
         self,
     ) -> (Client, Receiver, ConnectHandle, DisconnectedEvent) {
+        self.disconnect_for_reconnect_with_properties(DisconnectProperties::default())
+            .await
+    }
+
+    pub(crate) async fn disconnect_for_reconnect_with_properties(
+        self,
+        properties: DisconnectProperties,
+    ) -> (Client, Receiver, ConnectHandle, DisconnectedEvent) {
         self.disconnect_handle
-            .disconnect(&DisconnectProperties::default())
+            .disconnect(&properties)
             .expect("connection should still be running");
         let (connect_handle, event) = self
             .runner
@@ -188,6 +220,24 @@ pub(crate) async fn connect_tcp(endpoint: &Endpoint, client_id: &str) -> TestCon
     .await
 }
 
+pub(crate) async fn connect_tcp_with_session(
+    endpoint: &Endpoint,
+    client_id: &str,
+    session: SessionOptions,
+) -> TestConnection {
+    connect_new_client(
+        ConnectionTransportType::Tcp {
+            hostname: endpoint.hostname.clone(),
+            port: endpoint.port,
+        },
+        client_id,
+        KeepAliveConfig::Infinite,
+        None,
+        session,
+    )
+    .await
+}
+
 pub(crate) async fn connect_tcp_with_will(
     endpoint: &Endpoint,
     client_id: &str,
@@ -201,6 +251,7 @@ pub(crate) async fn connect_tcp_with_will(
         client_id,
         KeepAliveConfig::Infinite,
         Some(will),
+        SessionOptions::default(),
     )
     .await
 }
@@ -211,7 +262,14 @@ pub(crate) async fn connect_with_transport(
     client_id: &str,
     keep_alive: KeepAliveConfig,
 ) -> TestConnection {
-    connect_new_client(transport_type, client_id, keep_alive, None).await
+    connect_new_client(
+        transport_type,
+        client_id,
+        keep_alive,
+        None,
+        SessionOptions::default(),
+    )
+    .await
 }
 
 async fn connect_new_client(
@@ -219,6 +277,7 @@ async fn connect_new_client(
     client_id: &str,
     keep_alive: KeepAliveConfig,
     will: Option<Will>,
+    session: SessionOptions,
 ) -> TestConnection {
     let options = ClientOptions {
         client_id: Some(client_id.to_string()),
@@ -233,6 +292,7 @@ async fn connect_new_client(
         transport_type,
         keep_alive,
         will,
+        session,
     )
     .await
 }
@@ -252,6 +312,29 @@ pub(crate) async fn reconnect_with_transport(
         transport_type,
         keep_alive,
         None,
+        SessionOptions::default(),
+    )
+    .await
+}
+
+pub(crate) async fn reconnect_tcp_with_session(
+    client: Client,
+    connect_handle: ConnectHandle,
+    receiver: Receiver,
+    endpoint: &Endpoint,
+    session: SessionOptions,
+) -> TestConnection {
+    establish_connection(
+        client,
+        connect_handle,
+        receiver,
+        ConnectionTransportType::Tcp {
+            hostname: endpoint.hostname.clone(),
+            port: endpoint.port,
+        },
+        KeepAliveConfig::Infinite,
+        None,
+        session,
     )
     .await
 }
@@ -263,6 +346,7 @@ async fn establish_connection(
     transport_type: ConnectionTransportType,
     keep_alive: KeepAliveConfig,
     will: Option<Will>,
+    session: SessionOptions,
 ) -> TestConnection {
     match connect_handle
         .connect(
@@ -270,12 +354,12 @@ async fn establish_connection(
                 transport_type,
                 timeout: Some(RESPONSE_TIMEOUT),
             },
-            true,
+            session.clean_start,
             keep_alive,
             will,
             None,
             None,
-            ConnectProperties::default(),
+            session.properties,
             Some(RESPONSE_TIMEOUT),
         )
         .await
