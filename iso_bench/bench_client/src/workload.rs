@@ -15,13 +15,14 @@ use tokio::task::JoinSet;
 
 use crate::config::{Config, Mode};
 use crate::report::Report;
+use crate::usage::{Usage, Window};
 
 pub(crate) async fn run_workload(
     client: Client,
     receiver: Receiver,
     cfg: &Config,
 ) -> Result<Report, String> {
-    let (latencies_ns, wall) = match cfg.mode {
+    let (latencies_ns, wall, usage) = match cfg.mode {
         Mode::PubLatency => run_pub_latency(&client, cfg).await?,
         Mode::PubThroughput => run_pub_throughput(&client, cfg).await?,
         Mode::RecvThroughput => run_recv_throughput(receiver, cfg).await?,
@@ -49,12 +50,16 @@ pub(crate) async fn run_workload(
         },
         count: latencies_ns.len(),
         wall,
+        usage,
         latencies_ns,
     })
 }
 
 /// Publish round-trips. Closed-loop (`TARGET_RATE=0`) or open-loop (`TARGET_RATE>0`).
-async fn run_pub_latency(client: &Client, cfg: &Config) -> Result<(Vec<u64>, Duration), String> {
+async fn run_pub_latency(
+    client: &Client,
+    cfg: &Config,
+) -> Result<(Vec<u64>, Duration, Usage), String> {
     for _ in 0..cfg.warmup {
         publish_once(client, cfg.qos, &cfg.topic, cfg.payload.clone()).await?;
     }
@@ -70,9 +75,9 @@ async fn run_pub_latency(client: &Client, cfg: &Config) -> Result<(Vec<u64>, Dur
 async fn run_latency_closed_loop(
     client: &Client,
     cfg: &Config,
-) -> Result<(Vec<u64>, Duration), String> {
+) -> Result<(Vec<u64>, Duration, Usage), String> {
     let mut latencies = Vec::with_capacity(cfg.count);
-    let start = Instant::now();
+    let win = Window::open();
     for _ in 0..cfg.count {
         let op_start = Instant::now();
         publish_once(client, cfg.qos, &cfg.topic, cfg.payload.clone()).await?;
@@ -81,8 +86,8 @@ async fn run_latency_closed_loop(
             tokio::time::sleep(Duration::from_micros(cfg.interval_us)).await;
         }
     }
-    let wall = start.elapsed();
-    Ok((latencies, wall))
+    let (wall, usage) = win.close();
+    Ok((latencies, wall, usage))
 }
 
 /// Open-loop round-trips: publishes are issued on a fixed schedule at `cfg.target_rate` msgs/sec,
@@ -93,11 +98,14 @@ async fn run_latency_closed_loop(
 async fn run_latency_open_loop(
     client: &Client,
     cfg: &Config,
-) -> Result<(Vec<u64>, Duration), String> {
+) -> Result<(Vec<u64>, Duration, Usage), String> {
     let mut set: JoinSet<Result<u64, String>> = JoinSet::new();
     let mut latencies = Vec::with_capacity(cfg.count);
-    let start = Instant::now();
+    let win = Window::open();
 
+    // The open-loop schedule is anchored to the window's own start, so `intended` and `wall` share
+    // one origin -- a separate Instant::now() here would drift from it by the sampling cost.
+    let start = win.started();
     for i in 0..cfg.count {
         let intended = start + Duration::from_secs_f64(i as f64 / cfg.target_rate);
         // tokio's timer is ~1ms-granular, which would swamp us-scale latencies; sleep the coarse
@@ -134,21 +142,24 @@ async fn run_latency_open_loop(
     while let Some(joined) = set.join_next().await {
         latencies.push(joined.map_err(|e| format!("task join error: {e}"))??);
     }
-    let wall = start.elapsed();
-    Ok((latencies, wall))
+    let (wall, usage) = win.close();
+    Ok((latencies, wall, usage))
 }
 
 /// Many operations in flight (bounded by `INFLIGHT`), measuring aggregate throughput. Per-op
 /// latency is also recorded but includes client-side queueing at high concurrency.
-async fn run_pub_throughput(client: &Client, cfg: &Config) -> Result<(Vec<u64>, Duration), String> {
+async fn run_pub_throughput(
+    client: &Client,
+    cfg: &Config,
+) -> Result<(Vec<u64>, Duration, Usage), String> {
     // Warmup (not recorded).
     pipeline(client, cfg, cfg.warmup, None).await?;
 
     let mut latencies = Vec::with_capacity(cfg.count);
-    let start = Instant::now();
+    let win = Window::open();
     pipeline(client, cfg, cfg.count, Some(&mut latencies)).await?;
-    let wall = start.elapsed();
-    Ok((latencies, wall))
+    let (wall, usage) = win.close();
+    Ok((latencies, wall, usage))
 }
 
 /// Inbound receive throughput: drain the `Receiver` and record inter-arrival gaps. The producer is
@@ -158,7 +169,7 @@ async fn run_pub_throughput(client: &Client, cfg: &Config) -> Result<(Vec<u64>, 
 async fn run_recv_throughput(
     mut receiver: Receiver,
     cfg: &Config,
-) -> Result<(Vec<u64>, Duration), String> {
+) -> Result<(Vec<u64>, Duration, Usage), String> {
     for _ in 0..cfg.warmup {
         let (_publish, ack) = receiver
             .recv()
@@ -168,8 +179,8 @@ async fn run_recv_throughput(
     }
 
     let mut gaps = Vec::with_capacity(cfg.count);
-    let start = Instant::now();
-    let mut last = start;
+    let win = Window::open();
+    let mut last = win.started();
     for _ in 0..cfg.count {
         let (_publish, ack) = receiver
             .recv()
@@ -180,8 +191,8 @@ async fn run_recv_throughput(
         last = now;
         ack_incoming(ack).await?;
     }
-    let wall = start.elapsed();
-    Ok((gaps, wall))
+    let (wall, usage) = win.close();
+    Ok((gaps, wall, usage))
 }
 
 /// Receive-path delivery latency: the peer stamps each publish's payload with its send time (epoch
@@ -191,7 +202,7 @@ async fn run_recv_throughput(
 async fn run_recv_latency(
     mut receiver: Receiver,
     cfg: &Config,
-) -> Result<(Vec<u64>, Duration), String> {
+) -> Result<(Vec<u64>, Duration, Usage), String> {
     if cfg.payload_bytes < 8 {
         return Err(
             "recv-latency needs PAYLOAD_BYTES >= 8 (payload carries an 8-byte send stamp)"
@@ -207,7 +218,7 @@ async fn run_recv_latency(
     }
 
     let mut latencies = Vec::with_capacity(cfg.count);
-    let start = Instant::now();
+    let win = Window::open();
     for _ in 0..cfg.count {
         let (publish, ack) = receiver
             .recv()
@@ -222,8 +233,8 @@ async fn run_recv_latency(
         latencies.push(now.saturating_sub(stamp));
         ack_incoming(ack).await?;
     }
-    let wall = start.elapsed();
-    Ok((latencies, wall))
+    let (wall, usage) = win.close();
+    Ok((latencies, wall, usage))
 }
 
 /// Wall-clock nanoseconds since the Unix epoch -- comparable across processes on one host, so the

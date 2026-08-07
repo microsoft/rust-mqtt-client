@@ -27,7 +27,7 @@
 #   REF_LABEL     tag for the reference build (report BASELINE)      (default: reference)
 #   CUR_SHA / REF_SHA   provenance git SHA per binary                (default: unknown)
 #   PEER_BIN      prebuilt bench_peer; built here if unset
-#   REPS          interleaved PAIRS per config per round             (default 10)
+#   REPS          interleaved PAIRS per config per round             (default 14)
 #   SEED          seed for the per-config interleave shuffle         (default: random)
 #                 Recorded into every JSONL record; reuse it to replay an identical run order.
 #   ROUNDS        replication rounds: whole suite run this many times (default 2). A verdict needs the
@@ -58,13 +58,36 @@ CUR_LABEL="${CUR_LABEL:-current}"
 REF_LABEL="${REF_LABEL:-reference}"
 CUR_SHA="${CUR_SHA:-unknown}"
 REF_SHA="${REF_SHA:-unknown}"
-REPS="${REPS:-10}"
+# 14 rather than 10: multibuild adds a between-build (layout) variance component measured at 21-30%
+# of the total, so ~1.4x the pairs are needed to restore the power the single-build suite had.
+REPS="${REPS:-14}"
 ROUNDS="${ROUNDS:-2}"  # whole-suite replication rounds; report.py requires a verdict to reproduce across them
 SEED="${SEED:-$RANDOM}"
 RANDOM="$SEED"  # seed once: the whole run's shuffle sequence is then a function of SEED alone
 WARMUP_REPS="${WARMUP_REPS:-8}"
 RESULTS_FILE="${RESULTS_FILE:-$script_dir/results.jsonl}"
 RESET="${RESET:-1}"
+
+# Optional colon-separated lists of SEVERAL builds per arm, each compiled from the same source with a
+# different code layout. Reps are then spread across them so layout becomes a sampled nuisance
+# variable rather than a fixed property of the comparison.
+#
+# Building each arm once makes layout a constant sitting inside the signal: the same two binaries in
+# every rep, round and repeat, so replication cannot remove it. Measured on this suite, a one-line
+# diff executing once per connection moves the median cell 0.15% and the worst 10% by ~0.9% purely
+# through layout and inlining shifts -- the same order as the regressions being hunted. Randomising
+# layout is the standard remedy (Mytkowicz et al., ASPLOS 2009; Curtsinger & Berger, "Stabilizer",
+# ASPLOS 2013); this file already randomises pair order, stack/env padding and warm-up arm, and the
+# binary was the last fixed thing left.
+#
+# Falls back to the single-binary CUR_BIN/REF_BIN behaviour when unset, so existing callers work.
+IFS=':' read -r -a CUR_BIN_LIST <<<"${CUR_BINS:-$CUR_BIN}"
+IFS=':' read -r -a REF_BIN_LIST <<<"${REF_BINS:-$REF_BIN}"
+N_BUILDS=${#REF_BIN_LIST[@]}
+((${#CUR_BIN_LIST[@]} == N_BUILDS)) || {
+    echo "ERROR: CUR_BINS has ${#CUR_BIN_LIST[@]} builds, REF_BINS has $N_BUILDS -- must match" >&2
+    exit 2
+}
 
 command -v python3 >/dev/null || {
     echo "ERROR: python3 is required for aggregation" >&2
@@ -96,12 +119,20 @@ prov_host="$(hostname 2>/dev/null || echo unknown)"
 [[ "$RESET" == "1" ]] && : >"$RESULTS_FILE"
 
 # Run one measured rep of one binary and append its record (tagged with the pair index and round).
+# Per-arm WARMUP. Normally both are unset and bench-once.sh's own default applies, so this changes
+# nothing. Setting them differently makes the two arms differ ONLY in warm-up, which is how the
+# warm-up question gets answered by a controlled A/B instead of by comparing across runs -- the
+# mistake that produced, and then appeared to refute, the WARMUP=50000 claim.
+REF_WARMUP="${REF_WARMUP:-}"
+CUR_WARMUP="${CUR_WARMUP:-}"
+
 run_and_record() {
-    local bin="$1" label="$2" sha="$3" pair="$4" cfg="$5" cfg_name="$6" round="$7"
+    local bin="$1" label="$2" sha="$3" pair="$4" cfg="$5" cfg_name="$6" round="$7" warm="${8:-}"
     local err_log out result_line cpu_line
     err_log="$(mktemp)"
     # shellcheck disable=SC2086
-    if ! out="$(env $cfg CLIENT_BIN="$bin" PEER_BIN="$PEER_BIN" LABEL="$label" ./bench-once.sh 2>"$err_log")"; then
+    # $cfg first so an explicit WARMUP after it wins; empty warm leaves bench-once.sh's default.
+    if ! out="$(env $cfg CLIENT_BIN="$bin" PEER_BIN="$PEER_BIN" LABEL="$label" ${warm:+WARMUP=$warm} ./bench-once.sh 2>"$err_log")"; then
         echo "FAILED ($label, $cfg_name)" >&2
         cat "$err_log" >&2
         rm -f "$err_log"
@@ -117,6 +148,7 @@ run_and_record() {
     }
     RESULT_JSON="${result_line#RESULT }" CPU_JSON="${cpu_line#CPU }" \
         REC_LABEL="$label" REC_CONFIG="$cfg_name" REP="$pair" REC_PAIR="$pair" REC_ROUND="$round" OUT_FILE="$RESULTS_FILE" \
+        REC_WARMUP="${warm:-}" \
         PROV_SHA="$sha" PROV_DIRTY=0 PROV_RUSTC="$prov_rustc" PROV_HOST="$prov_host" PROV_SEED="$SEED" \
         python3 "$script_dir/record.py" >/dev/null
 }
@@ -141,7 +173,7 @@ make_order() {
     done
 }
 
-echo "== iso_bench COMPARE (interleaved): [$CUR_LABEL] vs baseline [$REF_LABEL], reps=$REPS rounds=$ROUNDS configs=${#suite[@]} seed=$SEED ==" >&2
+echo "== iso_bench COMPARE (interleaved): [$CUR_LABEL] vs baseline [$REF_LABEL], reps=$REPS rounds=$ROUNDS builds=$N_BUILDS configs=${#suite[@]} seed=$SEED ==" >&2
 
 # Warm the box (CPU-saturating throughput-TLS), alternating binaries so both crypto paths warm; not
 # recorded. See bench.sh for why latency warm-ups don't ramp turbo.
@@ -155,8 +187,8 @@ if ((WARMUP_REPS > 0)); then
     warm_lead=$((RANDOM % 2))
     for ((w = 1; w <= WARMUP_REPS; w++)); do
         printf '   warm-up %d/%d\r' "$w" "$WARMUP_REPS" >&2
-        warm_bin="$REF_BIN"
-        (((w + warm_lead) % 2 == 0)) && warm_bin="$CUR_BIN"
+        warm_bin="${REF_BIN_LIST[(w - 1) % N_BUILDS]}"
+        (((w + warm_lead) % 2 == 0)) && warm_bin="${CUR_BIN_LIST[(w - 1) % N_BUILDS]}"
         env MODE=pub-throughput QOS=1 TRANSPORT=tls PAYLOAD_BYTES=16384 INFLIGHT=64 COUNT=300000 \
             CLIENT_BIN="$warm_bin" PEER_BIN="$PEER_BIN" ./bench-once.sh >/dev/null 2>&1 || true
     done
@@ -178,13 +210,20 @@ for ((round = 1; round <= ROUNDS; round++)); do
         make_order
         for ((p = 1; p <= REPS; p++)); do
             printf '   [pair %d/%d] interleaving %s / %s ...\r' "$p" "$REPS" "$CUR_LABEL" "$REF_LABEL" >&2
+            # Both arms of a pair use the SAME build index, so a pair still differs only by source --
+            # the pairing that the signed-rank test depends on stays intact. Varying the index ACROSS
+            # pairs is what turns layout into sampled variance. Offset by round so the leftover when
+            # REPS is not a multiple of N_BUILDS lands on a different build each round.
+            bi=$(((p - 1 + round) % N_BUILDS))
+            cur_bin="${CUR_BIN_LIST[bi]}"
+            ref_bin="${REF_BIN_LIST[bi]}"
             # Balanced shuffled order (see make_order): no build is systematically the 2nd runner.
             if ((order[p - 1] == 0)); then
-                run_and_record "$CUR_BIN" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round"
-                run_and_record "$REF_BIN" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round"
+                run_and_record "$cur_bin" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round" "$CUR_WARMUP"
+                run_and_record "$ref_bin" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round" "$REF_WARMUP"
             else
-                run_and_record "$REF_BIN" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round"
-                run_and_record "$CUR_BIN" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round"
+                run_and_record "$ref_bin" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round" "$REF_WARMUP"
+                run_and_record "$cur_bin" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round" "$CUR_WARMUP"
             fi
         done
         echo "   $cfg_name: $REPS pairs done                        " >&2

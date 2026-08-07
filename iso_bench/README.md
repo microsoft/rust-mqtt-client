@@ -13,6 +13,12 @@ transport, by comparing runs of one build against another (e.g. `main` vs. a ref
 > confounds. The numbers are meaningful **relative to another run on the same box**, not as absolute
 > real-world figures.
 
+> **Before gating CI on this, read [SENSITIVITY.md](SENSITIVITY.md).** Measured over 236 runs: the
+> suite reliably catches regressions at ~1% and is blind below ~0.5% — but *any* source edit, even
+> dead code in a function that never runs, shifts inlining and code layout enough to cost a real
+> 0.5–1%. So a comparison of two builds that "should not" differ in performance will often flag
+> something, and the flag is not a measurement error.
+
 ## Simple usage
 
 Install the prerequisites once, then run the suite on one build — or compare two builds for

@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use hdrhistogram::Histogram;
 
+use crate::usage::Usage;
+
 pub(crate) struct Report {
     pub(crate) cfg_summary: String,
     pub(crate) label: String,
@@ -24,6 +26,8 @@ pub(crate) struct Report {
     pub(crate) latency_kind: &'static str,
     pub(crate) count: usize,
     pub(crate) wall: Duration,
+    /// CPU and peak RSS for the measured window only -- see [`crate::usage`].
+    pub(crate) usage: Usage,
     pub(crate) latencies_ns: Vec<u64>,
 }
 
@@ -80,16 +84,40 @@ impl Report {
              p99.9={p999:.1}  max={max:.1}  mean={mean:.1}",
             kind = self.latency_kind
         );
-        println!("note:         measure CPU-per-msg externally, e.g. `/usr/bin/time -v ...`");
+        // CPU attributable to the measured window (see crate::usage for why this is not taken from
+        // /usr/bin/time). Divided by the SAME op count the window measured, so numerator and
+        // denominator finally describe the same span.
+        let user_s = self.usage.user_us as f64 / 1e6;
+        let sys_s = self.usage.sys_us as f64 / 1e6;
+        let cpu_us_per_msg = if self.count > 0 {
+            (self.usage.user_us + self.usage.sys_us) as f64 / self.count as f64
+        } else {
+            0.0
+        };
+        println!(
+            "cpu (window): {user_s:.3} s user + {sys_s:.3} s sys = {cpu_us_per_msg:.3} us/msg   \
+             peak rss {rss} kB{caveat}",
+            rss = self.usage.peak_rss_kb,
+            caveat = if self.usage.peak_rss_windowed {
+                ""
+            } else {
+                " (PROCESS-LIFETIME: kernel refused the peak reset)"
+            }
+        );
         println!("=============================");
 
         // Machine-readable line for scraping / diffing across runs. Raw-string pieces keep the JSON
         // quotes literal; `concat!` joins them at compile time into one format template.
+        //
+        // `cpu` covers the MEASURED window only, unlike the /usr/bin/time figures bench-once.sh also
+        // emits (as proc_*), which span the whole process including warm-up.
         println!(
             concat!(
                 r#"RESULT {{"label":"{}","mode":"{}","transport":"{}","qos":{},"#,
                 r#""payload_bytes":{},"inflight":{},"interval_us":{},"target_rate":{:.3},"count":{},"#,
                 r#""wall_s":{:.6},"msgs_per_s":{:.3},"mib_per_s":{:.3},"lat_kind":"{}","#,
+                r#""cpu":{{"user_s":{:.6},"sys_s":{:.6},"cpu_us_per_msg":{:.3},"#,
+                r#""max_rss_kb":{},"windowed_rss":{}}},"#,
                 r#""lat_us":{{"min":{:.3},"p50":{:.3},"p90":{:.3},"p99":{:.3},"#,
                 r#""p999":{:.3},"max":{:.3},"mean":{:.3}}},"hist_ns":{}}}"#,
             ),
@@ -106,6 +134,11 @@ impl Report {
             msgs_per_s,
             mb_per_s,
             self.latency_kind,
+            user_s,
+            sys_s,
+            cpu_us_per_msg,
+            self.usage.peak_rss_kb,
+            self.usage.peak_rss_windowed,
             min,
             p50,
             p90,

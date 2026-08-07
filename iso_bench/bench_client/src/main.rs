@@ -84,6 +84,7 @@
 
 mod config;
 mod report;
+mod usage;
 mod workload;
 
 use bytes::Bytes;

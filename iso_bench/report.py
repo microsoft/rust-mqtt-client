@@ -111,6 +111,18 @@ def print_overview(rows, configs):
             if len(vals) > 1:
                 print(f"   !! {what} differs across builds ({', '.join(sorted(map(str, vals)))}) -- a confound")
 
+    # cpu_us_per_msg / max_rss_kb have two incompatible definitions: "measured" (getrusage bracketing
+    # the measured loop) and "process" (/usr/bin/time over the whole run, warm-up included). They can
+    # differ threefold on identical work, so a file mixing them makes those two metrics meaningless.
+    # Warn loudly rather than in a footnote -- an unnoticed mix reads as a large clean regression.
+    windows = {r.get("cpu_window", "process") for r in rows if "cpu_us_per_msg" in r}
+    if len(windows) > 1:
+        print()
+        print(f"   !! cpu_us_per_msg/max_rss_kb mix accountings ({', '.join(sorted(windows))}) --")
+        print("      'process' includes warm-up, 'measured' does not; those cells are NOT comparable")
+    elif windows == {"process"}:
+        print("   note: cpu/rss are process-wide (warm-up included) -- pre-windowing bench_client")
+
     print()
     print(f" {'config':<12}{'build':<14}{'reps':>5}   description")
     for c in configs:

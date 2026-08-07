@@ -24,12 +24,29 @@ if rnd:
 for k in ("mode", "transport", "qos", "payload_bytes", "count", "inflight", "target_rate", "msgs_per_s", "mib_per_s", "lat_kind", "hist_ns"):
     if k in res:
         rec[k] = res[k]
+# WARMUP is not part of the RESULT json, so it arrives via the environment. Recorded because arms may
+# deliberately differ in it (the warm-up A/B) and a record that does not say which value produced it
+# cannot be audited later.
+warm = os.environ.get("REC_WARMUP")
+if warm:
+    rec["warmup"] = int(warm)
 rec["config"] = os.environ.get("REC_CONFIG") or (
     f"{res.get('mode')}-{res.get('transport')}-q{res.get('qos')}-{res.get('payload_bytes')}b"
 )
 for k, v in (res.get("lat_us") or {}).items():
     rec["lat_" + k] = v
 for k in ("cpu_us_per_msg", "max_rss_kb", "user_s", "sys_s"):
+    if k in cpu:
+        rec[k] = cpu[k]
+# Which accounting produced cpu_us_per_msg / max_rss_kb: "measured" (the client's own getrusage delta
+# bracketing the measured loop) or "process" (/usr/bin/time over the whole process, warm-up included).
+# The two differ by a factor, not a nudge -- 222 vs 697 us/msg for IDENTICAL measured work at
+# WARMUP=2000 vs 50000 -- so a record that does not say which one it holds cannot be pooled safely.
+# Same reasoning as the `warmup` field above: an unlabelled number is an unauditable number.
+# proc_* keeps the old process-wide figures alongside, so the two definitions stay comparable across
+# the corpus boundary this change creates, and startup/teardown regressions remain visible.
+for k in ("cpu_window", "windowed_rss",
+          "proc_cpu_us_per_msg", "proc_max_rss_kb", "proc_user_s", "proc_sys_s"):
     if k in cpu:
         rec[k] = cpu[k]
 rec["git_sha"] = os.environ.get("PROV_SHA") or "unknown"

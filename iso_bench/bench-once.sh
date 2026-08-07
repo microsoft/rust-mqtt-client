@@ -51,6 +51,22 @@ QOS="${QOS:-1}"
 TRANSPORT="${TRANSPORT:-tcp}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-64}"
 COUNT="${COUNT:-50000}"
+# Operations discarded before measurement starts.
+#
+# 50000 was tried and REVERTED. The claim was that it fixes p99 on open-loop configs as well as
+# quadrupling COUNT does (pub-lat-open-tcp baseline p99 1261.5 us -> ~118 us). Measured with it
+# actually deployed, across two hosts: mqttbench landed at 655.2 us and mqttbench2 at 1080.1 us for
+# that config, against a 117.6 us target, with per-pair p99 sd of 251-321 rather than the 38.6 the
+# original single run reported. Two other configs did hit the target on one host and not the other.
+# Partial and inconsistent, not a fix.
+#
+# The likely reason the two are not interchangeable: open-loop configs measure latency from the
+# INTENDED send time, so early slowness becomes a queue backlog. Discarding operations does not drain
+# that backlog if the client never catches up within the warm-up; extending COUNT works because it
+# dilutes the transient across a longer measured window. Different mechanisms.
+#
+# If p99 on open-loop configs matters, use 4x COUNT (~25 s/rep) and accept the cost, or treat p99 as
+# info-only there. Do not raise this number again without measuring the deployed result on both hosts.
 WARMUP="${WARMUP:-2000}"
 INFLIGHT="${INFLIGHT:-32}"
 INTERVAL_US="${INTERVAL_US:-0}"
@@ -244,13 +260,41 @@ else
 fi
 
 # ---- CPU-per-message ----------------------------------------------------------------------------
-if [[ -n "$TIME_BIN" && -s "$time_out" ]]; then
+# Two accountings, deliberately both emitted.
+#
+# WINDOWED (preferred): the client samples getrusage around its measured loop and reports the delta
+# on the RESULT line, so numerator and denominator describe the same span. See bench_client/src/usage.rs.
+#
+# PROCESS (proc_*, from /usr/bin/time): the whole process -- startup, connect, TLS handshake, every
+# warm-up op, measured loop, teardown -- divided by measured ops alone. This is what the metric used
+# to mean, and why it moved ~15% on a warm-up-only A/B in which the binaries were byte-identical.
+# Kept because it still detects startup/teardown regressions the window cannot see, and because it
+# lets the two definitions be compared across the corpus boundary this change creates.
+win_cpu="$(sed -n 's/.*"cpu":{\([^}]*\)}.*/\1/p' "$result_out" | head -1)"
+if [[ -n "$win_cpu" ]]; then
+    fld() { sed -n "s/.*\"$1\":\([^,}]*\).*/\1/p" <<<"$win_cpu"; }
+    printf 'CPU {"user_s":%s,"sys_s":%s,"cpu_us_per_msg":%s,"max_rss_kb":%s,"cpu_window":"measured","windowed_rss":%s' \
+        "$(fld user_s)" "$(fld sys_s)" "$(fld cpu_us_per_msg)" "$(fld max_rss_kb)" "$(fld windowed_rss)"
+    if [[ -n "$TIME_BIN" && -s "$time_out" ]]; then
+        p_user=$(awk -F': ' '/User time/{print $2}' "$time_out")
+        p_sys=$(awk -F': ' '/System time/{print $2}' "$time_out")
+        p_rss=$(awk -F': ' '/Maximum resident set size/{print $2}' "$time_out")
+        p_per=$(awk -v u="${p_user:-0}" -v s="${p_sys:-0}" -v c="$COUNT" \
+            'BEGIN{ if (c>0) printf "%.3f", (u+s)/c*1e6; else print "0" }')
+        printf ',"proc_user_s":%s,"proc_sys_s":%s,"proc_cpu_us_per_msg":%s,"proc_max_rss_kb":%s' \
+            "${p_user:-0}" "${p_sys:-0}" "$p_per" "${p_rss:-0}"
+    fi
+    printf '}\n'
+elif [[ -n "$TIME_BIN" && -s "$time_out" ]]; then
+    # Pre-windowing bench_client (no "cpu" object on RESULT). Tag it so the two definitions are never
+    # pooled unknowingly -- report.py gates cpu_us_per_msg, and mixing them would compare a warm-up-
+    # inclusive number against a warm-up-free one and read the difference as a regression.
     user_s=$(awk -F': ' '/User time/{print $2}' "$time_out")
     sys_s=$(awk -F': ' '/System time/{print $2}' "$time_out")
     rss_kb=$(awk -F': ' '/Maximum resident set size/{print $2}' "$time_out")
     cpu_us_per_msg=$(awk -v u="${user_s:-0}" -v s="${sys_s:-0}" -v c="$COUNT" \
         'BEGIN{ if (c>0) printf "%.3f", (u+s)/c*1e6; else print "0" }')
-    printf 'CPU {"user_s":%s,"sys_s":%s,"cpu_us_per_msg":%s,"max_rss_kb":%s}\n' \
+    printf 'CPU {"user_s":%s,"sys_s":%s,"cpu_us_per_msg":%s,"max_rss_kb":%s,"cpu_window":"process"}\n' \
         "${user_s:-0}" "${sys_s:-0}" "$cpu_us_per_msg" "${rss_kb:-0}"
 fi
 
