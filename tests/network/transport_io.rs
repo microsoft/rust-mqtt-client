@@ -589,7 +589,7 @@ async fn keepalive(profile: ConnectionProfile) {
             .expect("SUBSCRIBE should complete");
         assert!(suback.is_success(), "server rejected SUBSCRIBE: {suback:?}");
 
-        tokio::time::sleep(Duration::from_secs(6)).await;
+        tokio::time::sleep(Duration::from_secs(9)).await;
 
         let publication = Publication {
             payload: Bytes::from_static(b"after keepalive"),
