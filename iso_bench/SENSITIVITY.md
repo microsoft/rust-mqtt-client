@@ -124,8 +124,11 @@ host. The point of the table is that the floor is metric-shaped, not that these 
 on one VM than another with identical specs (same Xeon Platinum 8168 stepping, same topology, same
 baseline throughput and variance). Any threshold must be calibrated per runner.
 
-**Always use `ROUNDS>=2`.** At one round the per-cell false-positive rate is 2.61% against 0.03% at
-two; `report.py` now says so explicitly when given single-round data.
+**Always use `ROUNDS>=2`.** At one round the per-cell false-positive rate is 2.61% against 0.04% at
+two; `report.py` now says so explicitly when given single-round data. The two-round figure is
+3 spurious cells in 8,370 across 93 A/A runs, on the current 90-cell denominator; the single-round
+2.61% was computed before `mib_per_s` was degated and so sits on the old inflated denominator, which
+makes it a slight *under*-estimate.
 
 ## Limitations
 
