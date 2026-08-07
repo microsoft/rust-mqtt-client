@@ -20,8 +20,8 @@ use test_case::{test_case, test_matrix};
 
 use crate::common::{
     ENV_MQTT_HOST, ENV_MQTT_PORT, ENV_MQTT_TLS_PORT, ENV_MQTT_WS_PORT, ENV_MQTT_WSS_PORT, TCP_PORT,
-    TLS_PORT, TestConnection, WS_PORT, WSS_PORT, acquire_fixture_guard_if_necessary,
-    connect_with_transport, empty_tls_config, port_from_env, reconnect_with_transport, tls_config,
+    TLS_PORT, TestConnection, WS_PORT, WSS_PORT, connect_with_transport, empty_tls_config,
+    port_from_env, reconnect_with_transport, tls_config,
 };
 
 #[derive(Clone, Copy)]
@@ -310,7 +310,6 @@ async fn disconnect_pair_and_expect_application_disconnect(
 )]
 #[tokio::test]
 async fn read_write(profile: ConnectionProfile, publication_shape: PublicationShape) {
-    let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let subscriber_role = format!("{}_subscriber", publication_shape.name());
         let publisher_role = format!("{}_publisher", publication_shape.name());
@@ -353,7 +352,6 @@ async fn read_write(profile: ConnectionProfile, publication_shape: PublicationSh
 async fn reconnect_cycles(profile: ConnectionProfile) {
     const CYCLE_COUNT: u32 = 5;
 
-    let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let mut connection =
             connect(profile, "reconnect", KeepAliveConfig::Infinite).await;
@@ -408,7 +406,6 @@ async fn mixed_publication_shapes(profile: ConnectionProfile) {
         PublicationShape::RemainingLength16383,
     ];
 
-    let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let mut subscriber =
             connect(profile, "mixed_subscriber", KeepAliveConfig::Infinite).await;
@@ -444,7 +441,6 @@ async fn mixed_publication_shapes(profile: ConnectionProfile) {
 )]
 #[tokio::test]
 async fn back_to_back_ordering(profile: ConnectionProfile, burst_size: BurstSize) {
-    let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let subscriber_role = format!("{}_burst_subscriber", burst_size.name());
         let publisher_role = format!("{}_burst_publisher", burst_size.name());
@@ -500,7 +496,6 @@ async fn back_to_back_ordering(profile: ConnectionProfile, burst_size: BurstSize
 #[test_case(ConnectionProfile::SecureWebSocket; "secure_websocket")]
 #[tokio::test]
 async fn concurrent_bidirectional(profile: ConnectionProfile) {
-    let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let mut first =
             connect(profile, "concurrent_first", KeepAliveConfig::Infinite).await;
@@ -568,7 +563,6 @@ async fn concurrent_bidirectional(profile: ConnectionProfile) {
 #[test_case(ConnectionProfile::SecureWebSocket; "secure_websocket")]
 #[tokio::test]
 async fn keepalive(profile: ConnectionProfile) {
-    let _guard = acquire_fixture_guard_if_necessary().await;
     crate::test_timeout! {
         let keep_alive = KeepAliveConfig::Duration {
             ping_after: NonZeroU16::new(5).unwrap(),

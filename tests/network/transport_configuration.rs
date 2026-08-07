@@ -13,13 +13,12 @@ use ms_mqtt_client::client::{
 use ms_mqtt_client::error::ConnectError;
 use ms_mqtt_client::packet::ConnectProperties;
 
-use crate::common::fixture::{FixtureCapability, FixtureQuirk};
+use crate::common::fixture::FixtureCapability;
 use crate::common::{
     ENV_MQTT_MTLS_PORT, ENV_MQTT_PORT, ENV_MQTT_TLS_PORT, ENV_MQTT_WS_PORT, ENV_MQTT_WSS_PORT,
-    MTLS_PORT, TCP_PORT, TLS_PORT, WS_PORT, WSS_PORT, acquire_fixture_guard_if_necessary,
-    connect_with_transport, empty_tls_config, mutual_tls_config,
-    mutual_tls_config_with_server_only_certificate, mutual_tls_config_with_untrusted_client,
-    port_from_env, tls_config,
+    MTLS_PORT, TCP_PORT, TLS_PORT, WS_PORT, WSS_PORT, connect_with_transport, empty_tls_config,
+    mutual_tls_config, mutual_tls_config_with_server_only_certificate,
+    mutual_tls_config_with_untrusted_client, port_from_env, tls_config,
 };
 
 async fn connect_and_expect_failure(
@@ -67,7 +66,6 @@ async fn connect_and_expect_application_disconnect(
 /// Verifies that TLS accepts a server certificate signed by the configured trusted CA.
 #[tokio::test]
 async fn tls_accepts_trusted_server_certificate() {
-    let _guard = acquire_fixture_guard_if_necessary().await;
     connect_and_expect_application_disconnect(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
@@ -83,7 +81,6 @@ async fn tls_accepts_trusted_server_certificate() {
 /// CA and completes the HTTP Upgrade handshake.
 #[tokio::test]
 async fn secure_websocket_accepts_trusted_server_certificate() {
-    let _guard = acquire_fixture_guard_if_necessary().await;
     connect_and_expect_application_disconnect(
         ConnectionTransportType::Ws {
             request: format!(
@@ -104,7 +101,6 @@ async fn secure_websocket_accepts_trusted_server_certificate() {
 #[tokio::test]
 async fn mutual_tls_connect_disconnect() {
     crate::require_fixture_capability!(FixtureCapability::MutualTls);
-    let _guard = acquire_fixture_guard_if_necessary().await;
     let connection = connect_with_transport(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
@@ -125,8 +121,6 @@ async fn mutual_tls_connect_disconnect() {
 /// trusted by the client.
 #[tokio::test]
 async fn tls_rejects_untrusted_server_certificate() {
-    crate::skip_for_fixture_quirk!(FixtureQuirk::FailedTlsHandshakeDestabilizesServer);
-    let _guard = acquire_fixture_guard_if_necessary().await;
     let error = connect_and_expect_failure(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
@@ -146,8 +140,6 @@ async fn tls_rejects_untrusted_server_certificate() {
 /// do not match the requested host.
 #[tokio::test]
 async fn tls_rejects_hostname_mismatch() {
-    crate::skip_for_fixture_quirk!(FixtureQuirk::FailedTlsHandshakeDestabilizesServer);
-    let _guard = acquire_fixture_guard_if_necessary().await;
     let error = connect_and_expect_failure(
         ConnectionTransportType::Tls {
             hostname: "127.0.0.1".to_string(),
@@ -167,7 +159,6 @@ async fn tls_rejects_hostname_mismatch() {
 #[tokio::test]
 async fn mutual_tls_requires_client_certificate() {
     crate::require_fixture_capability!(FixtureCapability::MutualTls);
-    let _guard = acquire_fixture_guard_if_necessary().await;
     let error = connect_and_expect_failure(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
@@ -187,7 +178,6 @@ async fn mutual_tls_requires_client_certificate() {
 #[tokio::test]
 async fn mutual_tls_rejects_untrusted_client_certificate() {
     crate::require_fixture_capability!(FixtureCapability::MutualTls);
-    let _guard = acquire_fixture_guard_if_necessary().await;
     let error = connect_and_expect_failure(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
@@ -208,7 +198,6 @@ async fn mutual_tls_rejects_untrusted_client_certificate() {
 #[tokio::test]
 async fn mutual_tls_rejects_certificate_without_client_authentication_eku() {
     crate::require_fixture_capability!(FixtureCapability::MutualTls);
-    let _guard = acquire_fixture_guard_if_necessary().await;
     let error = connect_and_expect_failure(
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
@@ -228,7 +217,6 @@ async fn mutual_tls_rejects_certificate_without_client_authentication_eku() {
 #[tokio::test]
 async fn websocket_rejects_wrong_path() {
     crate::require_fixture_capability!(FixtureCapability::WebSocketPathValidation);
-    let _guard = acquire_fixture_guard_if_necessary().await;
     let error = connect_and_expect_failure(
         ConnectionTransportType::Ws {
             request: format!(
@@ -252,7 +240,6 @@ async fn websocket_rejects_wrong_path() {
 /// Upgrade handshake.
 #[tokio::test]
 async fn websocket_rejects_plain_mqtt_endpoint() {
-    let _guard = acquire_fixture_guard_if_necessary().await;
     let error = connect_and_expect_failure(
         ConnectionTransportType::Ws {
             request: format!(

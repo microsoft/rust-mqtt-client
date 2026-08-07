@@ -21,8 +21,6 @@ use ms_mqtt_client::client::{
 };
 use ms_mqtt_client::packet::{ConnAck, ConnectProperties, DisconnectProperties, Will};
 
-use fixture::{FixtureQuirk, has_quirk};
-
 pub(crate) const ENV_MQTT_CERT_DIR: &str = "MQTT_CERT_DIR";
 pub(crate) const ENV_MQTT_HOST: &str = "MQTT_HOST";
 pub(crate) const ENV_MQTT_MTLS_PORT: &str = "MQTT_MTLS_PORT";
@@ -37,8 +35,6 @@ pub(crate) const TLS_PORT: u16 = 8883;
 pub(crate) const MTLS_PORT: u16 = 8884;
 pub(crate) const WS_PORT: u16 = 8083;
 pub(crate) const WSS_PORT: u16 = 8084;
-
-static TRANSPORT_TEST_LOCK: futures_util::lock::Mutex<()> = futures_util::lock::Mutex::new(());
 
 /// Default deadline for live network test bodies.
 pub(crate) const TEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -104,15 +100,6 @@ fn mutual_tls_config_with_identity(
         &certificate("ca.crt"),
     )
     .expect("test client identity and CA certificate should be valid")
-}
-
-pub(crate) async fn acquire_fixture_guard_if_necessary()
--> Option<futures_util::lock::MutexGuard<'static, ()>> {
-    if has_quirk(FixtureQuirk::RequiresSerialTransportTests) {
-        Some(TRANSPORT_TEST_LOCK.lock().await)
-    } else {
-        None
-    }
 }
 
 /// Where a suite should look for its MQTT server.

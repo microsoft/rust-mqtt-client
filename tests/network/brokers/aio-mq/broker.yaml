@@ -1,5 +1,3 @@
-# Stage 0 of the AIO MQ 1.6.0 workaround documented in up.sh: bootstrap the Broker with
-# plaintext MQTT only. The later manifests update this same BrokerListener after Running.
 # Adapted from the chart's examples/deployment.simple.yaml, with two deliberate changes:
 #
 #   - The listener is LoadBalancer from the start. The example uses the default ClusterIP,
@@ -22,6 +20,22 @@ spec:
   serviceType: LoadBalancer
   ports:
     - port: 1883
+      protocol: Mqtt
+    - port: 8883
+      protocol: Mqtt
+      tls:
+        mode: Manual
+        manual:
+          secretRef: network-server-tls
+    - port: 8083
+      protocol: WebSockets
+    - port: 8084
+      protocol: WebSockets
+      tls:
+        mode: Manual
+        manual:
+          # AIO MQ 1.6.0 creates duplicate volume mounts when two ports share a Secret.
+          secretRef: network-server-wss-tls
 
 ---
 apiVersion: mqttbroker.iotoperations.azure.com/v1
