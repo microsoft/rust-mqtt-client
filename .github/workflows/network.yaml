@@ -106,7 +106,7 @@ jobs:
     - name: Test
       env:
         MQTT_SERVER: ${{ matrix.broker }}
-      run: cargo test --features __network --test network
+      run: cargo test --features __network,websockets --test network
 
     - name: Stop broker
       if: always()
