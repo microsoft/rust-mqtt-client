@@ -78,6 +78,23 @@ CUR_BIN=/tmp/t-cur/release/bench_client  REF_BIN=/tmp/t-main/release/bench_clien
   CUR_LABEL=branch REF_LABEL=main ./bench-compare.sh
 ```
 
+**Prefer [`bench-multibuild.sh`](bench-multibuild.sh) for a real gate.** It does the above, except it
+builds each side *several times* with different code layouts and spreads the reps across them:
+
+```bash
+git worktree add ../iso-main main
+REF_SRC=../iso-main CUR_SRC=.. REF_LABEL=main CUR_LABEL=branch ./bench-multibuild.sh
+```
+
+Building each side once makes code layout a **constant inside the measurement** — the same two
+binaries in every rep and round, so replication cannot average it away. Any source edit shifts
+function placement and inlining, and those shifts cost the same order as the regressions worth
+catching. Measured here: a one-line diff whose work runs once per connection against 50,000 measured
+messages — so it cannot cost anything real — flagged **6 of 6** single-build runs but only **1 of 4**
+multibuild runs, while a genuine ~1.5% regression was caught equally well either way (32–33 gated
+cells vs 26–32). Costs ~15 s per extra build against a suite that runs for over an hour; the measured
+work is unchanged. `BUILDS=1` reverts to the single-build behaviour above.
+
 `bench-compare.sh` prints the paired comparison as it finishes; re-render it any time (add
 histograms):
 
