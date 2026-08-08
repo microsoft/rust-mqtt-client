@@ -19,11 +19,17 @@
 #
 #     6 of 6 single-build runs        1 of 4 multibuild runs
 #
-# while a genuine ~1.5% regression (a bounded busy-spin per outgoing packet) was detected just as well
-# either way: 32-33 gated cells under multibuild against 32-35 single-build AT THE SAME REP COUNT, with
-# near-identical raw effect sizes (median |delta| 3.7% vs 3.8%). Multibuild buys artefact suppression
-# at no cost in detection -- it does not improve detection, and an earlier reading of these runs that
-# said otherwise was comparing across different rep counts. See SENSITIVITY.md.
+# while genuine regressions (a bounded busy-spin per outgoing packet) were detected ALMOST as well. At
+# the same rep count, across two effect sizes and two hosts, multibuild scored 83-100% of single-build:
+#
+#     ~0.9% regression   20 vs 21   and   19 vs 23 gated cells
+#     ~3.7% regression   32 vs 32   and   33 vs 35
+#
+# So the trade is a few percent of detection -- ~5% typical, 17% worst measured -- for roughly 83% of
+# the layout false positives. Two earlier readings of these runs were wrong and are worth not
+# repeating: one compared across different rep counts (reps alone moves detection a lot, 26->32 going
+# 10->14), and one then concluded "no cost" from the reps-matched pair at a single large effect size,
+# before the threshold-band case was measured. See SENSITIVITY.md.
 #
 # Randomising layout is the standard remedy: Mytkowicz et al., "Producing Wrong Data Without Doing
 # Anything Obviously Wrong!" (ASPLOS 2009); Curtsinger & Berger, "Stabilizer" (ASPLOS 2013).

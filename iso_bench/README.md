@@ -91,11 +91,12 @@ binaries in every rep and round, so replication cannot average it away. Any sour
 function placement and inlining, and those shifts cost the same order as the regressions worth
 catching. Measured here: a one-line diff whose work runs once per connection against 50,000 measured
 messages — so it cannot cost anything real — flagged **6 of 6** single-build runs but only **1 of 4**
-multibuild runs, while a genuine ~1.5% regression was caught **just as well either way** — 32–33 gated
-cells under multibuild against 32–35 single-build at the same rep count, and near-identical raw effect
-sizes (median |delta| 3.7% vs 3.8%). Multibuild buys artefact suppression at no cost in detection; it
-does not improve detection. Costs ~15 s per extra build against a suite that runs for over an hour;
-the measured work is unchanged. `BUILDS=1` reverts to the single-build behaviour above.
+multibuild runs, while genuine regressions were caught **almost as well** — at the same rep count,
+multibuild scored 83–100% of single-build's gated cells across two effect sizes and two hosts
+(~0.9%: 20 vs 21 and 19 vs 23; ~3.7%: 32 vs 32 and 33 vs 35). So multibuild trades a few percent of
+detection — ~5% typical, 17% worst measured — for roughly 83% of the layout false positives. Costs
+~15 s per extra build against a suite that runs for over an hour; the measured work is unchanged.
+`BUILDS=1` reverts to the single-build behaviour above.
 
 `bench-compare.sh` prints the paired comparison as it finishes; re-render it any time (add
 histograms):
