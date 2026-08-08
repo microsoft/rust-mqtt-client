@@ -134,7 +134,7 @@ REF_WARMUP="${REF_WARMUP:-}"
 CUR_WARMUP="${CUR_WARMUP:-}"
 
 run_and_record() {
-    local bin="$1" label="$2" sha="$3" pair="$4" cfg="$5" cfg_name="$6" round="$7" warm="${8:-}"
+    local bin="$1" label="$2" sha="$3" pair="$4" cfg="$5" cfg_name="$6" round="$7" warm="${8:-}" build="${9:-0}"
     local err_log out result_line cpu_line
     err_log="$(mktemp)"
     # shellcheck disable=SC2086
@@ -155,7 +155,7 @@ run_and_record() {
     }
     RESULT_JSON="${result_line#RESULT }" CPU_JSON="${cpu_line#CPU }" \
         REC_LABEL="$label" REC_CONFIG="$cfg_name" REP="$pair" REC_PAIR="$pair" REC_ROUND="$round" OUT_FILE="$RESULTS_FILE" \
-        REC_WARMUP="${warm:-}" \
+        REC_WARMUP="${warm:-}" REC_BUILD="$build" \
         PROV_SHA="$sha" PROV_DIRTY=0 PROV_RUSTC="$prov_rustc" PROV_HOST="$prov_host" PROV_SEED="$SEED" \
         python3 "$script_dir/record.py" >/dev/null
 }
@@ -226,11 +226,11 @@ for ((round = 1; round <= ROUNDS; round++)); do
             ref_bin="${REF_BIN_LIST[bi]}"
             # Balanced shuffled order (see make_order): no build is systematically the 2nd runner.
             if ((order[p - 1] == 0)); then
-                run_and_record "$cur_bin" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round" "$CUR_WARMUP"
-                run_and_record "$ref_bin" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round" "$REF_WARMUP"
+                run_and_record "$cur_bin" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round" "$CUR_WARMUP" "$bi"
+                run_and_record "$ref_bin" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round" "$REF_WARMUP" "$bi"
             else
-                run_and_record "$ref_bin" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round" "$REF_WARMUP"
-                run_and_record "$cur_bin" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round" "$CUR_WARMUP"
+                run_and_record "$ref_bin" "$REF_LABEL" "$REF_SHA" "$p" "$cfg" "$cfg_name" "$round" "$REF_WARMUP" "$bi"
+                run_and_record "$cur_bin" "$CUR_LABEL" "$CUR_SHA" "$p" "$cfg" "$cfg_name" "$round" "$CUR_WARMUP" "$bi"
             fi
         done
         echo "   $cfg_name: $REPS pairs done                        " >&2

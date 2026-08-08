@@ -30,6 +30,14 @@ for k in ("mode", "transport", "qos", "payload_bytes", "count", "inflight", "tar
 warm = os.environ.get("REC_WARMUP")
 if warm:
     rec["warmup"] = int(warm)
+# Which layout variant produced the binary for this rep. Without it multibuild is UNAUDITABLE: the
+# index was computed and used to pick the binary but never recorded, so there was no way to ask from
+# the data whether the five builds behaved differently -- which is exactly the question that decides
+# whether multibuild does anything. Recorded even when there is one build (always 0), so a file can
+# always be checked rather than assumed.
+build = os.environ.get("REC_BUILD")
+if build is not None and build != "":
+    rec["build"] = int(build)
 rec["config"] = os.environ.get("REC_CONFIG") or (
     f"{res.get('mode')}-{res.get('transport')}-q{res.get('qos')}-{res.get('payload_bytes')}b"
 )
