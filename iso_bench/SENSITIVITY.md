@@ -31,10 +31,10 @@ the "0.5–1%" figure quoted for this effect elsewhere is the p90, not what a ty
 "True cost" is the change's actual effect, established by arm swap (see [Method](#method-the-arm-swap))
 and summarised as the p90 of |per-cell effect| across all gated cells.
 
-All rows below are **single-build** on the pre-windowing harness — the configuration they were
-measured in, and the one [multibuild](#multibuild-the-fix-for-the-perturbation-floor) replaces. The
-real-cost rows survive multibuild largely intact (83–100%); what happens to the artefact rows under
-multibuild is not yet cleanly measured — see the caveats in that section.
+All rows below are **single-build on the pre-windowing harness** — the configuration they were
+measured in. That matters most for the artefact rows: the same `o1null` injection that flagged 100% of
+runs there flags 2 of 8 on the current harness, and the change responsible is windowed cpu/rss, not
+[multibuild](#multibuild-what-it-does-and-does-not-buy). The real-cost rows are close to unaffected.
 
 | change | true cost | host | runs | P(flag) |
 |---|---|---|---|---|
@@ -87,68 +87,76 @@ the only test that reliably distinguished a real effect from an artefact — it 
 above. **No rung's cost should be quoted without it.** Measured residual bias `b` is 0.000–0.003%
 across every rung/host combination tested, which is the strongest evidence the harness itself is fair.
 
-## Multibuild: the fix for the perturbation floor
+## Multibuild: what it does and does not buy
 
-The finding above says layout is a **fixed** property of a single-build comparison — the same two
-binaries in every rep, round and repeat — so it sits inside the point estimate where replication
-cannot reach it. The standard remedy is to randomise layout so it becomes a sampled nuisance variable
-(Mytkowicz et al., ASPLOS 2009; Curtsinger & Berger, *Stabilizer*, ASPLOS 2013). `bench-multibuild.sh`
-builds each arm five times with different alignment flags and spreads the reps across them.
+Layout is a **fixed** property of a single-build comparison — the same two binaries in every rep,
+round and repeat — so it sits inside the point estimate where replication cannot reach it. The standard
+remedy is to randomise layout so it becomes a sampled nuisance variable (Mytkowicz et al., ASPLOS 2009;
+Curtsinger & Berger, *Stabilizer*, ASPLOS 2013). `bench-multibuild.sh` builds each arm five times with
+different alignment flags and spreads the reps across them.
 
-It works, and it costs a little:
+**Measured, that buys less than the theory suggests — and possibly nothing.**
+
+### Detection cost: real, small, measured
 
 | | single-build | multibuild |
 |---|---|---|
-| `o1null` — layout only, cannot cost anything | 6 of 6 runs flagged | 3 of 8 runs flagged — *see caveats* |
 | `spin-d200` — real work, ~0.9% | 21 / 23 gated cells | 20 / 19 |
 | `spin-d800` — real work, ~3.7% | 32 / 35 gated cells | 32 / 33 |
 
-The two `spin` rows have reps matched at 14 on both sides, same harness and injection on the same day.
-Across those four real-work cells multibuild scores **83–100%** of single-build (median ~94.5%), so it
-costs roughly 5% of detection — 17% in the worst cell measured.
+Two hosts per row, reps matched at 14 on both sides, same harness and injection on the same day.
+Multibuild scores **83–100%** of single-build across those four cells (median ~94.5%), so it costs
+roughly **5% of detection, 17% in the worst cell**.
 
-**The `o1null` row is not yet a usable measurement, and is kept here only to show what is known.**
-Unlike the `spin` rows it has three separate problems:
+### False-positive benefit: not measurable
 
-1. **The two sides were scored with different metric definitions.** Every single-build draw predates
-   the switch to windowed cpu/rss; most multibuild draws follow it. `cpu_us_per_msg` fired in 5 of the
-   6 single-build runs, and dropping cpu/rss cells entirely takes single-build from 6/6 to 5/6 — so
-   the old accounting contributed to the gap without explaining it. No single-build baseline has been
-   re-measured on the current harness.
-2. **Build mode is confounded with rep count** — single-build draws are `reps=10`, multibuild `reps=14`.
-3. **The samples are tiny.** 6/6 gives a 95% interval of [54%, 100%]; 3/8 gives [8.5%, 75.5%].
-
-Fisher's exact test on 6/6 vs 3/8 gives p = 0.031, but with (1) and (2) unresolved that compares two
-things differing in three ways at once. An earlier draft quoted "83%" from 6-vs-4, held it at 6-vs-6,
-and two further draws moved it to 62% — which is what a [0.4%, 64%] interval at n=6 will do.
-**Do not quote a percentage for the artefact reduction.**
-
-The disaggregated counts, which are what there is:
+`o1null` is a one-line diff in `mqtt_connect` whose work runs once per connection against 50,000
+measured messages — it cannot cost anything real, so anything it flags is an artefact. P(≥1 flag per
+suite run):
 
 | build | reps | cpu/rss accounting | flagged |
 |---|---|---|---|
-| single | 10 | process (old) | 6/6 |
+| single | 10 | process (old) | **6/6** |
 | multi | 10 | process (old) | 0/2 |
 | multi | 14 | process (old) | 1/2 |
-| multi | 14 | windowed | 2/6 |
-| single | 14 | windowed | 0/2 |
+| multi | 14 | windowed | **2/6** |
+| single | 14 | windowed | **2/8** |
 
-The last row is the matched control and is still accumulating. Note it does **not** so far support the
-prediction that more reps raises the false-positive rate; that prediction came from `spin-d800`, where
-extra reps pushed more real-cost cells over the gate, and it may simply not transfer to a
-perturbation-scale effect.
+Matched on the current harness at `reps=14`, multibuild is 2/6 against single-build's 2/8 —
+**Fisher exact p = 1.000.** No difference at all.
 
-Three things about this are worth carrying forward:
+The 6/6 in the first row is what originally motivated multibuild, and it does not survive. It differs
+significantly from single-build measured on the *current* harness (6/6 vs 2/8, p = 0.010) — and since
+both of those are single-build, **layout cannot be the explanation.** What differs between them is rep
+count and cpu/rss accounting. `cpu_us_per_msg` fired in 5 of those 6 runs, back when its numerator
+included startup, the TLS handshake and every warm-up operation while its denominator counted measured
+messages only. The false-positive problem multibuild was built to solve was substantially **a broken
+metric**, and [windowing that metric](#) fixed it.
 
+Read the p = 1.000 as a **bound, not a proof of zero**: at n=6 vs n=8 only a split as wide as ~6/8 vs
+0–1/8 would have reached p < 0.05, so a modest benefit would be invisible here. Detecting a genuine
+25%→17% reduction would need hundreds of runs per arm. What is established is that multibuild has no
+*large* false-positive benefit, and that the original evidence for any benefit does not survive
+matching.
+
+A cautionary note on how this document got here: the artefact reduction was quoted as "83%" at 6-vs-4,
+held at 6-vs-6, read 62% at 6-vs-8, and is now not distinguishable from zero at matched conditions.
+Every one of those was a point estimate off a sample whose 95% interval spanned tens of percentage
+points. **Do not quote a percentage for the artefact reduction.**
+
+Four things are worth carrying forward, mostly about how this was got wrong:
+
+- **Change one thing at a time.** The original comparison differed in build mode, rep count *and*
+  metric definition simultaneously. Every conclusion drawn from it had to be withdrawn.
 - **Reps and multibuild are easy to confuse.** Rep count alone moves detection substantially: at
   `spin-d800`, single-build went 26→32 and 32→35 gated cells on 10→14 reps. A multibuild-at-14 vs
   single-build-at-10 comparison therefore *looks* like multibuild improving detection. It isn't.
-- **A large injection cannot answer this.** `spin-d800` flags 43 of 90 cells; anything preserves a
-  signal that size. `spin-d200` (~0.9%, inside the 0.6–0.9% transition band) is the case that matters
-  for a gate, and it is where the largest cost appeared (83%).
-- **Every cell here is n=1.** Single-build itself scored 26 vs 32 on the two hosts at `spin-d800` with
-  identical inputs, so read individual ratios as ±several points. Four cells agreeing 83–100% is the
-  strength of the result, not any one of them.
+- **A large injection cannot answer a threshold question.** `spin-d800` flags 43 of 90 cells; anything
+  preserves a signal that size. `spin-d200` (~0.9%, inside the 0.6–0.9% transition band) is the case
+  that matters for a gate, and it is where the largest detection cost appeared (83%).
+- **Most cells here are n=1 or n=2.** Single-build itself scored 26 vs 32 on the two hosts at
+  `spin-d800` with identical inputs. Read individual numbers as ±several points; the strength of the
+  detection result is four cells agreeing at 83–100%, not any one of them.
 
 Dial calibration, since the estimates were wrong by ~2.5×: measured on the closed-loop `pub-lat`
 configs, `spin` costs ~3.7% at dial 800, ~1.5% at 400, ~0.9% at 200. Read the dial off those configs
@@ -159,13 +167,17 @@ all configs reports d200 and d400 as indistinguishable (1.62% vs 1.64%), with on
 ## Practical guidance
 
 **Do not gate CI on a single run.** An ordinary PR touching the hot path will flag with meaningful
-probability regardless of whether it regresses anything — 100% of the time single-build, and still
-25% under multibuild.
+probability regardless of whether it regresses anything — on the current harness, roughly **1 run in 4**
+(`o1null`: 2/8 single-build, 2/6 multibuild). That is down from 6/6 on the pre-windowing harness, and
+the metric fix — not multibuild — is what moved it.
 
 Options, roughly in order of cost:
 
-1. **Use `bench-multibuild.sh`** (the default). Removes ~83% of the layout false positives for ~5% of
-   detection. This is the largest single improvement available and costs ~2 minutes of extra builds.
+1. **Make sure cpu/rss are windowed** — i.e. a `bench_client` new enough to report
+   `cpu_window: measured`. This is the one change measured to cut the false-positive rate, from 6/6
+   runs flagged to 2/8 on an inert diff. `bench-multibuild.sh` is available and theoretically
+   motivated, but its false-positive benefit is **not measurable** (2/6 vs 2/8, p = 1.000) while its
+   detection cost is (~5%).
 2. **Raise the gate threshold above the perturbation floor** — but *per metric*, not globally. A
    single number cannot serve all seven; see the table below. Forfeits detection below whatever
    floor is chosen.
@@ -218,11 +230,10 @@ makes it a slight *under*-estimate.
   marginal cost of work is the leading hypothesis, untested.
 - All results are from `F16s_v2` in one region. Nothing here transfers to other hardware.
 - The power curve and the four controls were measured **single-build, on the pre-windowing harness**.
-  Multibuild is now the shipped default and cpu/rss are now windowed, so neither the artefact end of
-  that curve nor its `cpu_us_per_msg` cells describe what a user gets today. The real-cost end is close
-  to unchanged (83–100%). Only `o1null`, `spin-d200` and `spin-d800` have been re-measured under
-  multibuild, and of those only the two `spin` rungs have a matched control — the curve has not been
-  redrawn end to end.
+  cpu/rss are now windowed, which cut the artefact end of that curve sharply — `o1null` went from 6/6
+  runs flagged to 2/8 — so neither that end nor any `cpu_us_per_msg` cell describes what a user gets
+  today. The real-cost end is close to unchanged. Only `o1null`, `spin-d200` and `spin-d800` have been
+  re-measured at all; the curve has not been redrawn end to end.
 - 191 of the runs predate a warm-up fix that removed a small fixed-sign advantage to the candidate
   arm. The arm-swap results are immune to it; the single-orientation results are not.
 - **Every `cpu_us_per_msg` and `max_rss_kb` number here was measured with process-wide accounting**,

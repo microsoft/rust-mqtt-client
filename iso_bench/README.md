@@ -90,13 +90,13 @@ Building each side once makes code layout a **constant inside the measurement** 
 binaries in every rep and round, so replication cannot average it away. Any source edit shifts
 function placement and inlining, and those shifts cost the same order as the regressions worth
 catching. Measured here: a one-line diff whose work runs once per connection against 50,000 measured
-messages — so it cannot cost anything real — flagged **6 of 6** single-build runs but only **3 of 8**
-multibuild runs, while genuine regressions were caught **almost as well** — at the same rep count,
-multibuild scored 83–100% of single-build's gated cells across two effect sizes and two hosts
-(~0.9%: 20 vs 21 and 19 vs 23; ~3.7%: 32 vs 32 and 33 vs 35). So multibuild costs a few percent of
-detection — ~5% typical, 17% worst measured — and reduces layout false positives by an amount not yet
-measured cleanly (the two sides of that comparison also differ in rep count and in cpu/rss accounting;
-see SENSITIVITY.md). Costs
+messages, so it cannot cost anything real — flagged 6 of 6 single-build runs on the pre-windowing
+harness. On the **current** harness at matched rep count that gap disappears: 2 of 6 multibuild versus
+2 of 8 single-build, Fisher exact **p = 1.000**. The original result was driven by `cpu_us_per_msg`
+before it was windowed, not by layout. Meanwhile the detection cost is real and measured — multibuild
+scores 83–100% of single-build's gated cells on genuine regressions (~5% typical, 17% worst). So
+multibuild is theoretically motivated but currently buys no measurable reduction in false positives;
+see SENSITIVITY.md before enabling it. Costs
 ~15 s per extra build against a suite that runs for over an hour; the measured work is unchanged.
 `BUILDS=1` reverts to the single-build behaviour above.
 

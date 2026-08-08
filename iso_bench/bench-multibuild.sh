@@ -14,15 +14,20 @@
 # a fixed offset sitting in the point estimate. Function placement, alignment and inlining shift when
 # ANY source line moves, and those shifts cost the same order as the regressions worth catching.
 #
-# Measured on this suite, on two dedicated VMs: a one-line diff whose injected work runs once per
-# connection against 50,000 measured messages -- so it cannot cost anything real -- flagged
+# HOW MUCH THAT IS WORTH, MEASURED. A one-line diff whose injected work runs once per connection
+# against 50,000 measured messages -- so it cannot cost anything real -- flagged 6 of 6 single-build
+# runs on the PRE-WINDOWING harness. That is what motivated this script. It does not survive matching:
 #
-#     6 of 6 single-build runs        3 of 8 multibuild runs
+#     current harness, reps matched at 14:   multibuild 2/6   single-build 2/8   Fisher p = 1.000
+#     pre-windowing, reps=10, single-build:  6/6                       vs 2/8    Fisher p = 0.010
 #
-# Do NOT read a percentage off those two numbers. The sides differ in three ways at once: rep count
-# (10 vs 14), cpu/rss accounting (the single-build draws predate windowing), and sample size ([54%,100%]
-# vs [8.5%,75.5%]). A matched control on the current harness is still accumulating. The DETECTION-cost
-# figures below are sound -- those are rep-matched -- but the artefact-reduction figure is not yet.
+# Both of those last two are SINGLE-BUILD, so layout cannot explain the difference between them. What
+# differs is rep count and cpu/rss accounting -- cpu_us_per_msg fired in 5 of the 6, back when its
+# numerator covered startup, the TLS handshake and every warm-up op. The false-positive problem this
+# script was built for was substantially a broken metric.
+#
+# Read p = 1.000 as a BOUND: at n=6 vs n=8 only a split as wide as ~6/8 vs 0-1/8 would have cleared
+# p<0.05, so a modest benefit would be invisible. What is established is that there is no LARGE one.
 #
 # while genuine regressions (a bounded busy-spin per outgoing packet) were detected ALMOST as well. At
 # the same rep count, across two effect sizes and two hosts, multibuild scored 83-100% of single-build:
