@@ -90,12 +90,37 @@ across every rung/host combination tested, which is the strongest evidence the h
 ## Multibuild: what it does and does not buy
 
 Layout is a **fixed** property of a single-build comparison — the same two binaries in every rep,
-round and repeat — so it sits inside the point estimate where replication cannot reach it. The standard
-remedy is to randomise layout so it becomes a sampled nuisance variable (Mytkowicz et al., ASPLOS 2009;
-Curtsinger & Berger, *Stabilizer*, ASPLOS 2013). `bench-multibuild.sh` builds each arm five times with
-different alignment flags and spreads the reps across them.
+round and repeat — so it sits inside the point estimate where replication cannot reach it. That effect
+is real and large in the literature: Mytkowicz et al. (ASPLOS 2009) measured link order alone moving
+SPEC results enough to turn an 8% speedup into an apparent 7% slowdown, and Stabilizer (Curtsinger &
+Berger, ASPLOS 2013) measured link order costing up to 57%.
 
-**Measured, that buys less than the theory suggests — and possibly nothing.**
+`bench-multibuild.sh` builds each arm five times with different alignment flags and spreads the reps
+across them. **Measured on this suite, that buys less than the theory suggests — and possibly nothing.**
+
+An earlier draft of this document called layout randomisation "the standard remedy". That was wrong,
+and the correction matters more than the citation did:
+
+- **No shipping benchmark tool does it.** Criterion.rs declined it as out of scope (issue #334, open
+  since 2019, two PRs closed unmerged). Google Benchmark *disables ASLR* in `BENCHMARK_MAIN()` to
+  **freeze** layout. JMH's `@Fork` targets JIT profile pollution, not layout. LLVM's own benchmarking
+  guidance cites Mytkowicz by name and then recommends `randomize_va_space=0`. The field's answer is
+  to hold layout still, not to shuffle it.
+- **Stabilizer works differently from what we built.** It re-randomises function placement *during
+  execution*, every 500 ms — ~30 independent layouts per run — which is what makes the CLT apply and
+  licenses its parametric tests. We take five build-time samples from a two-parameter alignment family.
+- **Its authors reject our approximation explicitly:** *"varying link orders only changes inter-module
+  function placement, so that a change of a function's size still affects the placement of all
+  functions after it."* We do not even vary link order.
+- **Stabilizer is unusable today** — it requires LLVM 3.1 (2012) and is unmaintained, with no successor.
+- **Done rigorously, N-builds is not a free noise reducer.** Kalibera & Jones (ISMM 2013) patched gcc
+  to randomise function and module order and ran 30 builds; they found layout variation mostly under
+  1.7% at reference sizes, and that randomised layout shifted *means* consistently by 3.3–6.8%. It can
+  bias results, not merely widen them.
+
+Note also that every tool listed above can freeze layout because it compares **the same binary**. A
+regression detector compares two builds of different source, so layout necessarily differs. Freezing
+is not available here, which is why the problem is harder for this tool than for most.
 
 ### Detection cost: real, small, measured
 

@@ -379,7 +379,8 @@ same source with a different code layout; reps are then spread across them. Buil
 makes layout a fixed constant inside the point estimate that no amount of replication removes — a
 one-line diff that executes once per connection was measured flagging 6 of 6 single-build runs and
 3 of 8 multibuild runs, entirely through inlining and layout shifts. Randomising layout is the
-standard remedy (Mytkowicz et al., ASPLOS 2009; Curtsinger & Berger, *Stabilizer*, ASPLOS 2013).
+literature's remedy, though no shipping benchmark tool implements it — see SENSITIVITY.md
+(Mytkowicz et al., ASPLOS 2009; Curtsinger & Berger, *Stabilizer*, ASPLOS 2013).
 You must build the variants yourself — e.g. repeat the `cargo build` above with
 `RUSTFLAGS="-C llvm-args=-align-all-functions=5"`, `=6`, and
 `-C llvm-args=-align-all-nofallthru-blocks=4` into separate `CARGO_TARGET_DIR`s — and pass the paths

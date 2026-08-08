@@ -41,8 +41,20 @@
 # 10->14), and one then concluded "no cost" from the reps-matched pair at a single large effect size,
 # before the threshold-band case was measured. See SENSITIVITY.md.
 #
-# Randomising layout is the standard remedy: Mytkowicz et al., "Producing Wrong Data Without Doing
-# Anything Obviously Wrong!" (ASPLOS 2009); Curtsinger & Berger, "Stabilizer" (ASPLOS 2013).
+# HOW THIS RELATES TO THE LITERATURE, stated carefully because an earlier version of this comment
+# called layout randomisation "the standard remedy" and that is not true.
+#   - The EFFECT is well established: Mytkowicz et al., "Producing Wrong Data Without Doing Anything
+#     Obviously Wrong!" (ASPLOS 2009) turned an 8% speedup into an apparent 7% slowdown by changing
+#     link order alone; Stabilizer (Curtsinger & Berger, ASPLOS 2013) measured link order at up to 57%.
+#   - The REMEDY is not standard. No shipping benchmark tool randomises layout. Criterion.rs declined
+#     it as out of scope; Google Benchmark DISABLES ASLR to freeze layout; JMH's @Fork is about JIT
+#     profile pollution; LLVM's guidance cites Mytkowicz and then recommends randomize_va_space=0.
+#   - Stabilizer re-randomises DURING EXECUTION every 500ms (~30 layouts/run), which is what makes its
+#     normality claim work. This script samples five build-time layouts from one narrow family, and
+#     Stabilizer's authors reject that approximation by name. Stabilizer itself needs LLVM 3.1 and is
+#     unmaintained.
+#   - Kalibera & Jones (ISMM 2013) did N-builds rigorously (patched gcc, randomised function/module
+#     order, 30 builds) and found randomised layout shifts MEANS by 3.3-6.8%. Not mean-preserving.
 # bench-compare.sh already randomises execution order, stack/env padding and warm-up arm; the binary
 # was the last thing held fixed.
 #

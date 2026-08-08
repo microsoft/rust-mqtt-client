@@ -83,7 +83,8 @@ RESET="${RESET:-1}"
 # every rep, round and repeat, so replication cannot remove it. Measured on this suite, a one-line
 # diff executing once per connection moves the median cell 0.15% and the worst 10% by ~0.9% purely
 # through layout and inlining shifts -- the same order as the regressions being hunted. Randomising
-# layout is the standard remedy (Mytkowicz et al., ASPLOS 2009; Curtsinger & Berger, "Stabilizer",
+# layout is the literature's remedy, though NOT what shipping tools do (Mytkowicz et al., ASPLOS 2009;
+# Curtsinger & Berger, "Stabilizer",
 # ASPLOS 2013); this file already randomises pair order, stack/env padding and warm-up arm, and the
 # binary was the last fixed thing left.
 #
