@@ -27,7 +27,14 @@
 #   REF_LABEL     tag for the reference build (report BASELINE)      (default: reference)
 #   CUR_SHA / REF_SHA   provenance git SHA per binary                (default: unknown)
 #   PEER_BIN      prebuilt bench_peer; built here if unset
+#   CUR_BINS / REF_BINS   colon-separated lists of SEVERAL binaries per arm, same source compiled
+#                 with different code layouts; reps are spread across them so layout becomes a
+#                 sampled nuisance rather than a constant in the estimate. Both lists must be the
+#                 same length. Default: the single CUR_BIN / REF_BIN. You build the variants (see
+#                 README); this only consumes them.
 #   REPS          interleaved PAIRS per config per round             (default 14)
+#                 14 suits the multibuild path (between-build variance is 21-30% of total); use 10
+#                 when comparing two single binaries.
 #   SEED          seed for the per-config interleave shuffle         (default: random)
 #                 Recorded into every JSONL record; reuse it to replay an identical run order.
 #   ROUNDS        replication rounds: whole suite run this many times (default 2). A verdict needs the

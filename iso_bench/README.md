@@ -352,6 +352,17 @@ through); the per-config workloads are a curated list in `suite.sh`.
 default 2; a verdict must reproduce across them) `WARMUP_REPS` `RESULTS_FILE` `RESET`; interleaves the
 two binaries and renders a paired A/B (`report.py --baseline $REF_LABEL`).
 
+`CUR_BINS` / `REF_BINS` (colon-separated) accept SEVERAL binaries per arm, each compiled from the
+same source with a different code layout; reps are then spread across them. Building each arm once
+makes layout a fixed constant inside the point estimate that no amount of replication removes — a
+one-line diff that executes once per connection was measured flagging 6 of 6 single-build runs and
+1 of 4 multibuild runs, entirely through inlining and layout shifts. Randomising layout is the
+standard remedy (Mytkowicz et al., ASPLOS 2009; Curtsinger & Berger, *Stabilizer*, ASPLOS 2013).
+You must build the variants yourself — e.g. repeat the `cargo build` above with
+`RUSTFLAGS="-C llvm-args=-align-all-functions=5"`, `=6`, and
+`-C llvm-args=-align-all-nofallthru-blocks=4` into separate `CARGO_TARGET_DIR`s — and pass the paths
+joined by `:`. Both lists must have the same length.
+
 Pass `--help` (or `HELP=1`) to either binary, or `-h` to any script, for the full list.
 
 ## How it works
@@ -423,9 +434,12 @@ the **client**.
 - **Size `COUNT` for the tail:** stable p99 needs ~10⁵–5×10⁵ ops per run (the paced open-loop and
   recv-latency configs run 5×10⁵ for a solid p99). p99.9 needs ~10⁶ — more than the suite runs, so it
   is **not reported**; the raw distribution is still in the histogram if you ever need it.
-- **`REPS=10` is plenty for p99 on a warm, pinned VM** (p99 CV ~1% → resolves ~1% deltas). Read
-  **p99, throughput, and `cpu_us_per_msg`**; **ignore `max`** (single-sample, CV up to ~100%). Only
-  bump `REPS` if the calibration shows a wide CV for a metric you care about.
+- **`REPS` defaults to 14** in `bench-compare.sh`. 10 resolves ~1% deltas on a warm, pinned VM
+  (p99 CV ~1%) and is still plenty for a *single-build* comparison; 14 is for the multibuild path
+  below, where reps are spread across several code layouts and a between-build variance component
+  (measured at 21–30% of total) has to be averaged out too. Set `REPS=10` if you are comparing two
+  single binaries. Read **p99, throughput, and `cpu_us_per_msg`**; **ignore `max`** (single-sample,
+  CV up to ~100%).
 - The minimum latency across reps is a useful low-noise "true cost" estimator (wall-clock noise only
   ever adds time).
 
