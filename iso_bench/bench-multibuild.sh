@@ -19,8 +19,10 @@
 #
 #     6 of 6 single-build runs        3 of 8 multibuild runs
 #
-# A reduction is established (Fisher exact p = 0.031) but its SIZE is not: the intervals are [54%,100%]
-# and [8.5%,75.5%], and the two sides are not rep-matched (10 vs 14). Do not quote a percentage.
+# Do NOT read a percentage off those two numbers. The sides differ in three ways at once: rep count
+# (10 vs 14), cpu/rss accounting (the single-build draws predate windowing), and sample size ([54%,100%]
+# vs [8.5%,75.5%]). A matched control on the current harness is still accumulating. The DETECTION-cost
+# figures below are sound -- those are rep-matched -- but the artefact-reduction figure is not yet.
 #
 # while genuine regressions (a bounded busy-spin per outgoing packet) were detected ALMOST as well. At
 # the same rep count, across two effect sizes and two hosts, multibuild scored 83-100% of single-build:

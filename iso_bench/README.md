@@ -94,8 +94,9 @@ messages — so it cannot cost anything real — flagged **6 of 6** single-build
 multibuild runs, while genuine regressions were caught **almost as well** — at the same rep count,
 multibuild scored 83–100% of single-build's gated cells across two effect sizes and two hosts
 (~0.9%: 20 vs 21 and 19 vs 23; ~3.7%: 32 vs 32 and 33 vs 35). So multibuild costs a few percent of
-detection — ~5% typical, 17% worst measured — and substantially reduces layout false positives; the
-reduction is established (Fisher exact p = 0.031) but not yet pinned to a number. Costs
+detection — ~5% typical, 17% worst measured — and reduces layout false positives by an amount not yet
+measured cleanly (the two sides of that comparison also differ in rep count and in cpu/rss accounting;
+see SENSITIVITY.md). Costs
 ~15 s per extra build against a suite that runs for over an hour; the measured work is unchanged.
 `BUILDS=1` reverts to the single-build behaviour above.
 

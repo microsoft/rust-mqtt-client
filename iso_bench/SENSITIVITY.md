@@ -31,9 +31,10 @@ the "0.5–1%" figure quoted for this effect elsewhere is the p90, not what a ty
 "True cost" is the change's actual effect, established by arm swap (see [Method](#method-the-arm-swap))
 and summarised as the p90 of |per-cell effect| across all gated cells.
 
-All rows below are **single-build** — the configuration these were measured in, and the one
-[multibuild](#multibuild-the-fix-for-the-perturbation-floor) replaces. Under multibuild the artefact
-rows drop sharply (`o1null` 100% → 25%) while the real-cost rows barely move.
+All rows below are **single-build** on the pre-windowing harness — the configuration they were
+measured in, and the one [multibuild](#multibuild-the-fix-for-the-perturbation-floor) replaces. The
+real-cost rows survive multibuild largely intact (83–100%); what happens to the artefact rows under
+multibuild is not yet cleanly measured — see the caveats in that section.
 
 | change | true cost | host | runs | P(flag) |
 |---|---|---|---|---|
@@ -98,7 +99,7 @@ It works, and it costs a little:
 
 | | single-build | multibuild |
 |---|---|---|
-| `o1null` — layout only, cannot cost anything | **6 of 6 runs flagged** | **3 of 8 runs flagged** |
+| `o1null` — layout only, cannot cost anything | 6 of 6 runs flagged | 3 of 8 runs flagged — *see caveats* |
 | `spin-d200` — real work, ~0.9% | 21 / 23 gated cells | 20 / 19 |
 | `spin-d800` — real work, ~3.7% | 32 / 35 gated cells | 32 / 33 |
 
@@ -106,14 +107,36 @@ The two `spin` rows have reps matched at 14 on both sides, same harness and inje
 Across those four real-work cells multibuild scores **83–100%** of single-build (median ~94.5%), so it
 costs roughly 5% of detection — 17% in the worst cell measured.
 
-**The `o1null` row is weaker than the others and should be read with care.** Its single-build draws are
-`reps=10` and its multibuild draws `reps=14`, so build mode is confounded with rep count. The direction
-is favourable — more reps means more power, hence *more* of the perturbation floor crossing the gate —
-so the comparison understates multibuild if anything. But it is not a matched comparison, and the
-sample is small: 6/6 gives a 95% interval of [54%, 100%] and 3/8 gives [8.5%, 75.5%]. Fisher's exact
-test puts the difference at p = 0.031, so a reduction is established; **its size is not.** An earlier
-draft of this document quoted "83%" from 6-vs-4 and then 6-vs-6; two further draws moved it to 62%.
-Treat the artefact reduction as real and substantial, and do not quote a percentage yet.
+**The `o1null` row is not yet a usable measurement, and is kept here only to show what is known.**
+Unlike the `spin` rows it has three separate problems:
+
+1. **The two sides were scored with different metric definitions.** Every single-build draw predates
+   the switch to windowed cpu/rss; most multibuild draws follow it. `cpu_us_per_msg` fired in 5 of the
+   6 single-build runs, and dropping cpu/rss cells entirely takes single-build from 6/6 to 5/6 — so
+   the old accounting contributed to the gap without explaining it. No single-build baseline has been
+   re-measured on the current harness.
+2. **Build mode is confounded with rep count** — single-build draws are `reps=10`, multibuild `reps=14`.
+3. **The samples are tiny.** 6/6 gives a 95% interval of [54%, 100%]; 3/8 gives [8.5%, 75.5%].
+
+Fisher's exact test on 6/6 vs 3/8 gives p = 0.031, but with (1) and (2) unresolved that compares two
+things differing in three ways at once. An earlier draft quoted "83%" from 6-vs-4, held it at 6-vs-6,
+and two further draws moved it to 62% — which is what a [0.4%, 64%] interval at n=6 will do.
+**Do not quote a percentage for the artefact reduction.**
+
+The disaggregated counts, which are what there is:
+
+| build | reps | cpu/rss accounting | flagged |
+|---|---|---|---|
+| single | 10 | process (old) | 6/6 |
+| multi | 10 | process (old) | 0/2 |
+| multi | 14 | process (old) | 1/2 |
+| multi | 14 | windowed | 2/6 |
+| single | 14 | windowed | 0/2 |
+
+The last row is the matched control and is still accumulating. Note it does **not** so far support the
+prediction that more reps raises the false-positive rate; that prediction came from `spin-d800`, where
+extra reps pushed more real-cost cells over the gate, and it may simply not transfer to a
+perturbation-scale effect.
 
 Three things about this are worth carrying forward:
 
@@ -194,10 +217,12 @@ makes it a slight *under*-estimate.
   identical (median CV 1.23% vs 1.16%), so it is not simple noise. Co-tenant pressure changing the
   marginal cost of work is the leading hypothesis, untested.
 - All results are from `F16s_v2` in one region. Nothing here transfers to other hardware.
-- The power curve and the four controls were measured **single-build**. Multibuild is now the shipped
-  default, so the artefact end of that curve no longer describes what a user gets — `o1null` went from
-  6/6 runs flagged to 3/8. The real-cost end is close to unchanged (83–100%). The curve has not been
-  re-measured end to end under multibuild; only `o1null`, `spin-d200` and `spin-d800` have.
+- The power curve and the four controls were measured **single-build, on the pre-windowing harness**.
+  Multibuild is now the shipped default and cpu/rss are now windowed, so neither the artefact end of
+  that curve nor its `cpu_us_per_msg` cells describe what a user gets today. The real-cost end is close
+  to unchanged (83–100%). Only `o1null`, `spin-d200` and `spin-d800` have been re-measured under
+  multibuild, and of those only the two `spin` rungs have a matched control — the curve has not been
+  redrawn end to end.
 - 191 of the runs predate a warm-up fix that removed a small fixed-sign advantage to the candidate
   arm. The arm-swap results are immune to it; the single-orientation results are not.
 - **Every `cpu_us_per_msg` and `max_rss_kb` number here was measured with process-wide accounting**,
