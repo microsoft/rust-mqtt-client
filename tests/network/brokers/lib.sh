@@ -51,7 +51,9 @@ wait_for_tls_port() {
 
 # Provisioning for brokers that are just a compose file. Run from the broker's directory.
 compose_up() {
-    docker compose up -d --wait
+    # Each fixture invocation regenerates its certificates, which running broker processes do
+    # not reload. Recreate containers so their in-memory TLS state matches the files on disk.
+    docker compose up -d --wait --force-recreate
     wait_for_port 127.0.0.1 "${MQTT_PORT:-1883}"
 }
 
