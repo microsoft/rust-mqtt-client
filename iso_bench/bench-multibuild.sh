@@ -17,7 +17,10 @@
 # Measured on this suite, on two dedicated VMs: a one-line diff whose injected work runs once per
 # connection against 50,000 measured messages -- so it cannot cost anything real -- flagged
 #
-#     6 of 6 single-build runs        1 of 6 multibuild runs      (3 draws per host each side)
+#     6 of 6 single-build runs        3 of 8 multibuild runs
+#
+# A reduction is established (Fisher exact p = 0.031) but its SIZE is not: the intervals are [54%,100%]
+# and [8.5%,75.5%], and the two sides are not rep-matched (10 vs 14). Do not quote a percentage.
 #
 # while genuine regressions (a bounded busy-spin per outgoing packet) were detected ALMOST as well. At
 # the same rep count, across two effect sizes and two hosts, multibuild scored 83-100% of single-build:

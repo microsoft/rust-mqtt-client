@@ -90,11 +90,12 @@ Building each side once makes code layout a **constant inside the measurement** 
 binaries in every rep and round, so replication cannot average it away. Any source edit shifts
 function placement and inlining, and those shifts cost the same order as the regressions worth
 catching. Measured here: a one-line diff whose work runs once per connection against 50,000 measured
-messages — so it cannot cost anything real — flagged **6 of 6** single-build runs but only **1 of 6**
+messages — so it cannot cost anything real — flagged **6 of 6** single-build runs but only **3 of 8**
 multibuild runs, while genuine regressions were caught **almost as well** — at the same rep count,
 multibuild scored 83–100% of single-build's gated cells across two effect sizes and two hosts
-(~0.9%: 20 vs 21 and 19 vs 23; ~3.7%: 32 vs 32 and 33 vs 35). So multibuild trades a few percent of
-detection — ~5% typical, 17% worst measured — for roughly 83% of the layout false positives. Costs
+(~0.9%: 20 vs 21 and 19 vs 23; ~3.7%: 32 vs 32 and 33 vs 35). So multibuild costs a few percent of
+detection — ~5% typical, 17% worst measured — and substantially reduces layout false positives; the
+reduction is established (Fisher exact p = 0.031) but not yet pinned to a number. Costs
 ~15 s per extra build against a suite that runs for over an hour; the measured work is unchanged.
 `BUILDS=1` reverts to the single-build behaviour above.
 
@@ -376,7 +377,7 @@ two binaries and renders a paired A/B (`report.py --baseline $REF_LABEL`).
 same source with a different code layout; reps are then spread across them. Building each arm once
 makes layout a fixed constant inside the point estimate that no amount of replication removes — a
 one-line diff that executes once per connection was measured flagging 6 of 6 single-build runs and
-1 of 6 multibuild runs, entirely through inlining and layout shifts. Randomising layout is the
+3 of 8 multibuild runs, entirely through inlining and layout shifts. Randomising layout is the
 standard remedy (Mytkowicz et al., ASPLOS 2009; Curtsinger & Berger, *Stabilizer*, ASPLOS 2013).
 You must build the variants yourself — e.g. repeat the `cargo build` above with
 `RUSTFLAGS="-C llvm-args=-align-all-functions=5"`, `=6`, and

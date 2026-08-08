@@ -98,15 +98,22 @@ It works, and it costs a little:
 
 | | single-build | multibuild |
 |---|---|---|
-| `o1null` — layout only, cannot cost anything | **6 of 6 runs flagged** | **1 of 6 runs flagged** |
+| `o1null` — layout only, cannot cost anything | **6 of 6 runs flagged** | **3 of 8 runs flagged** |
 | `spin-d200` — real work, ~0.9% | 21 / 23 gated cells | 20 / 19 |
 | `spin-d800` — real work, ~3.7% | 32 / 35 gated cells | 32 / 33 |
 
-Two hosts per row, reps matched at 14 on both sides, same harness and injection on the same day; the
-`o1null` row is 3 draws per host on each side, so its 6-vs-6 is balanced too.
-Across the four real-work cells multibuild scores **83–100%** of single-build (median ~94.5%). So the
-trade is roughly **5% of detection — 17% in the worst cell measured — for ~83% of the layout false
-positives.**
+The two `spin` rows have reps matched at 14 on both sides, same harness and injection on the same day.
+Across those four real-work cells multibuild scores **83–100%** of single-build (median ~94.5%), so it
+costs roughly 5% of detection — 17% in the worst cell measured.
+
+**The `o1null` row is weaker than the others and should be read with care.** Its single-build draws are
+`reps=10` and its multibuild draws `reps=14`, so build mode is confounded with rep count. The direction
+is favourable — more reps means more power, hence *more* of the perturbation floor crossing the gate —
+so the comparison understates multibuild if anything. But it is not a matched comparison, and the
+sample is small: 6/6 gives a 95% interval of [54%, 100%] and 3/8 gives [8.5%, 75.5%]. Fisher's exact
+test puts the difference at p = 0.031, so a reduction is established; **its size is not.** An earlier
+draft of this document quoted "83%" from 6-vs-4 and then 6-vs-6; two further draws moved it to 62%.
+Treat the artefact reduction as real and substantial, and do not quote a percentage yet.
 
 Three things about this are worth carrying forward:
 
@@ -189,7 +196,7 @@ makes it a slight *under*-estimate.
 - All results are from `F16s_v2` in one region. Nothing here transfers to other hardware.
 - The power curve and the four controls were measured **single-build**. Multibuild is now the shipped
   default, so the artefact end of that curve no longer describes what a user gets — `o1null` went from
-  6/6 runs flagged to 1/6. The real-cost end is close to unchanged (83–100%). The curve has not been
+  6/6 runs flagged to 3/8. The real-cost end is close to unchanged (83–100%). The curve has not been
   re-measured end to end under multibuild; only `o1null`, `spin-d200` and `spin-d800` have.
 - 191 of the runs predate a warm-up fix that removed a small fixed-sign advantage to the candidate
   arm. The arm-swap results are immune to it; the single-orientation results are not.
