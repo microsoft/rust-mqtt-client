@@ -5,7 +5,7 @@ Licensed under the MIT License.
 
 # Sensitivity of `iso_bench` — what it can and cannot catch
 
-Measured over 256 suite runs on two dedicated Azure `F16s_v2` VMs, 2026-08-01 to 2026-08-08. Every
+Measured over 258 suite runs on two dedicated Azure `F16s_v2` VMs, 2026-08-01 to 2026-08-08. Every
 number here is recomputed from raw `results.jsonl` by `consolidate.py`; none is carried forward from
 an earlier claim.
 
@@ -98,11 +98,12 @@ It works, and it costs a little:
 
 | | single-build | multibuild |
 |---|---|---|
-| `o1null` — layout only, cannot cost anything | **6 of 6 runs flagged** | **1 of 4 runs flagged** |
+| `o1null` — layout only, cannot cost anything | **6 of 6 runs flagged** | **1 of 6 runs flagged** |
 | `spin-d200` — real work, ~0.9% | 21 / 23 gated cells | 20 / 19 |
 | `spin-d800` — real work, ~3.7% | 32 / 35 gated cells | 32 / 33 |
 
-Two hosts per row, reps matched at 14 on both sides, same harness and injection on the same day.
+Two hosts per row, reps matched at 14 on both sides, same harness and injection on the same day; the
+`o1null` row is 3 draws per host on each side, so its 6-vs-6 is balanced too.
 Across the four real-work cells multibuild scores **83–100%** of single-build (median ~94.5%). So the
 trade is roughly **5% of detection — 17% in the worst cell measured — for ~83% of the layout false
 positives.**
@@ -188,7 +189,7 @@ makes it a slight *under*-estimate.
 - All results are from `F16s_v2` in one region. Nothing here transfers to other hardware.
 - The power curve and the four controls were measured **single-build**. Multibuild is now the shipped
   default, so the artefact end of that curve no longer describes what a user gets — `o1null` went from
-  6/6 runs flagged to 1/4. The real-cost end is close to unchanged (83–100%). The curve has not been
+  6/6 runs flagged to 1/6. The real-cost end is close to unchanged (83–100%). The curve has not been
   re-measured end to end under multibuild; only `o1null`, `spin-d200` and `spin-d800` have.
 - 191 of the runs predate a warm-up fix that removed a small fixed-sign advantage to the candidate
   arm. The arm-swap results are immune to it; the single-orientation results are not.
