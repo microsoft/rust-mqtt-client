@@ -8,6 +8,22 @@
 # PAIRED test whose threshold self-calibrates from the paired-delta spread -- far tighter than the
 # sequential "whole suite A, then whole suite B" flow, which is confounded by between-block drift.
 #
+# THIS DESIGN HAS A NAME AND A LITERATURE, worth stating because a reviewer familiar with benchstat or
+# Google Benchmark will ask why the analysis is paired. Interleaving in time is a randomized block
+# design with the blocks being intervals of time -- Abedi & Brecht, "Conducting Repeatable Experiments
+# in Highly Variable Cloud Computing Environments" (ICPE 2017), which measured SEQUENTIAL designs
+# reporting a 38% difference between two IDENTICAL systems. Laaber, Scheuner & Leitner (EMSE 2019)
+# state the pairing half explicitly: "This approach can also be seen as a paired statistical test.
+# Hence, we expect that this approach should generally lead to fewer FPs and smaller MDSs."
+#
+# Interleaving itself is table stakes -- Go's benchstat documents it, Google Benchmark ships
+# --benchmark_enable_random_interleaving (~40% variance reduction), ClickHouse CI alternates server
+# order per query, Chromium Pinpoint counterbalances both arms per iteration, and asv defaults to
+# --interleave-rounds. What is unusual is KEEPING the pairing at analysis time: asv, ClickHouse,
+# Pinpoint and Google Benchmark all interleave and then analyse with Mann-Whitney or a permutation
+# test on POOLED samples, discarding the pair index they went to the trouble of creating. If you have
+# paid for the pairing, use it.
+#
 # It does NOT build the two client binaries -- you build them (a fresh cargo target per ref keeps them
 # independent), then point this at both. The reference can be the OTHER branch (a gate) or a frozen
 # anchor binary (records a drift-normalised ratio you can compare across time). The peer is
