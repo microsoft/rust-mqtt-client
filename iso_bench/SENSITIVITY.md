@@ -192,9 +192,16 @@ all configs reports d200 and d400 as indistinguishable (1.62% vs 1.64%), with on
 ## Practical guidance
 
 **Do not gate CI on a single run.** An ordinary PR touching the hot path will flag with meaningful
-probability regardless of whether it regresses anything — on the current harness, **4 of 18 runs
-(22%, 95% CI [6%, 48%])** on an inert one-line diff. That is down from **6/6** on the pre-windowing
-harness (Fisher p = 0.0016), and the metric fix — not multibuild, not rep count — is what moved it.
+probability regardless of whether it regresses anything — on the current harness, **6 of 20 runs
+(30%, 95% CI [12%, 54%])** on an inert one-line diff. That is down from **6/6** on the pre-windowing
+harness (Fisher p = 0.0040), and the metric fix — not multibuild, not rep count — is what moved it.
+
+**That point estimate is not settled, and past drafts of this file repeatedly implied it was.** The
+running estimate as draws accumulated: 0/2, 0/4, 1/6, 1/8, 2/10, 4/12 — 0%, 0%, 17%, 12%, 20%, 33%.
+Each intermediate value sat inside the previous interval, so nothing was ever *contradicted*; what was
+wrong was calling it converged. For a rate near 30%, pinning it to ±10 points needs **n ≈ 84** and to
+±5 points **n ≈ 336**. At ~1.7 h per run on two hosts that is roughly 3 days and 12 days respectively.
+Quote the interval, not the point.
 
 ### What raising the floor would buy
 
