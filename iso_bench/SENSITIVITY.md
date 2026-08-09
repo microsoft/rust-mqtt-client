@@ -192,9 +192,32 @@ all configs reports d200 and d400 as indistinguishable (1.62% vs 1.64%), with on
 ## Practical guidance
 
 **Do not gate CI on a single run.** An ordinary PR touching the hot path will flag with meaningful
-probability regardless of whether it regresses anything — on the current harness, roughly **1 run in 4**
-(`o1null`: 2/8 single-build, 2/6 multibuild). That is down from 6/6 on the pre-windowing harness, and
-the metric fix — not multibuild — is what moved it.
+probability regardless of whether it regresses anything — on the current harness, **4 of 18 runs
+(22%, 95% CI [6%, 48%])** on an inert one-line diff. That is down from **6/6** on the pre-windowing
+harness (Fisher p = 0.0016), and the metric fix — not multibuild, not rep count — is what moved it.
+
+### What raising the floor would buy
+
+`PAIRED_FLOOR_PCT` is 0.5%. Every residual false positive across those 18 runs, and the run-level rate
+that would remain at higher floors:
+
+| floor | runs flagged | FP rate | metrics still firing |
+|---|---|---|---|
+| **0.5% (current)** | 4/18 | **22%** | lat_p50 ×3, cpu_us_per_msg ×3, msgs_per_s, lat_p90 |
+| 0.8% | 3/18 | 17% | cpu_us_per_msg ×3, lat_p50, msgs_per_s |
+| 1.2% | 2/18 | 11% | cpu_us_per_msg ×2, msgs_per_s |
+| 2.0% | 1/18 | 6% | cpu_us_per_msg |
+| 4.0% | 0/18 | 0% | — |
+
+Two things this shows that the headline rate does not:
+
+- **`cpu_us_per_msg` is the last metric standing at every floor** — 3 of the 8 residual cells, and the
+  only one still firing at 2%, with a +3.93% delta on a diff that cannot cost anything. Even windowed,
+  it is the noisiest gated metric. A `cpu_us_per_msg`-only floor does *not* fix the run-level rate
+  though: every flagged run also carries a non-cpu cell, so it would still be 4/18.
+- **3 of the 8 residual cells are negative** — the injected build measured *faster*. For a costless
+  diff that is symmetric noise, not systematic bias, which is a different problem from the layout
+  effect and is not addressed by randomising anything.
 
 Options, roughly in order of cost:
 
