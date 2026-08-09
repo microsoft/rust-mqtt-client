@@ -456,7 +456,9 @@ the **client**.
   is your detection threshold. Only trust A/B deltas larger than that band.
 - **Size `COUNT` for the tail:** stable p99 needs ~10⁵–5×10⁵ ops per run (the paced open-loop and
   recv-latency configs run 5×10⁵ for a solid p99). p99.9 needs ~10⁶ — more than the suite runs, so it
-  is **not reported**; the raw distribution is still in the histogram if you ever need it.
+  is **neither reported nor recorded**; the raw distribution is still in `hist_ns` if you ever need
+  it. (It used to be emitted into every record and read by nothing, which is worse than absent: a
+  number the sample size cannot support eventually gets quoted.)
 - **`REPS` defaults to 14** in `bench-compare.sh`. 10 resolves ~1% deltas on a warm, pinned VM
   (p99 CV ~1%) and is still plenty for a *single-build* comparison; 14 is for the multibuild path
   below, where reps are spread across several code layouts and a between-build variance component

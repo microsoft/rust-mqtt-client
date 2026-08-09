@@ -55,10 +55,14 @@ impl Report {
         } else {
             sorted.iter().sum::<u64>() as f64 / sorted.len() as f64 / 1000.0
         };
+        // No p99.9. A stable 99.9th percentile needs ~1e6 samples; the suite's largest configs run
+        // 5e5 and the default COUNT is 5e4, which puts 50 samples in that tail. It was emitted and
+        // recorded for a while, read by nothing, and a number the sample size cannot support does not
+        // belong in the record -- someone eventually reads it. The full distribution is still in
+        // hist_ns if a tail beyond p99 is genuinely needed.
         let p50 = us(pct(&sorted, 50.0));
         let p90 = us(pct(&sorted, 90.0));
         let p99 = us(pct(&sorted, 99.0));
-        let p999 = us(pct(&sorted, 99.9));
 
         // Log-spaced buckets of the raw samples, so a histogram can be reconstructed offline.
         let hist_ns = log_buckets_json(&self.latencies_ns);
@@ -81,7 +85,7 @@ impl Report {
         }
         println!(
             "{kind} (us): min={min:.1}  p50={p50:.1}  p90={p90:.1}  p99={p99:.1}  \
-             p99.9={p999:.1}  max={max:.1}  mean={mean:.1}",
+             max={max:.1}  mean={mean:.1}",
             kind = self.latency_kind
         );
         // CPU attributable to the measured window (see crate::usage for why this is not taken from
@@ -119,7 +123,7 @@ impl Report {
                 r#""cpu":{{"user_s":{:.6},"sys_s":{:.6},"cpu_us_per_msg":{:.3},"#,
                 r#""max_rss_kb":{},"windowed_rss":{}}},"#,
                 r#""lat_us":{{"min":{:.3},"p50":{:.3},"p90":{:.3},"p99":{:.3},"#,
-                r#""p999":{:.3},"max":{:.3},"mean":{:.3}}},"hist_ns":{}}}"#,
+                r#""max":{:.3},"mean":{:.3}}},"hist_ns":{}}}"#,
             ),
             self.label,
             self.mode,
@@ -143,7 +147,6 @@ impl Report {
             p50,
             p90,
             p99,
-            p999,
             max,
             mean,
             hist_ns,
