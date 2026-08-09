@@ -26,6 +26,8 @@
 #   Extras:    NETEM_DELAY (e.g. 5ms, needs root)  CERT_DIR (TLS)
 #              LAYOUT_PAD  pad argv+env to a fixed size so the two A/B arms get identical stack
 #                          layout (default 512; 0 disables) -- see the padding block below
+#              FREEZE_ASLR run client and peer under `setarch -R` so every rep gets the same
+#                          address-space layout (default 1; 0 disables) -- see the block below
 #
 # Usage: ./bench-once.sh            (all via env)
 #        MODE=recv-throughput PAYLOAD_BYTES=256 COUNT=200000 ./bench-once.sh
@@ -147,6 +149,30 @@ if [[ ! -x "$TIME_BIN" ]]; then
     TIME_BIN=""
 fi
 
+# ---- freeze address-space layout ---------------------------------------------------------------
+# Every rep is a FRESH PROCESS, so with ASLR on (randomize_va_space=2, the default) every rep gets a
+# different stack, heap and mmap base. Stack alignment alone was measured by Mytkowicz et al. (ASPLOS
+# 2009) moving SPEC results by up to ~10%, and that variance lands in the paired delta as pure noise.
+#
+# Worth being precise about which layout this is, because the two get conflated. CODE layout cannot be
+# frozen here: the two arms are different binaries by construction, so their function placement differs
+# no matter what. ADDRESS-SPACE layout is a per-PROCESS property and can be frozen outright, for free.
+# Doing so is standard: Google Benchmark disables ASLR in BENCHMARK_MAIN() via personality(2) and
+# re-execs; rustls runs its bench pair under `setarch -R`; LLVM's benchmarking guide recommends
+# randomize_va_space=0. Freezing costs nothing here because this is a REGRESSION DETECTOR -- only the
+# delta between arms matters, and both arms get identical treatment.
+#
+# FREEZE_ASLR=0 disables (e.g. to check whether a result depends on one lucky layout).
+FREEZE_ASLR="${FREEZE_ASLR:-1}"
+setarch_pfx=()
+if [[ "$FREEZE_ASLR" == "1" ]]; then
+    if command -v setarch >/dev/null && setarch -R true 2>/dev/null; then
+        setarch_pfx=(setarch -R)
+    else
+        echo "note: setarch -R unavailable; ASLR stays on and adds per-rep layout noise" >&2
+    fi
+fi
+
 target_dir="${CARGO_TARGET_DIR:-$script_dir/target}"
 client_bin="${CLIENT_BIN:-$target_dir/release/bench_client}"
 peer_bin="${PEER_BIN:-$target_dir/release/bench_peer}"
@@ -202,7 +228,7 @@ trap cleanup EXIT
 echo "starting bench_peer[$PEER_ROLE] on cores $PEER_CORES, ${TRANSPORT}://$HOST:$PORT ..." >&2
 env ROLE="$PEER_ROLE" BIND="$HOST" PORT="$PORT" PAYLOAD_BYTES="$PAYLOAD_BYTES" TOPIC="$TOPIC" \
     QOS="$QOS" STAMP="$STAMP" BATCH="$BATCH" RATE="$RATE" "${peer_tls_env[@]}" \
-    taskset -c "$PEER_CORES" "$peer_bin" >"$peer_log" 2>&1 &
+    "${setarch_pfx[@]}" taskset -c "$PEER_CORES" "$peer_bin" >"$peer_log" 2>&1 &
 peer_pid=$!
 
 # Wait for the peer to report it is listening.
@@ -254,9 +280,9 @@ fi
 
 if [[ -n "$TIME_BIN" ]]; then
     env "${client_env[@]}" "$TIME_BIN" -v -o "$time_out" \
-        taskset -c "$CLIENT_CORES" "$client_bin" | tee "$result_out"
+        "${setarch_pfx[@]}" taskset -c "$CLIENT_CORES" "$client_bin" | tee "$result_out"
 else
-    env "${client_env[@]}" taskset -c "$CLIENT_CORES" "$client_bin" | tee "$result_out"
+    env "${client_env[@]}" "${setarch_pfx[@]}" taskset -c "$CLIENT_CORES" "$client_bin" | tee "$result_out"
 fi
 
 # ---- CPU-per-message ----------------------------------------------------------------------------
