@@ -603,6 +603,13 @@ def json_payload(rows, configs, paired_comp, path):
             "unreplicated_configs": unreplicated_configs(paired_comp),
             # Any of these means the verdicts above are not trustworthy -- check before counting them.
             "confounded": bool(confounds) or any(c["workload_drift"] for c in out_configs),
+            # WHICH FLOORS produced these verdicts. A consumer that caches flagged_cells without this
+            # cannot tell whether two entries are comparable, and will silently pool them when the
+            # floor changes. That happened: PAIRED_FLOOR_PCT went 0.5 -> 1.0 mid-study and an
+            # append-only ledger ended up holding both, which moved the headline A/A rate from 2.0%
+            # to 1.0% and the near-identical-build rate from 37.5% to 18.8% once rescored.
+            "floor_pct": PAIRED_FLOOR_PCT,
+            "floor_overrides": dict(PAIRED_FLOOR),
         },
     }
 
