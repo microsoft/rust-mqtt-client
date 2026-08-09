@@ -103,7 +103,11 @@ cd "$script_dir"
 
 : "${REF_SRC:?set REF_SRC to the baseline repo root -- the directory that contains iso_bench/}"
 CUR_SRC="${CUR_SRC:-$REF_SRC}"
-BUILDS="${BUILDS:-5}"
+# Default 1 = single build. Multibuild is available but OFF by default: measured reps-matched on two
+# effect sizes and two hosts it costs ~5% of detection (83-100% of single-build's gated cells) for a
+# false-positive benefit that is not measurable (2/6 vs 2/8, Fisher p = 1.000). No shipping benchmark
+# tool randomises layout either. Set BUILDS=5 to opt in; see SENSITIVITY.md before doing so.
+BUILDS="${BUILDS:-1}"
 REF_RUSTFLAGS="${REF_RUSTFLAGS:-}"
 CUR_RUSTFLAGS="${CUR_RUSTFLAGS:-}"
 

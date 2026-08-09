@@ -30,11 +30,11 @@ GATED_METRICS = ALL_METRICS - ALWAYS_INFO
 # report.py (deriving it from report.py would assert nothing); the single source for the floor and
 # direction axes below. Kept in sync with report.py by TestMetricCoverage.
 METRIC_SPEC = {
-    "msgs_per_s":     (0.5, "up"),
-    "lat_p50":        (0.5, "down"),
-    "lat_p90":        (0.5, "down"),
-    "lat_p99":        (0.5, "down"),
-    "cpu_us_per_msg": (0.5, "down"),
+    "msgs_per_s":     (1.0, "up"),
+    "lat_p50":        (1.0, "down"),
+    "lat_p90":        (1.0, "down"),
+    "lat_p99":        (1.0, "down"),
+    "cpu_us_per_msg": (1.0, "down"),
     "max_rss_kb":     (2.0, "down"),
 }
 

@@ -95,8 +95,8 @@ is real and large in the literature: Mytkowicz et al. (ASPLOS 2009) measured lin
 SPEC results enough to turn an 8% speedup into an apparent 7% slowdown, and Stabilizer (Curtsinger &
 Berger, ASPLOS 2013) measured link order costing up to 57%.
 
-`bench-multibuild.sh` builds each arm five times with different alignment flags and spreads the reps
-across them. **Measured on this suite, that buys less than the theory suggests — and possibly nothing.**
+`bench-multibuild.sh` can build each arm several times with different alignment flags and spread the
+reps across them. **`BUILDS` now defaults to 1** — multibuild is opt-in, for the reasons below. **Measured on this suite, that buys less than the theory suggests — and possibly nothing.**
 
 An earlier draft of this document called layout randomisation "the standard remedy". That was wrong,
 and the correction matters more than the citation did:
@@ -257,8 +257,11 @@ Options, roughly in order of cost:
 
 `lat_p99` is perturbed an order of magnitude more than `max_rss_kb` at the tail. Any single global
 threshold is therefore either far too tight for p99 or far too loose for RSS — the current
-`PAIRED_FLOOR_PCT = 0.5` with a `max_rss_kb` override of 2.0 has the *shape* right and the values
-unvalidated.
+`PAIRED_FLOOR_PCT` is **1.0** with a `max_rss_kb` override of 2.0. It was raised from 0.5 on the
+measured floor table above (0.5% → 22% FP, 1.0% → 17%, 1.2% → 11%), and 1.0 also matches Criterion.rs's
+default noise threshold — the closest shipping precedent, and one that applies it to a *single*
+measurement rather than a ~90-cell family. The per-metric shape is right; the exact values remain
+under-validated.
 
 **These floors are not settled and should not be copied into a gate yet.** They come from three
 injection rungs on two hosts; `lat_p99`'s 21% maximum in particular rests on the `null` rung on one

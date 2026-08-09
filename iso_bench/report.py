@@ -263,7 +263,11 @@ def print_comparison(rows, config, labels):
 # bench-compare.sh interleaves the two builds rep-by-rep and stamps each record with a `pair` index.
 # Environmental drift is then COMMON to each pair, so the per-pair delta cancels it and the threshold
 # self-calibrates from the paired-delta spread -- no CV-band guess needed.
-PAIRED_FLOOR_PCT = 0.5  # ignore statistically-consistent deltas below the measurement grain
+# 1.0, raised from 0.5. Measured on 18 windowed single-build runs of an inert one-line diff, the
+# run-level false-positive rate by floor was 0.5% -> 22%, 0.8% -> 17%, 1.2% -> 11%, 2.0% -> 6%.
+# 1.0 also matches Criterion.rs's default noise threshold, which is the closest shipping precedent --
+# and Criterion applies it to a SINGLE measurement, where this suite gates ~90 cells at once.
+PAIRED_FLOOR_PCT = 1.0  # ignore statistically-consistent deltas below the measurement grain
 # Per-metric practical floor (%): max_rss is page-quantized and ultra-low-variance, so a 1-2 page
 # shift reads as "significant" but is meaningless -- require a real move before flagging.
 PAIRED_FLOOR = {"max_rss_kb": 2.0}
