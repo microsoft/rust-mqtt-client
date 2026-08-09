@@ -81,9 +81,11 @@ CUR_LABEL="${CUR_LABEL:-current}"
 REF_LABEL="${REF_LABEL:-reference}"
 CUR_SHA="${CUR_SHA:-unknown}"
 REF_SHA="${REF_SHA:-unknown}"
-# 14 rather than 10: multibuild adds a between-build (layout) variance component measured at 21-30%
-# of the total, so ~1.4x the pairs are needed to restore the power the single-build suite had.
-REPS="${REPS:-14}"
+# 10 is the single-build calibration (p99 CV ~1% on a warm, pinned VM, resolving ~1% deltas). Raise it
+# to ~14 when spreading reps across several builds via CUR_BINS/REF_BINS -- multibuild adds a
+# between-build variance component, so ~1.4x the pairs are needed to hold the same power.
+# bench-multibuild.sh sets this for you based on BUILDS.
+REPS="${REPS:-10}"
 ROUNDS="${ROUNDS:-2}"  # whole-suite replication rounds; report.py requires a verdict to reproduce across them
 SEED="${SEED:-$RANDOM}"
 RANDOM="$SEED"  # seed once: the whole run's shuffle sequence is then a function of SEED alone

@@ -64,9 +64,10 @@
 # both arms) against a suite that runs for over an hour. The MEASURED work is unchanged: reps are
 # spread across the builds, not multiplied by them.
 #
-# REPS defaults to 14 here rather than bench-compare.sh's own 14-for-multibuild reasoning being a
-# coincidence -- spreading reps across builds introduces a between-build variance component measured
-# at 21-30% of total, so ~1.4x the pairs are needed to recover the power a single-build suite had.
+# REPS follows BUILDS rather than being fixed: bench-compare.sh defaults to 10, the single-build
+# calibration, and this script raises it to 14 when BUILDS>1. Spreading reps across builds introduces a
+# between-build variance component measured at 21-30% of total, so ~1.4x the pairs are needed to hold
+# the power a single-build run has. An explicit REPS from the caller always wins.
 #
 # # Usage
 #
@@ -79,7 +80,7 @@
 # Env:
 #   REF_SRC       repo root of the BASELINE tree (must contain iso_bench/)   (required)
 #   CUR_SRC       repo root of the CANDIDATE tree                            (default: REF_SRC => A/A)
-#   BUILDS        layout variants per arm; 1 disables multibuild             (default 5)
+#   BUILDS        layout variants per arm; >1 enables multibuild            (default 1 = off)
 #   BUILD_DIR     where target dirs go                                       (default: mktemp -d)
 #   KEEP_BUILDS   1 = keep BUILD_DIR on exit (default: remove if we made it)
 #   REF_RUSTFLAGS / CUR_RUSTFLAGS   extra per-arm codegen flags, layout variants append to these
@@ -232,8 +233,12 @@ fi
 
 # REPS is bench-compare.sh's own default (14, sized for multibuild). Drop to 10 when the caller has
 # explicitly disabled multibuild, so BUILDS=1 costs what single-build always cost.
-if ((BUILDS == 1)) && [[ -z "${REPS:-}" ]]; then
-    REPS=10
+# Reps scale with the number of builds, not with taste. Spreading reps across several layouts adds a
+# between-build variance component (measured at 21-30% of total), so multibuild needs ~1.4x the pairs
+# to hold the power a single-build run has. bench-compare.sh defaults to the single-build calibration,
+# so only the multibuild case needs raising. An explicit REPS from the caller always wins.
+if [[ -z "${REPS:-}" ]] && ((BUILDS > 1)); then
+    REPS=14
 fi
 
 # Export rather than using a `VAR=x exec ...` prefix: the values come from expansions, and an expanded
