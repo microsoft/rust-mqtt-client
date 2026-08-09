@@ -78,8 +78,10 @@ CUR_BIN=/tmp/t-cur/release/bench_client  REF_BIN=/tmp/t-main/release/bench_clien
   CUR_LABEL=branch REF_LABEL=main ./bench-compare.sh
 ```
 
-**Prefer [`bench-multibuild.sh`](bench-multibuild.sh) for a real gate.** It does the above, except it
-builds each side *several times* with different code layouts and spreads the reps across them:
+[`bench-multibuild.sh`](bench-multibuild.sh) is a thin wrapper that builds and then calls the above.
+By default (`BUILDS=1`) it is simply a convenience. Setting `BUILDS>1` additionally builds each side
+several times with different code layouts and spreads the reps across them — **opt-in, and currently
+not recommended**; see below:
 
 ```bash
 git worktree add ../iso-main main
@@ -95,10 +97,11 @@ harness. On the **current** harness at matched rep count that gap disappears: 2 
 2 of 8 single-build, Fisher exact **p = 1.000**. The original result was driven by `cpu_us_per_msg`
 before it was windowed, not by layout. Meanwhile the detection cost is real and measured — multibuild
 scores 83–100% of single-build's gated cells on genuine regressions (~5% typical, 17% worst). So
-multibuild is theoretically motivated but currently buys no measurable reduction in false positives;
-see SENSITIVITY.md before enabling it. Costs
-~15 s per extra build against a suite that runs for over an hour; the measured work is unchanged.
-`BUILDS=1` reverts to the single-build behaviour above.
+multibuild is theoretically motivated but currently buys no measurable reduction in false positives
+while costing measurable detection — which is why **`BUILDS` defaults to 1**. It is kept because the
+negative result is worth preserving, and because no shipping benchmark tool randomises layout either;
+the field freezes it instead (which is what `FREEZE_ASLR` does for address-space layout). Read
+SENSITIVITY.md before setting `BUILDS>1`.
 
 `bench-compare.sh` prints the paired comparison as it finishes; re-render it any time (add
 histograms):
@@ -459,12 +462,11 @@ the **client**.
   is **neither reported nor recorded**; the raw distribution is still in `hist_ns` if you ever need
   it. (It used to be emitted into every record and read by nothing, which is worse than absent: a
   number the sample size cannot support eventually gets quoted.)
-- **`REPS` defaults to 14** in `bench-compare.sh`. 10 resolves ~1% deltas on a warm, pinned VM
-  (p99 CV ~1%) and is still plenty for a *single-build* comparison; 14 is for the multibuild path
-  below, where reps are spread across several code layouts and a between-build variance component
-  (measured at 21–30% of total) has to be averaged out too. Set `REPS=10` if you are comparing two
-  single binaries. Read **p99, throughput, and `cpu_us_per_msg`**; **ignore `max`** (single-sample,
-  CV up to ~100%).
+- **`REPS` defaults to 10** in `bench-compare.sh` — the single-build calibration (p99 CV ~1% on a
+  warm, pinned VM, resolving ~1% deltas). `bench-multibuild.sh` raises it to 14 when `BUILDS>1`,
+  because spreading reps across layouts adds a between-build variance component measured at 21–30%
+  of total, so ~1.4× the pairs are needed to hold the same power. An explicit `REPS` always wins.
+  Read **p99, throughput, and `cpu_us_per_msg`**; **ignore `max`** (single-sample, CV up to ~100%).
 - The minimum latency across reps is a useful low-noise "true cost" estimator (wall-clock noise only
   ever adds time).
 
