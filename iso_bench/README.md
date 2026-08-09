@@ -462,6 +462,13 @@ the **client**.
   is **neither reported nor recorded**; the raw distribution is still in `hist_ns` if you ever need
   it. (It used to be emitted into every record and read by nothing, which is worse than absent: a
   number the sample size cannot support eventually gets quoted.)
+- **Address-space layout is frozen** (`setarch -R`; disable with `FREEZE_ASLR=0`). Every rep is a
+  fresh process, so with ASLR on each gets a different stack/heap/mmap base and that variance lands
+  in the paired delta. Measured: peak RSS over four runs was 5704/5784/5756/5800 kB with ASLR on, and
+  5704 every time frozen. This is what the field does — Google Benchmark disables ASLR in
+  `BENCHMARK_MAIN()`, rustls runs its bench pair under `setarch -R`, LLVM's guidance recommends
+  `randomize_va_space=0`. Note the distinction: *address-space* layout is per-process and freezable;
+  *code* layout differs between the two arms by construction and cannot be.
 - **`REPS` defaults to 10** in `bench-compare.sh` — the single-build calibration (p99 CV ~1% on a
   warm, pinned VM, resolving ~1% deltas). `bench-multibuild.sh` raises it to 14 when `BUILDS>1`,
   because spreading reps across layouts adds a between-build variance component measured at 21–30%
