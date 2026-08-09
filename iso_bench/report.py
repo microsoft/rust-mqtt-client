@@ -339,24 +339,35 @@ def wilcoxon_p(deltas):
 _BOOT = 2000  # bootstrap resamples for the noise-adjusted effect (fixed seed -> reproducible report)
 
 
-def adj_delta(deltas):
-    """Noise-corrected effect: the raw median per-pair delta SHRUNK toward zero in proportion to its
-    own sampling uncertainty (positive-part James-Stein / empirical-Bayes shrinkage). A delta that is
-    mostly noise collapses toward 0; a well-resolved one keeps ~its full magnitude. Model-based and
-    rough for small n -- read it as an intuition of 'how much really changed', not an exact figure."""
+def delta_stats(deltas):
+    """One bootstrap of the median per-pair delta -> (adj, ci_lo, ci_hi). Both summaries answer the
+    same question -- 'how much of this delta is real?' -- in different forms, and they are reported
+    side by side so the two can be compared on live data before either is dropped.
+
+    adj    positive-part James-Stein / empirical-Bayes shrinkage: the median pulled toward zero in
+           proportion to its own sampling uncertainty. Compact, but a POINT estimate you cannot act
+           on directly, and at the extreme it reads 0.0 on a cell the same row calls WORSE.
+    ci     the 2.5/97.5 percentiles of the same bootstrap distribution. Says the same thing without a
+           model, and an interval straddling zero SHOWS uncertainty rather than hiding it in a
+           shrunken scalar. This is what Criterion.rs reports (bootstrap CI, 100k resamples).
+
+    Both come from the SAME resamples, so carrying both costs nothing beyond the percentile lookup."""
     n = len(deltas)
     if n < 2:
-        return 0.0
+        return 0.0, None, None
     med = st.median(deltas)
-    if med == 0.0:
-        return 0.0
     rng = random.Random(20260730)
-    meds = [st.median([deltas[rng.randrange(n)] for _ in range(n)]) for _ in range(_BOOT)]
+    meds = sorted(
+        st.median([deltas[rng.randrange(n)] for _ in range(n)]) for _ in range(_BOOT)
+    )
+    lo, hi = meds[int(0.025 * (_BOOT - 1))], meds[int(0.975 * (_BOOT - 1))]
+    if med == 0.0:
+        return 0.0, lo, hi
     se = st.pstdev(meds)  # bootstrap standard error of the median
     if se == 0.0:
-        return med
+        return med, lo, hi
     snr2 = (med / se) ** 2
-    return med * max(0.0, 1.0 - 1.0 / snr2)
+    return med * max(0.0, 1.0 - 1.0 / snr2), lo, hi
 
 
 # Within-config corroboration (partner + sibling coherence) was removed in favour of REPLICATION:
@@ -406,11 +417,15 @@ def compute_replicated(rows, config, labels):
                                   "fired": p < 0.05 and abs(med) >= floor})
             else:
                 per_round.append(None)
+        adj_v, ci_lo, ci_hi = (None, None, None) if info or not all_deltas else delta_stats(all_deltas)
         m = {"key": key, "disp": disp, "info": info, "per_round": per_round,
              "bmed": st.median(all_b) if all_b else None,
              "lmed": st.median(all_l) if all_l else None,
              "raw_med": st.median(all_deltas) if all_deltas else 0.0,
-             "verdict": "-", "adj": None}
+             "verdict": "-", "adj": None, "ci_lo": ci_lo, "ci_hi": ci_hi,
+             # kept separately: `adj` is populated only on a FIRED cell (historical behaviour), while
+             # ci_lo/ci_hi are available on every gated cell.
+             "_adj_all": adj_v}
         fired = [pr for pr in per_round if pr and pr["fired"]]
         dirs = {pr["dir"] for pr in fired}
         if info:
@@ -419,7 +434,7 @@ def compute_replicated(rows, config, labels):
             m["verdict"] = "-"
         elif len(rounds) >= 2:
             if len(fired) == len(rounds) and len(dirs) == 1:      # reproduced in every round
-                m["verdict"], m["adj"] = next(iter(dirs)), adj_delta(all_deltas)
+                m["verdict"], m["adj"] = next(iter(dirs)), m["_adj_all"]
             elif len(dirs) > 1:                                   # rounds disagree on direction
                 m["verdict"] = "~noise"
             elif fired:                                           # fired in some rounds, not all
@@ -428,7 +443,7 @@ def compute_replicated(rows, config, labels):
                 m["verdict"] = "~noise"
         else:                                                     # single round: no replication
             if fired:
-                m["verdict"], m["adj"] = fired[0]["dir"], adj_delta(all_deltas)
+                m["verdict"], m["adj"] = fired[0]["dir"], m["_adj_all"]
             else:
                 m["verdict"] = "~noise"
         out.append(m)
@@ -439,12 +454,13 @@ def print_replicated_table(base, latest, rounds, comp, kind=None, qos0_pub=False
     rnd_hdr = "".join(f"{('rnd' + str(r) + ' p'):>8}" for r in rounds)
     tag = f"×{len(rounds)} rounds" if len(rounds) >= 2 else "1 round"
     print(f"\n  PAIRED A/B  (interleaved {tag}; baseline=[{base}], delta=[{latest}])")
-    print(f"  {'metric':<12}{('[' + base + ']'):>12}{('[' + latest + ']'):>12}{'raw Δ%':>8}{rnd_hdr}{'adj Δ%':>7}{'verdict':>10}")
-    print(f"  {rule('-', 61 + 8 * len(rounds))}")
+    print(f"  {'metric':<12}{('[' + base + ']'):>12}{('[' + latest + ']'):>12}{'raw Δ%':>8}{rnd_hdr}"
+          f"{'adj Δ%':>7}{'95% CI on Δ%':>16}{'verdict':>10}")
+    print(f"  {rule('-', 77 + 8 * len(rounds))}")
     for m in comp:
         if m["bmed"] is None:
             dash = "".join(f"{'-':>8}" for _ in rounds)
-            print(f"  {m['disp']:<12}{'-':>12}{'-':>12}{'-':>8}{dash}{'-':>7}{'-':>10}")
+            print(f"  {m['disp']:<12}{'-':>12}{'-':>12}{'-':>8}{dash}{'-':>7}{'-':>16}{'-':>10}")
             continue
         rnd_cells = ""
         for pr in m["per_round"]:
@@ -454,7 +470,12 @@ def print_replicated_table(base, latest, rounds, comp, kind=None, qos0_pub=False
                 ps = "<.001" if pr["p"] < 0.001 else f"{pr['p']:.3f}"
                 rnd_cells += f"{(pr['arrow'] + ps):>8}"
         adj_str = f"{m['adj']:.1f}" if m["adj"] is not None else ("-" if m["info"] else "0.0")
-        print(f"  {m['disp']:<12}{fmt_num(m['bmed']):>12}{fmt_num(m['lmed']):>12}{m['raw_med']:>7.1f}%{rnd_cells}{adj_str:>7}{m['verdict']:>10}")
+        if m.get("ci_lo") is None:
+            ci_str = "-"
+        else:
+            ci_str = f"[{m['ci_lo']:+.1f},{m['ci_hi']:+.1f}]"
+        print(f"  {m['disp']:<12}{fmt_num(m['bmed']):>12}{fmt_num(m['lmed']):>12}{m['raw_med']:>7.1f}%"
+              f"{rnd_cells}{adj_str:>7}{ci_str:>16}{m['verdict']:>10}")
     if kind == "inter-arrival":
         print("    note: inter-arrival = the gap between consecutive deliveries. p50 is intra-burst")
         print("    packing (a read-batch artifact) so it's 'info'; throughput carries the rate and")
@@ -566,6 +587,7 @@ def json_payload(rows, configs, paired_comp, path):
                     "info": m["info"], "verdict": m["verdict"],
                     "baseline_median": m["bmed"], "latest_median": m["lmed"],
                     "raw_delta_pct": m["raw_med"], "adj_delta_pct": m["adj"],
+                    "ci_lo_pct": m["ci_lo"], "ci_hi_pct": m["ci_hi"],
                     "per_round": [
                         None if pr is None else
                         {"round": rnd, "p": pr["p"], "fired": pr["fired"],
@@ -577,7 +599,8 @@ def json_payload(rows, configs, paired_comp, path):
                     if m["verdict"] in ("better", "WORSE"):
                         n_flagged += 1
                         flagged.append({"config": config, "metric": m["key"], "verdict": m["verdict"],
-                                        "raw_delta_pct": m["raw_med"], "adj_delta_pct": m["adj"]})
+                                        "raw_delta_pct": m["raw_med"], "adj_delta_pct": m["adj"],
+                                        "ci_lo_pct": m["ci_lo"], "ci_hi_pct": m["ci_hi"]})
                     elif m["verdict"] == "~noise*":
                         n_soft += 1
             entry["metrics"] = metrics
@@ -712,6 +735,9 @@ def main():
             print(" FIRES when p<0.05 AND |Δ| clears its floor. A metric earns better/WORSE only if it fires")
             print(" the SAME direction in EVERY round (reproduced); some-but-not-all rounds -> '~noise*';")
             print(" none or contradictory -> '~noise'. adj Δ% is the noise-corrected effect (James-Stein),")
+            print(" and 95% CI on Δ% is a bootstrap interval on the same median from the same resamples.")
+            print(" Both answer 'how much of this is real?'; the CI shows it, adj folds it into a scalar.")
+            print(" An interval straddling 0 means the delta is not resolved -- regardless of adj Δ%.")
             print(" shown only for a reproduced verdict. Tip: a real regression usually moves throughput and")
             print(" cpu/msg together -- read them as a pair. Non-interleaved configs flag deltas over baseline CV.")
         else:
