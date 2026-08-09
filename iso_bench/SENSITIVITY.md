@@ -93,6 +93,37 @@ the only test that reliably distinguished a real effect from an artefact — it 
 above. **No rung's cost should be quoted without it.** Measured residual bias `b` is 0.000–0.003%
 across every rung/host combination tested, which is the strongest evidence the harness itself is fair.
 
+## Freezing address-space layout: the one layout fix that works
+
+Every rep is a fresh process, so with ASLR on each gets a different stack, heap and mmap base. That
+variance lands directly in the paired delta. `bench-once.sh` runs the client and peer under
+`setarch -R` (disable with `FREEZE_ASLR=0`).
+
+Measured by crossover — A/A on both hosts, both conditions run concurrently, each host seeing both, so
+neither the 2.5× host effect nor time is confounded. A/A means the true delta is zero, so |Δ| **is**
+the noise:
+
+| host | ASLR | \|Δ\| p50 | \|Δ\| p90 |
+|---|---|---|---|
+| mqttbench | **frozen** | **0.178%** | **1.156%** |
+| mqttbench | on | 0.252% | 1.407% |
+| mqttbench2 | **frozen** | **0.181%** | **1.366%** |
+| mqttbench2 | on | 0.316% | 1.518% |
+
+p50 falls 29.5% and 42.6%; p90 falls 17.8% and 10.0%. The reading was fixed before the data existed —
+a real reduction had to appear at **both** quantiles on **both** hosts — and it does. Every gated
+metric improves, so it is not one metric carrying the result: `msgs_per_s` −64%, `lat_p50` −30%,
+`lat_p99` −30%, `cpu_us_per_msg` −27%, `lat_p90` −22%, and `max_rss_kb` to exactly zero.
+
+**The distinction that matters, and that took far too long to see.** *Code* layout cannot be frozen
+here — the two arms are different binaries by construction, which is why multibuild was attempted
+below and why it bought nothing measurable. *Address-space* layout is a per-process property, is
+freezable for free, and is worth 10–43% of the noise. This is also what the field actually does:
+Google Benchmark disables ASLR in `BENCHMARK_MAIN()`, rustls runs its bench pair under `setarch -R`,
+LLVM's guidance recommends `randomize_va_space=0`. None of them randomise code layout.
+
+Rates measured before this change (including everything below) carry noise this removes.
+
 ## Multibuild: what it does and does not buy
 
 Layout is a **fixed** property of a single-build comparison — the same two binaries in every rep,
