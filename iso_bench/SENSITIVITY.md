@@ -5,9 +5,14 @@ Licensed under the MIT License.
 
 # Sensitivity of `iso_bench` — what it can and cannot catch
 
-Measured over 258 suite runs on two dedicated Azure `F16s_v2` VMs, 2026-08-01 to 2026-08-08. Every
-number here is recomputed from raw `results.jsonl` by `consolidate.py`; none is carried forward from
-an earlier claim.
+Measured over 302 suite runs on two dedicated Azure `F16s_v2` VMs, 2026-08-01 to 2026-08-09. Every
+number is recomputed from raw `results.jsonl`; none is carried forward from an earlier claim.
+
+**All rates here are scored at the shipped `PAIRED_FLOOR_PCT = 1.0`.** That matters: the floor moved
+from 0.5 to 1.0 partway through the study, and because the results ledger was append-only and did not
+record which floor produced each verdict, it briefly held both — which moved the headline A/A rate from
+2.0% to 1.0% and the near-identical-build rate from 37.5% to 18.2% once every run was rescored
+consistently. `report.py --json` now emits `floor_pct` so that cannot recur silently.
 
 ## Summary
 
@@ -33,8 +38,9 @@ and summarised as the p90 of |per-cell effect| across all gated cells.
 
 All rows below are **single-build on the pre-windowing harness** — the configuration they were
 measured in. That matters most for the artefact rows: the same `o1null` injection that flagged 100% of
-runs there flags 2 of 8 on the current harness, and the change responsible is windowed cpu/rss, not
+runs there flags 6 of 33 on the current harness, and the change responsible is windowed cpu/rss, not
 [multibuild](#multibuild-what-it-does-and-does-not-buy). The real-cost rows are close to unaffected.
+These rows are also scored at the old 0.5% floor, so they are not comparable to the rates above.
 
 | change | true cost | host | runs | P(flag) |
 |---|---|---|---|---|
@@ -191,27 +197,35 @@ all configs reports d200 and d400 as indistinguishable (1.62% vs 1.64%), with on
 
 ## Practical guidance
 
-**Do not gate CI on a single run.** An ordinary PR touching the hot path will flag with meaningful
-probability regardless of whether it regresses anything — on the current harness, **6 of 20 runs
-(30%, 95% CI [12%, 54%])** on an inert one-line diff. That is down from **6/6** on the pre-windowing
-harness (Fisher p = 0.0040), and the metric fix — not multibuild, not rep count — is what moved it.
+**Do not gate CI on a single run.** What a comparison flags depends far more on *what you are
+comparing* than on the code:
 
-**That point estimate is not settled, and past drafts of this file repeatedly implied it was.** The
-running estimate as draws accumulated: 0/2, 0/4, 1/6, 1/8, 2/10, 4/12 — 0%, 0%, 17%, 12%, 20%, 33%.
-Each intermediate value sat inside the previous interval, so nothing was ever *contradicted*; what was
-wrong was calling it converged. For a rate near 30%, pinning it to ±10 points needs **n ≈ 84** and to
-±5 points **n ≈ 336**. At ~1.7 h per run on two hosts that is roughly 3 days and 12 days respectively.
-Quote the interval, not the point.
+| comparison | runs flagged | 95% CI | per-cell |
+|---|---|---|---|
+| **A/A** — the same binary in both arms | **1 / 102 = 1.0%** | [0.0%, 5.4%] | 0.011% |
+| **near-identical builds** — one inert line of source | **6 / 33 = 18.2%** | [7.0%, 35.5%] | 0.278% |
 
-### What raising the floor would buy
+Fisher exact on that contrast: **p = 7.6 × 10⁻⁴**. Both measured at the shipped 1.0% floor on the
+windowed harness. A binary compared to itself is quiet; two *builds* of near-identical source are
+roughly 19× noisier, and the second is the case CI actually presents. It is also why A/A is a
+misleading model of CI false positives despite being the obvious one.
 
-`PAIRED_FLOOR_PCT` is 0.5%. Every residual false positive across those 18 runs, and the run-level rate
-that would remain at higher floors:
+**Neither point estimate is settled, and past drafts of this file repeatedly implied otherwise.** The
+near-identical rate ran 0/2, 0/4, 1/6, 1/8, 2/10, 4/12 as draws accumulated — 0%, 0%, 17%, 12%, 20%,
+33%. Every intermediate sat inside the previous interval, so nothing was ever *contradicted*; what was
+wrong was calling it converged. For a rate near 20%, pinning it to ±10 points needs **n ≈ 60** and to
+±5 points **n ≈ 250** — roughly 2 days and 9 days of two-host wall clock. Quote the interval.
+
+### What the floor buys
+
+Measured at the 0.5% floor these were 2.0% and 37.5%; raising it to 1.0% roughly halved both. The
+run-level rate on an inert diff, by floor, from the 18 runs available when this was measured:
 
 | floor | runs flagged | FP rate | metrics still firing |
 |---|---|---|---|
-| **0.5% (current)** | 4/18 | **22%** | lat_p50 ×3, cpu_us_per_msg ×3, msgs_per_s, lat_p90 |
+| 0.5% (was) | 4/18 | 22% | lat_p50 ×3, cpu_us_per_msg ×3, msgs_per_s, lat_p90 |
 | 0.8% | 3/18 | 17% | cpu_us_per_msg ×3, lat_p50, msgs_per_s |
+| **1.0% (current)** | — | — | matches Criterion.rs's default noise threshold |
 | 1.2% | 2/18 | 11% | cpu_us_per_msg ×2, msgs_per_s |
 | 2.0% | 1/18 | 6% | cpu_us_per_msg |
 | 4.0% | 0/18 | 0% | — |
