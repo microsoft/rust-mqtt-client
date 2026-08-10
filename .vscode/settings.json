@@ -1,3 +1,3 @@
 {
-  "rust-analyzer.cargo.features": ["__integration"]
+  "rust-analyzer.cargo.features": ["websockets", "__network", "__integration"]
 }

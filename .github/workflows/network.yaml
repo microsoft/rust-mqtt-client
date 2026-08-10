@@ -1,0 +1,146 @@
+# Network: scheduled live tests against the full matrix of real MQTT brokers.
+#
+# Guiding principles (kept consistent with `pr.yaml`, `nightly.yaml`, `fuzz.yaml`):
+#
+#   1. Gate vs. scheduled. The PR gate already tests against Mosquitto (the
+#      `network-mosquitto` job in pr.yaml), which is what proves a change didn't break
+#      talking to a real server. This workflow adds the BREADTH the gate can't hold
+#      stable: other implementations, and a broker pulled from a build registry that
+#      can rotate independently of our code. A red run here often means the outside
+#      world moved, so -- like `nightly.yaml` -- it must not block a PR, and a
+#      `notify` job files the failure since no author is watching.
+#
+#   2. Broker matrix. The test suite is server-agnostic -- it connects to whatever
+#      MQTT_HOST/MQTT_PORT point at -- so each matrix entry only swaps which
+#      broker gets provisioned. Every broker directory exposes `up.sh`/`down.sh`,
+#      which is what lets brokers with completely different runtimes share one
+#      job: Mosquitto is a container, while AIO MQ is a Helm chart that needs a
+#      k3d cluster. `kubernetes: true` just asks for that extra tooling.
+#
+#   3. Containerized vs. hosted brokers. Everything here runs from a local
+#      container. A HOSTED broker (e.g. Azure Event Grid) needs credentials, which
+#      GitHub withholds from fork pull requests -- another reason this workflow,
+#      not the gate, is where such entries belong, behind an `environment:` gate.
+
+name: 'Network'
+
+on:
+  schedule:
+    # 13:00 UTC (06:00 PT) daily -- staggered an hour after `fuzz.yaml` so the
+    # scheduled workloads don't pile onto the same runner minute.
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+# One scheduled run at a time.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  network:
+    name: Network (${{ matrix.broker }})
+    runs-on: 'ubuntu-24.04'
+    # Generous because the AIO MQ leg stands up a k3d cluster and Helm-installs an
+    # operator before a single test runs; Mosquitto starts in seconds.
+    timeout-minutes: 25
+    # AIO MQ pulls its chart from a build registry rather than a distribution
+    # endpoint, so it can fail for reasons unrelated to us. Letting it go red
+    # without failing the workflow keeps it from masking a real regression in
+    # another broker; the `notify` job still reports genuine failures.
+    continue-on-error: ${{ matrix.broker == 'aio-mq' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - broker: mosquitto
+          - broker: emqx
+          - broker: hivemq-ce
+          - broker: aio-mq
+            kubernetes: true
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    # kubectl ships with the runner image; helm is pinned and k3d isn't present at all.
+    - name: Install Helm
+      if: matrix.kubernetes
+      uses: azure/setup-helm@v5
+      with:
+        version: 'v3.16.3'
+
+    - name: Install k3d
+      if: matrix.kubernetes
+      run: |
+        curl -fsSL -o /usr/local/bin/k3d \
+          https://github.com/k3d-io/k3d/releases/download/v5.7.5/k3d-linux-amd64
+        chmod +x /usr/local/bin/k3d
+        k3d version
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        # Swatinem/rust-cache (below) handles caching, including target/.
+        cache: false
+        # Don't let the action inject its default `RUSTFLAGS=-D warnings`;
+        # warning-denial belongs to `make check` (see pr.yaml).
+        rustflags: ''
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: network
+
+    # The broker lifecycle is split into explicit steps rather than using
+    # `make network-test`: teardown then gets its own `if: always()` step, so it
+    # still runs if the job is cancelled, and each phase fails distinctly.
+    - name: Start broker
+      run: tests/network/brokers/${{ matrix.broker }}/up.sh
+
+    - name: Test
+      env:
+        MQTT_SERVER: ${{ matrix.broker }}
+      run: cargo test --features __network,websockets --test network
+
+    - name: Stop broker
+      if: always()
+      run: tests/network/brokers/${{ matrix.broker }}/down.sh
+
+  # Scheduled runs have no PR to turn red and no author watching, so surface
+  # failures by opening (or updating) a tracking issue. The AIO MQ leg is
+  # neutralized by continue-on-error above and won't reach here.
+  notify:
+    name: Report failure
+    needs: [network]
+    if: failure()
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+    - name: Open or update tracking issue
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        title="Network workflow failed"
+        body="The scheduled network workflow failed. Run: ${RUN_URL}"
+        number="$(
+          gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --json number,title \
+            --jq "[.[] | select(.title == \"${title}\")][0].number // empty"
+        )"
+        if [ -n "${number}" ]; then
+          gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+        else
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+        fi

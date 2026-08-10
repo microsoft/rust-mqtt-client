@@ -1,0 +1,60 @@
+# Adapted from the chart's examples/deployment.simple.yaml, with two deliberate changes:
+#
+#   - The listener is LoadBalancer from the start. The example uses the default ClusterIP,
+#     which is cluster-internal only, so the published host port accepts connections and
+#     then drops them. Declaring it here avoids applying the example and patching it after.
+#   - Cardinality and memory are at their minimum. The example provisions 2 frontends and
+#     2 backend chains of 2; this suite runs a handful of clients on small CI runners.
+#
+# At least one BrokerListener must exist before the Broker, or the Broker reports a
+# missing-listener failure -- hence the ordering below.
+---
+apiVersion: mqttbroker.iotoperations.azure.com/v1
+kind: BrokerListener
+metadata:
+  name: listener
+  namespace: default
+spec:
+  brokerRef: broker
+  serviceName: aio-broker
+  serviceType: LoadBalancer
+  ports:
+    - port: 1883
+      protocol: Mqtt
+    - port: 8883
+      protocol: Mqtt
+      tls:
+        mode: Manual
+        manual:
+          secretRef: network-server-tls
+    - port: 8083
+      protocol: WebSockets
+    - port: 8084
+      protocol: WebSockets
+      tls:
+        mode: Manual
+        manual:
+          # AIO MQ 1.6.0 creates duplicate volume mounts when two ports share a Secret.
+          secretRef: network-server-wss-tls
+
+---
+apiVersion: mqttbroker.iotoperations.azure.com/v1
+kind: Broker
+metadata:
+  name: broker
+  namespace: default
+spec:
+  advanced:
+    # Internal TLS would pull in cert-manager, which this deployment doesn't install.
+    encryptInternalTraffic: Disabled
+  cardinality:
+    frontend:
+      replicas: 1
+      workers: 1
+    backendChain:
+      redundancyFactor: 1
+      partitions: 1
+      workers: 1
+  generateResourceLimits:
+    cpu: Disabled
+  memoryProfile: "Tiny"
