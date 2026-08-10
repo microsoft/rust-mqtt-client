@@ -5,9 +5,14 @@ services:
     image: eclipse-mosquitto:2.0.22
     ports:
       - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_TLS_PORT:-8883}:8883"
+      - "${MQTT_MTLS_PORT:-8884}:8884"
+      - "${MQTT_WS_PORT:-8083}:8083"
+      - "${MQTT_WSS_PORT:-8084}:8084"
     volumes:
       # Relative paths resolve against this file's directory, so `-f` from the repo root works.
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../certs:/mosquitto/config/certs:ro
     healthcheck:
       # The image ships the mosquitto clients; a successful publish proves the listener is
       # accepting connections, which is what `up --wait` needs to gate on.

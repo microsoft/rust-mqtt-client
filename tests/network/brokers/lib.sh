@@ -26,9 +26,34 @@ wait_for_port() {
     return 1
 }
 
+# Blocks until a TLS listener completes a handshake with the test CA.
+wait_for_tls_port() {
+    local host="$1"
+    local port="$2"
+    local ca_file="$3"
+    local attempts="${4:-60}"
+
+    for _ in $(seq 1 "$attempts"); do
+        if openssl s_client \
+            -connect "${host}:${port}" \
+            -servername localhost \
+            -CAfile "$ca_file" \
+            -verify_return_error \
+            </dev/null >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+    done
+
+    echo "error: TLS handshake failed on ${host}:${port}" >&2
+    return 1
+}
+
 # Provisioning for brokers that are just a compose file. Run from the broker's directory.
 compose_up() {
-    docker compose up -d --wait
+    # Each fixture invocation regenerates its certificates, which running broker processes do
+    # not reload. Recreate containers so their in-memory TLS state matches the files on disk.
+    docker compose up -d --wait --force-recreate
     wait_for_port 127.0.0.1 "${MQTT_PORT:-1883}"
 }
 

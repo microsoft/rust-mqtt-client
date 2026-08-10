@@ -190,7 +190,7 @@ jobs:
       run: make -j test
 
 
-  # The gate's only test against a real broker. Every other test in the gate uses
+  # The gate's only test against a real MQTT server. Every other test in the gate uses
   # the in-process `Test` transport, which hands `Packet` values down a channel and
   # never opens a socket -- so this job is the only thing here that exercises
   # `src/io/`, the framing, and a real CONNECT/DISCONNECT over TCP. Without it, a
@@ -229,8 +229,8 @@ jobs:
 
     - name: Test
       env:
-        MQTT_BROKER: mosquitto
-      run: cargo test --features __network --test network
+        MQTT_SERVER: mosquitto
+      run: cargo test --features __network,websockets --test network
 
     - name: Stop broker
       if: always()
@@ -269,7 +269,8 @@ jobs:
         tool: cargo-llvm-cov
 
     - name: Coverage
-      run: make coverage
+      # Network tests are needed to cover I/O stack that is currently bypassed by the integration test injection pattern
+      run: make network-coverage BROKER=mosquitto
 
     - name: Upload coverage report
       uses: actions/upload-artifact@v7

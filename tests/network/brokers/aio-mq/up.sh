@@ -5,8 +5,16 @@
 # reconciles Broker/BrokerListener CRs, so this stands up a throwaway k3d cluster rather
 # than a container. Approach adapted from the Azure-NBC CI scripts.
 #
-# The chart supplies the operator and CRDs; the broker itself comes from broker.yaml, which
-# exposes plaintext 1883 with no auth -- what makes MQ interchangeable with the other brokers.
+# The chart supplies the operator and CRDs; the broker itself comes from broker.yaml.
+#
+# AIO MQ 1.6.0 deployment workaround (latest stable standalone chart as of 2026-08-07):
+#
+# 1. Reusing one TLS Secret for MQTT/TLS and WSS makes the operator render duplicate volume
+#    mounts at the same path. Kubernetes rejects the frontend StatefulSet, so use two Secret
+#    names containing the same certificate and key.
+# On a chart upgrade, first try using one Secret for both secure ports. This workaround can be
+# removed when a clean deployment reaches Running and the frontend StatefulSet contains only one
+# mount for the shared Secret.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -20,6 +28,9 @@ MQ_IMAGE_ACR="${MQ_IMAGE_ACR:-mqbuilds.azurecr.io}"
 # version in a shell variable pulled from an OCI registry.
 MQ_IMAGE_VERSION="${MQ_IMAGE_VERSION:-1.6.0}"
 PORT="${MQTT_PORT:-1883}"
+TLS_PORT="${MQTT_TLS_PORT:-8883}"
+WS_PORT="${MQTT_WS_PORT:-8083}"
+WSS_PORT="${MQTT_WSS_PORT:-8084}"
 
 for tool in k3d kubectl helm; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -35,9 +46,11 @@ log() { echo "$(date +%T) [aio-mq] $*"; }
 
 log "Recreating k3d cluster '$CLUSTER_NAME'..."
 k3d cluster delete "$CLUSTER_NAME" >/dev/null 2>&1 || true
-# Publishing the port on the server node keeps the endpoint at 127.0.0.1 rather than a
-# Docker IP that changes between runs.
-k3d cluster create "$CLUSTER_NAME" -p "${PORT}:1883@server:0"
+k3d cluster create "$CLUSTER_NAME" \
+    --port "${PORT}:1883@loadbalancer" \
+    --port "${TLS_PORT}:8883@loadbalancer" \
+    --port "${WS_PORT}:8083@loadbalancer" \
+    --port "${WSS_PORT}:8084@loadbalancer"
 kubectl wait --for=condition=Ready nodes --all --timeout=120s
 
 log "Installing the aio-broker chart ($MQ_IMAGE_VERSION)..."
@@ -52,6 +65,15 @@ for _ in $(seq 1 12); do
     fi
     sleep 5
 done
+
+log "Creating the TLS Secrets..."
+../generate-certs.sh
+kubectl create secret tls network-server-tls \
+    --cert=../certs/server.crt \
+    --key=../certs/server.key
+kubectl create secret tls network-server-wss-tls \
+    --cert=../certs/server.crt \
+    --key=../certs/server.key
 
 log "Applying the broker definition..."
 kubectl apply -f broker.yaml
@@ -70,8 +92,10 @@ if [[ "${status:-}" != *Running* ]]; then
     exit 1
 fi
 
-# Running only means the CR reconciled; the forwarded port can lag behind it, so gate on a
-# real connection to keep the test from racing startup.
+# Running only means the CR reconciled; listener readiness can lag behind it.
 log "Waiting for 127.0.0.1:${PORT} to accept connections..."
 wait_for_port 127.0.0.1 "$PORT"
+wait_for_tls_port 127.0.0.1 "$TLS_PORT" ../certs/ca.crt
+wait_for_port 127.0.0.1 "$WS_PORT"
+wait_for_tls_port 127.0.0.1 "$WSS_PORT" ../certs/ca.crt
 log "Broker is ready."
