@@ -179,7 +179,10 @@ where
     buf_reader.read_line(&mut status_line).await?;
 
     // Validate the response status
-    if !status_line.starts_with("HTTP/1.1 200") && !status_line.starts_with("HTTP/1.0 200") {
+    let mut status_parts = status_line.split_whitespace();
+    let version = status_parts.next();
+    let status = status_parts.next();
+    if !matches!(version, Some("HTTP/1.1" | "HTTP/1.0")) || status != Some("200") {
         return Err(io::Error::other(format!(
             "proxy CONNECT failed: {}",
             status_line.trim()
