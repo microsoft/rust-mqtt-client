@@ -1,0 +1,25 @@
+# One of the brokers the live network suite can run against.
+# Brought up and torn down by `make network-test BROKER=emqx`.
+services:
+  emqx:
+    image: emqx/emqx:6.2.2
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_TLS_PORT:-8883}:8883"
+      - "${MQTT_WS_PORT:-8083}:8083"
+      - "${MQTT_WSS_PORT:-8084}:8084"
+    environment:
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CACERTFILE: /opt/emqx/etc/network-certs/ca.crt
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CERTFILE: /opt/emqx/etc/network-certs/server.crt
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__KEYFILE: /opt/emqx/etc/network-certs/server.key
+      EMQX_LISTENERS__WSS__DEFAULT__SSL_OPTIONS__CACERTFILE: /opt/emqx/etc/network-certs/ca.crt
+      EMQX_LISTENERS__WSS__DEFAULT__SSL_OPTIONS__CERTFILE: /opt/emqx/etc/network-certs/server.crt
+      EMQX_LISTENERS__WSS__DEFAULT__SSL_OPTIONS__KEYFILE: /opt/emqx/etc/network-certs/server.key
+    volumes:
+      - ../certs:/opt/emqx/etc/network-certs:ro
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+      start_period: 10s

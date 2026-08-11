@@ -51,8 +51,7 @@ where
             "request URI does not contain a scheme component",
         ));
     };
-
-    if !["http", "https", "ws", "wss"].contains(&scheme) {
+    if !["ws", "wss"].contains(&scheme) {
         return Err(IoError::new(
             io::ErrorKind::InvalidInput,
             format!("unsupported WebSocket URI scheme: {scheme}"),
@@ -60,11 +59,11 @@ where
     }
 
     // Guard against the two sources of truth for "is this TLS" disagreeing: the scheme
-    // (`wss`/`https`) and the presence of `tls_config`. Without this, a `wss` URI with no
+    // (`wss`) and the presence of `tls_config`. Without this, a `wss` URI with no
     // `tls_config` would silently connect in plaintext (and `ws` with a `tls_config` would use TLS),
     // since the TLS decision below is driven by `tls_config` rather than the scheme.
     // TODO: Prevent this from happening in the first place via API design
-    let scheme_is_tls = matches!(scheme, "wss" | "https");
+    let scheme_is_tls = scheme == "wss";
     if scheme_is_tls != tls_config.is_some() {
         return Err(IoError::new(
             io::ErrorKind::InvalidInput,
