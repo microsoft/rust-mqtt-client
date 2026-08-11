@@ -135,12 +135,11 @@ impl TlsConfig {
     ) -> io::Result<Self> {
         let client_cert = if let Some((cert, pkey)) = client_cert {
             let mut client_cert_chain = X509::stack_from_pem(cert)?;
-            if client_cert_chain.is_empty() {
-                return Err(io::Error::other(
-                    "client cert PEM does not contain any certificates",
-                ));
-            }
-            let client_cert = client_cert_chain.remove(0);
+            client_cert_chain.reverse();
+            let client_cert = client_cert_chain.pop().ok_or_else(|| {
+                io::Error::other("client cert PEM does not contain any certificates")
+            })?;
+            client_cert_chain.reverse();
 
             let pkey = PKey::private_key_from_pem(pkey)?;
 
