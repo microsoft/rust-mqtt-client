@@ -30,7 +30,17 @@ proxy_up() {
 
 proxy_down() {
     if [[ -f "$PROXY_PID_FILE" ]]; then
-        kill "$(cat "$PROXY_PID_FILE")" >/dev/null 2>&1 || true
+        local pid
+        pid="$(cat "$PROXY_PID_FILE")"
+        kill "$pid" >/dev/null 2>&1 || true
+        for _ in {1..50}; do
+            if ! kill -0 "$pid" >/dev/null 2>&1; then
+                rm -f "$PROXY_PID_FILE"
+                return
+            fi
+            sleep 0.1
+        done
+        kill -KILL "$pid" >/dev/null 2>&1 || true
         rm -f "$PROXY_PID_FILE"
     fi
 }

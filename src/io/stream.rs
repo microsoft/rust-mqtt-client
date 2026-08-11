@@ -16,12 +16,17 @@ use std::{
 };
 
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf},
+    io::{
+        AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
+        BufReader, ReadBuf,
+    },
     net::TcpStream,
 };
 use tokio_openssl::SslStream;
 
 use crate::transport::{Proxy, ProxyAuthorization, ProxyEndpoint, TlsConfig};
+
+const MAX_PROXY_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 
 /// An established base transport byte stream.
 ///
@@ -147,9 +152,14 @@ where
     }
 
     // Build the HTTP CONNECT request
+    let authority = if target_host.contains(':') {
+        format!("[{target_host}]:{target_port}")
+    } else {
+        format!("{target_host}:{target_port}")
+    };
     let mut request = format!(
-        "CONNECT {target_host}:{target_port} HTTP/1.1\r\n\
-         Host: {target_host}:{target_port}\r\n"
+        "CONNECT {authority} HTTP/1.1\r\n\
+          Host: {authority}\r\n"
     );
 
     match auth {
@@ -170,11 +180,20 @@ where
 
     // Read the HTTP response status line
     let mut buf_reader = BufReader::new(stream);
+    let mut response_header_bytes = 0;
     let mut status_line = String::new();
-    buf_reader.read_line(&mut status_line).await?;
+    read_proxy_response_line(
+        &mut buf_reader,
+        &mut status_line,
+        &mut response_header_bytes,
+    )
+    .await?;
 
     // Validate the response status
-    if !status_line.starts_with("HTTP/1.1 200") && !status_line.starts_with("HTTP/1.0 200") {
+    let mut status_parts = status_line.split_whitespace();
+    let version = status_parts.next();
+    let status = status_parts.next();
+    if !matches!(version, Some("HTTP/1.1" | "HTTP/1.0")) || status != Some("200") {
         return Err(io::Error::other(format!(
             "proxy CONNECT failed: {}",
             status_line.trim()
@@ -185,7 +204,12 @@ where
     let mut header_line = String::new();
     loop {
         header_line.clear();
-        buf_reader.read_line(&mut header_line).await?;
+        read_proxy_response_line(
+            &mut buf_reader,
+            &mut header_line,
+            &mut response_header_bytes,
+        )
+        .await?;
         if header_line == "\r\n" || header_line == "\n" || header_line.is_empty() {
             break;
         }
@@ -198,6 +222,28 @@ where
     // However, a proxy that coalesces the `200` response with early target bytes into one segment
     // would cause those bytes to be silently lost here. Revisit if this ever proves a problem.
     Ok(buf_reader.into_inner())
+}
+
+async fn read_proxy_response_line<R>(
+    reader: &mut R,
+    line: &mut String,
+    total_bytes_read: &mut usize,
+) -> io::Result<usize>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let remaining = MAX_PROXY_RESPONSE_HEADER_BYTES.saturating_sub(*total_bytes_read);
+    let bytes_read = reader.take(remaining as u64 + 1).read_line(line).await?;
+    *total_bytes_read += bytes_read;
+
+    if *total_bytes_read > MAX_PROXY_RESPONSE_HEADER_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "proxy response headers exceed size limit",
+        ));
+    }
+
+    Ok(bytes_read)
 }
 
 /// Wrap an established stream in a client-side TLS session, returning the encrypted stream.
@@ -287,5 +333,81 @@ impl AsyncWrite for TransportStream {
             TransportStreamInner::Plain(s) => Pin::new(s).poll_shutdown(cx),
             TransportStreamInner::Tls(s) => Pin::new(s).poll_shutdown(cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream};
+
+    use super::{MAX_PROXY_RESPONSE_HEADER_BYTES, ProxyAuthorization, http_connect_exchange};
+
+    // NOTE: These unit tests purely cover regressions from security items flagged by bots.
+    // TODO: Add more comprehensive unit tests for the module
+
+    async fn exchange_response(response: Vec<u8>) -> std::io::Result<DuplexStream> {
+        let (client, mut proxy) = tokio::io::duplex(response.len().max(1024));
+        proxy.write_all(&response).await.unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            http_connect_exchange(client, "example.com", 443, &ProxyAuthorization::None),
+        )
+        .await
+        .expect("proxy exchange should fail before the peer closes");
+        drop(proxy);
+        result
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_proxy_status_line() {
+        let mut response = b"HTTP/1.1 200 ".to_vec();
+        response.resize(MAX_PROXY_RESPONSE_HEADER_BYTES + 1, b'x');
+
+        let err = exchange_response(response).await.unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn rejects_proxy_headers_over_cumulative_limit() {
+        let mut response = b"HTTP/1.1 200 OK\r\n".to_vec();
+        let header = b"X-Test: value\r\n";
+        while response.len() <= MAX_PROXY_RESPONSE_HEADER_BYTES {
+            response.extend_from_slice(header);
+        }
+
+        let err = exchange_response(response).await.unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn formats_ipv6_proxy_authority() {
+        let response = b"HTTP/1.1 200 OK\r\n\r\n";
+        let expected_request = b"CONNECT [2001:db8::1]:443 HTTP/1.1\r\n\
+                                 Host: [2001:db8::1]:443\r\n\r\n";
+        let (client, mut proxy) = tokio::io::duplex(expected_request.len());
+        proxy.write_all(response).await.unwrap();
+
+        let stream = http_connect_exchange(client, "2001:db8::1", 443, &ProxyAuthorization::None)
+            .await
+            .unwrap();
+        let mut request = vec![0; expected_request.len()];
+        proxy.read_exact(&mut request).await.unwrap();
+
+        assert_eq!(request, expected_request);
+        drop(stream);
+    }
+
+    #[tokio::test]
+    async fn rejects_status_code_with_200_prefix() {
+        let err = exchange_response(b"HTTP/1.1 2000 Not Really OK\r\n\r\n".to_vec())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
     }
 }
