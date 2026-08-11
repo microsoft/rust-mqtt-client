@@ -8,20 +8,19 @@ use std::time::Duration;
 
 use async_tungstenite::tungstenite::client::IntoClientRequest as _;
 use bytes::Bytes;
-use ms_mqtt_client::client::{
-    Client, ConnectionTransportType, DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement,
-};
+use ms_mqtt_client::client::{Client, DisconnectedEvent, KeepAliveConfig, ManualAcknowledgement};
 use ms_mqtt_client::packet::{
     PayloadFormatIndicator, PubAckProperties, Publish, PublishProperties, QoS, RetainOptions,
     SubscribeProperties,
 };
 use ms_mqtt_client::topic::{TopicFilter, TopicName};
+use ms_mqtt_client::transport::ConnectionTransportType;
 use test_case::{test_case, test_matrix};
 
 use crate::common::{
     ENV_MQTT_HOST, ENV_MQTT_PORT, ENV_MQTT_TLS_PORT, ENV_MQTT_WS_PORT, ENV_MQTT_WSS_PORT, TCP_PORT,
-    TLS_PORT, TestConnection, WS_PORT, WSS_PORT, connect_with_transport, empty_tls_config,
-    port_from_env, reconnect_with_transport, tls_config,
+    TLS_PORT, TestConnection, WS_PORT, WSS_PORT, connect_with_transport, port_from_env,
+    reconnect_with_transport, tls_config,
 };
 
 #[derive(Clone, Copy)]
@@ -176,7 +175,7 @@ impl ConnectionProfile {
             Self::Tls => ConnectionTransportType::Tls {
                 hostname,
                 port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
-                config: tls_config(),
+                tls_config: tls_config(),
             },
             Self::WebSocket => ConnectionTransportType::Ws {
                 request: format!(
@@ -185,7 +184,7 @@ impl ConnectionProfile {
                 )
                 .into_client_request()
                 .expect("WebSocket URL should be valid"),
-                tls_config: empty_tls_config(),
+                tls_config: None,
             },
             Self::SecureWebSocket => ConnectionTransportType::Ws {
                 request: format!(
@@ -194,7 +193,7 @@ impl ConnectionProfile {
                 )
                 .into_client_request()
                 .expect("secure WebSocket URL should be valid"),
-                tls_config: tls_config(),
+                tls_config: Some(tls_config()),
             },
         }
     }

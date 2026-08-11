@@ -15,11 +15,11 @@ pub(crate) mod server;
 use std::time::Duration;
 
 use ms_mqtt_client::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
-    ConnectionTransportTlsConfig, ConnectionTransportType, DisconnectHandle, DisconnectedEvent,
+    Client, ClientOptions, ConnectHandle, ConnectResult, DisconnectHandle, DisconnectedEvent,
     KeepAliveConfig, Receiver, new_client,
 };
 use ms_mqtt_client::packet::{ConnAck, ConnectProperties, DisconnectProperties, Will};
+use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType, TlsConfig};
 
 pub(crate) const ENV_MQTT_CERT_DIR: &str = "MQTT_CERT_DIR";
 pub(crate) const ENV_MQTT_HOST: &str = "MQTT_HOST";
@@ -69,33 +69,28 @@ fn certificate(name: &str) -> Vec<u8> {
         .unwrap_or_else(|err| panic!("failed to read test certificate {path}: {err}"))
 }
 
-pub(crate) fn tls_config() -> ConnectionTransportTlsConfig {
-    ConnectionTransportTlsConfig::from_pem(None, &certificate("ca.crt"))
-        .expect("test CA certificate should be valid")
+pub(crate) fn tls_config() -> TlsConfig {
+    TlsConfig::from_pem(None, &certificate("ca.crt")).expect("test CA certificate should be valid")
 }
 
-pub(crate) fn empty_tls_config() -> ConnectionTransportTlsConfig {
-    ConnectionTransportTlsConfig::from_pem(None, &[])
-        .expect("an empty trust bundle should be valid")
+pub(crate) fn empty_tls_config() -> TlsConfig {
+    TlsConfig::from_pem(None, &[]).expect("an empty trust bundle should be valid")
 }
 
-pub(crate) fn mutual_tls_config() -> ConnectionTransportTlsConfig {
+pub(crate) fn mutual_tls_config() -> TlsConfig {
     mutual_tls_config_with_identity("client.crt", "client.key")
 }
 
-pub(crate) fn mutual_tls_config_with_untrusted_client() -> ConnectionTransportTlsConfig {
+pub(crate) fn mutual_tls_config_with_untrusted_client() -> TlsConfig {
     mutual_tls_config_with_identity("untrusted-client.crt", "untrusted-client.key")
 }
 
-pub(crate) fn mutual_tls_config_with_server_only_certificate() -> ConnectionTransportTlsConfig {
+pub(crate) fn mutual_tls_config_with_server_only_certificate() -> TlsConfig {
     mutual_tls_config_with_identity("server.crt", "server.key")
 }
 
-fn mutual_tls_config_with_identity(
-    certificate_name: &str,
-    key_name: &str,
-) -> ConnectionTransportTlsConfig {
-    ConnectionTransportTlsConfig::from_pem(
+fn mutual_tls_config_with_identity(certificate_name: &str, key_name: &str) -> TlsConfig {
+    TlsConfig::from_pem(
         Some((&certificate(certificate_name), &certificate(key_name))),
         &certificate("ca.crt"),
     )
@@ -353,6 +348,8 @@ async fn establish_connection(
             ConnectionTransportConfig {
                 transport_type,
                 timeout: Some(RESPONSE_TIMEOUT),
+                proxy: None,
+                tcp_nodelay: false,
             },
             session.clean_start,
             keep_alive,
