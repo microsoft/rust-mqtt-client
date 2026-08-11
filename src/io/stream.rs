@@ -148,12 +148,12 @@ where
 
     // Build the HTTP CONNECT request
     let authority = if target_host.contains(':') {
-         format!("[{target_host}]:{target_port}")
-     } else {
-         format!("{target_host}:{target_port}")
-     };
+        format!("[{target_host}]:{target_port}")
+    } else {
+        format!("{target_host}:{target_port}")
+    };
     let mut request = format!(
-         "CONNECT {authority} HTTP/1.1\r\n\
+        "CONNECT {authority} HTTP/1.1\r\n\
           Host: {authority}\r\n"
     );
 
