@@ -22,3 +22,25 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  # Broker images for the live network suite. Test infrastructure, so the exclusion above
+  # doesn't apply -- nothing here reaches consumers.
+  #
+  # Note that only a mosquitto bump is validated before merge: the PR gate's
+  # `network-mosquitto` job is the only live broker test that runs on pull requests. EMQX
+  # and HiveMQ bumps aren't exercised until the next scheduled `Network` run, so they merge
+  # unvalidated and a regression surfaces after the fact.
+  #
+  # NOT covered, and needing a manual bump: the AIO MQ chart version in
+  # tests/network/brokers/aio-mq/up.sh (a shell variable pulled from an OCI registry, which
+  # Dependabot's helm support doesn't handle), and the pinned k3d and Helm versions in
+  # .github/workflows/network.yaml.
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/tests/network/brokers/*"
+    schedule:
+      interval: "weekly"
+    groups:
+      broker-images:
+        patterns:
+          - "*"

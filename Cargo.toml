@@ -60,6 +60,19 @@ __integration = []
 # Internal feature: exposes internal modules for fuzzing the crate.
 # NOT part of the public, semver-stable API; do not enable as a consumer.
 __fuzzing = []
+# Internal feature: enables the live network test suites (tests/network/), which
+# require a running broker.
+# NOT part of the public, semver-stable API; do not enable as a consumer.
+__network = []
+
+# The live network suite.
+# Declared explicitly because `required-features` only applies to manifest-declared
+# targets -- and because files under `tests/network/` are not auto-discovered (Cargo only
+# picks up `tests/*.rs` and `tests/*/main.rs`), so this entry is what makes the suite exist.
+[[test]]
+name = "network"
+path = "tests/network/suite.rs"
+required-features = ["__network", "websockets"]
 
 [lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }

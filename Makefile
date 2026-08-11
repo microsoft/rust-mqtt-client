@@ -11,21 +11,56 @@ clean:
 .PHONY: test
 test:
 	cargo test --lib
+# `--tests` rather than `--test '*'`: the glob counts as explicit target selection,
+# so Cargo hard-errors on a target whose `required-features` are unmet (the live
+# network suites). Bulk selection skips those instead.
 	set -eu; \
 	for feature_set in '__integration' 'websockets,__integration'; do \
-		cargo test --features "$$feature_set" --test '*'; \
+		cargo test --features "$$feature_set" --tests; \
 	done
+
+
+# Live tests against a real MQTT server. BROKER selects which broker implementation gets
+# provisioned -- the suite itself is server-agnostic. Each broker directory exposes
+# up.sh/down.sh, so a broker that isn't a container (AIO MQ needs a k3d cluster)
+# plugs in the same way.
+# Deliberately not part of `test`: these need a broker running.
+BROKER ?= mosquitto
+NETWORK_BROKER_DIR = tests/network/brokers/$(BROKER)
+
+.PHONY: network-test
+network-test:
+	$(NETWORK_BROKER_DIR)/up.sh
+# Teardown shares one shell with the test run so it happens even on failure.
+	set -u; \
+	MQTT_SERVER=$(BROKER) cargo test --features __network,websockets --test network; \
+	status=$$?; \
+	$(NETWORK_BROKER_DIR)/down.sh; \
+	exit $$status
 
 
 .PHONY: coverage
 coverage:
 	cargo llvm-cov clean --workspace
-	cargo llvm-cov --no-report --lib
-	set -eu; \
-	# Run tests with different feature sets to get coverage for all code paths.
-	for feature_set in '__integration' 'websockets,__integration'; do \
-		cargo llvm-cov --no-report --features "$$feature_set" --test '*'; \
-	done
+	cargo llvm-cov --no-report --features websockets,__integration --tests
+	cargo llvm-cov report --html
+	cargo llvm-cov report --summary-only
+
+
+.PHONY: network-coverage
+network-coverage:
+	cargo llvm-cov clean --workspace
+	$(NETWORK_BROKER_DIR)/up.sh
+	# Run every test with one feature set so LLVM coverage maps stay compatible.
+	set -u; \
+	MQTT_SERVER=$(BROKER) cargo llvm-cov --no-report \
+		--features websockets,__integration,__network \
+		--tests; \
+	test_status=$$?; \
+	$(NETWORK_BROKER_DIR)/down.sh; \
+	down_status=$$?; \
+	if test "$$test_status" -ne 0; then exit "$$test_status"; fi; \
+	exit "$$down_status"
 	cargo llvm-cov report --html
 	cargo llvm-cov report --summary-only
 
@@ -33,8 +68,10 @@ coverage:
 .PHONY: check
 check:
 	cargo fmt --verbose --all --check
+# `__network` is enabled here (and nowhere in `test`) so the live network suites
+# are compiled and linted on every check, without ever being run.
 	set -eu; \
-	for feature_set in '__integration' 'websockets,__integration'; do \
+	for feature_set in '__integration,__network' 'websockets,__integration,__network'; do \
 		cargo clippy \
 			--features "$$feature_set" \
 			--tests \

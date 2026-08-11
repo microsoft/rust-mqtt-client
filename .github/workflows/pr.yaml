@@ -190,6 +190,53 @@ jobs:
       run: make -j test
 
 
+  # The gate's only test against a real MQTT server. Every other test in the gate uses
+  # the in-process `Test` transport, which hands `Packet` values down a channel and
+  # never opens a socket -- so this job is the only thing here that exercises
+  # `src/io/`, the framing, and a real CONNECT/DISCONNECT over TCP. Without it, a
+  # PR could break the ability to talk to any server and the gate wouldn't notice.
+  #
+  # Deliberately mosquitto ONLY. It starts in seconds from a small, pinned,
+  # stable image, so a failure here means the PR broke the client -- the gate's
+  # bar of being actionable by the author. The rest of the server matrix
+  # (EMQX, HiveMQ, AIO MQ) runs on a schedule in `network.yaml`, because
+  # cross-implementation differences and a build-registry dependency can go red
+  # for reasons that have nothing to do with the PR.
+  network-mosquitto:
+    name: Network (mosquitto)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 15
+
+    steps:
+    - uses: 'actions/checkout@v7'
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        cache: false
+        # No `-D warnings` here either (see the `check` job).
+        rustflags: ''
+
+    - name: Cache cargo build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        # The `__network` feature builds a target the other jobs don't, so keep
+        # its target/ separate from theirs.
+        shared-key: network
+
+    - name: Start broker
+      run: tests/network/brokers/mosquitto/up.sh
+
+    - name: Test
+      env:
+        MQTT_SERVER: mosquitto
+      run: cargo test --features __network,websockets --test network
+
+    - name: Stop broker
+      if: always()
+      run: tests/network/brokers/mosquitto/down.sh
+
+
   # Coverage on the pinned toolchain. Separate from `test` because LLVM
   # instrumentation produces a different target/ (cache-incompatible) and
   # slows the build; measuring on one canonical toolchain keeps the trend
@@ -222,7 +269,8 @@ jobs:
         tool: cargo-llvm-cov
 
     - name: Coverage
-      run: make coverage
+      # Network tests are needed to cover I/O stack that is currently bypassed by the integration test injection pattern
+      run: make network-coverage BROKER=mosquitto
 
     - name: Upload coverage report
       uses: actions/upload-artifact@v7
