@@ -40,4 +40,13 @@
             </tls>
         </tls-websocket-listener>
     </listeners>
+    <mqtt>
+        <queued-messages>
+            <max-queue-size>10000</max-queue-size>
+            <strategy>discard</strategy>
+        </queued-messages>
+        <receive-maximum>
+            <server-receive-maximum>65535</server-receive-maximum>
+        </receive-maximum>
+    </mqtt>
 </hivemq>

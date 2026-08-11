@@ -18,8 +18,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-# shellcheck source=../lib.sh
-source ../lib.sh
+# shellcheck source=../../lib.sh
+source ../../lib.sh
 
 # Dedicated name so this never deletes a cluster someone was using.
 CLUSTER_NAME="${MQ_CLUSTER_NAME:-ms-mqtt-network-tests}"

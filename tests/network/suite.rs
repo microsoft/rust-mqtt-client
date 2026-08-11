@@ -5,7 +5,7 @@
 //!
 //! The server is chosen at run time, not at compile time: these tests connect to whatever
 //! `MQTT_HOST`/`MQTT_PORT` point at, so the same suite validates every server fixture. Pick one with
-//! `make network-test BROKER=<name>` (see `tests/network/brokers/`).
+//! `make network-test BROKER=<name>` (see `tests/network/fixtures/brokers/`).
 //!
 //! Enabled by the `__network` and `websockets` features, which leaves `#[ignore]` free to
 //! quarantine a flaky test. Add a new area of coverage as another module here.

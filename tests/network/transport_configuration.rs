@@ -11,15 +11,19 @@ use ms_mqtt_client::client::{
 };
 use ms_mqtt_client::error::ConnectError;
 use ms_mqtt_client::packet::ConnectProperties;
-use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
+use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType, TlsConfig};
 
 use crate::common::fixture::FixtureCapability;
 use crate::common::{
     ENV_MQTT_MTLS_PORT, ENV_MQTT_PORT, ENV_MQTT_TLS_PORT, ENV_MQTT_WS_PORT, ENV_MQTT_WSS_PORT,
-    MTLS_PORT, TCP_PORT, TLS_PORT, WS_PORT, WSS_PORT, connect_with_transport, empty_tls_config,
-    mutual_tls_config, mutual_tls_config_with_server_only_certificate,
-    mutual_tls_config_with_untrusted_client, port_from_env, tls_config,
+    MTLS_PORT, TCP_PORT, TLS_PORT, WS_PORT, WSS_PORT, connect_with_transport, mutual_tls_config,
+    mutual_tls_config_with_server_only_certificate, mutual_tls_config_with_untrusted_client,
+    port_from_env, tls_config,
 };
+
+fn tls_config_without_test_ca() -> TlsConfig {
+    TlsConfig::from_pem(None, &[]).expect("an empty trust bundle should be valid")
+}
 
 async fn connect_and_expect_failure(
     transport_type: ConnectionTransportType,
@@ -58,7 +62,7 @@ async fn connect_and_expect_application_disconnect(
     client_id: &str,
 ) {
     let connection =
-        connect_with_transport(transport_type, client_id, KeepAliveConfig::Infinite).await;
+        connect_with_transport(transport_type, None, client_id, KeepAliveConfig::Infinite).await;
     assert!(matches!(
         connection.disconnect().await,
         DisconnectedEvent::ApplicationDisconnect
@@ -109,6 +113,7 @@ async fn mutual_tls_connect_disconnect() {
             port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
             tls_config: mutual_tls_config(),
         },
+        None,
         "transport_mutual_tls",
         KeepAliveConfig::Infinite,
     )
@@ -127,7 +132,7 @@ async fn tls_rejects_untrusted_server_certificate() {
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
             port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
-            tls_config: empty_tls_config(),
+            tls_config: tls_config_without_test_ca(),
         },
         "transport_tls_untrusted",
     )
