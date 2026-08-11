@@ -1,6 +1,6 @@
 # Microsoft MQTT client
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Azure/rust-mqtt-client/pr.yaml?branch=main&label=build)](https://github.com/Azure/rust-mqtt-client/actions/workflows/pr.yaml)
+[![Build](https://img.shields.io/github/actions/workflow/status/microsoft/rust-mqtt-client/pr.yaml?branch=main&label=build)](https://github.com/microsoft/rust-mqtt-client/actions/workflows/pr.yaml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](Cargo.toml)
 
