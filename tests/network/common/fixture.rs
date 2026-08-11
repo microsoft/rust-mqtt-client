@@ -3,7 +3,7 @@
 
 //! Capabilities provisioned by live test fixtures.
 
-use super::server::{AIO_MQ, EMQX, HIVEMQ_CE, MOSQUITTO, server_name};
+use super::server::{EMQX, HIVEMQ_CE, MOSQUITTO, server_name};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FixtureCapability {

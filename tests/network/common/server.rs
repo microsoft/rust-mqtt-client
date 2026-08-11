@@ -16,7 +16,6 @@ pub(crate) const MOSQUITTO: &str = "mosquitto";
 pub(crate) const EMQX: &str = "emqx";
 pub(crate) const HIVEMQ_CE: &str = "hivemq-ce";
 pub(crate) const AIO_MQ: &str = "aio-mq";
-pub(crate) const KNOWN_SERVERS: &[&str] = &[MOSQUITTO, EMQX, HIVEMQ_CE, AIO_MQ];
 
 /// An MQTT server behavior that some servers don't implement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

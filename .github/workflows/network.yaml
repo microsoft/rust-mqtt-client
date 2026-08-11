@@ -97,20 +97,20 @@ jobs:
       with:
         shared-key: network
 
-    # The broker lifecycle is split into explicit steps rather than using
+    # The fixture lifecycle is split into explicit steps rather than using
     # `make network-test`: teardown then gets its own `if: always()` step, so it
     # still runs if the job is cancelled, and each phase fails distinctly.
-    - name: Start broker
-      run: tests/network/brokers/${{ matrix.broker }}/up.sh
+    - name: Start fixtures
+      run: tests/network/fixtures/up.sh ${{ matrix.broker }}
 
     - name: Test
       env:
         MQTT_SERVER: ${{ matrix.broker }}
       run: cargo test --features __network,websockets --test network
 
-    - name: Stop broker
+    - name: Stop fixtures
       if: always()
-      run: tests/network/brokers/${{ matrix.broker }}/down.sh
+      run: tests/network/fixtures/down.sh ${{ matrix.broker }}
 
   # Scheduled runs have no PR to turn red and no author watching, so surface
   # failures by opening (or updating) a tracking issue. The AIO MQ leg is

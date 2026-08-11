@@ -32,12 +32,12 @@ updates:
   # unvalidated and a regression surfaces after the fact.
   #
   # NOT covered, and needing a manual bump: the AIO MQ chart version in
-  # tests/network/brokers/aio-mq/up.sh (a shell variable pulled from an OCI registry, which
+  # tests/network/fixtures/brokers/aio-mq/up.sh (a shell variable pulled from an OCI registry, which
   # Dependabot's helm support doesn't handle), and the pinned k3d and Helm versions in
   # .github/workflows/network.yaml.
   - package-ecosystem: "docker-compose"
     directories:
-      - "/tests/network/brokers/*"
+      - "/tests/network/fixtures/brokers/*"
     schedule:
       interval: "weekly"
     groups:

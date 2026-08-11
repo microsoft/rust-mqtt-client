@@ -224,17 +224,17 @@ jobs:
         # its target/ separate from theirs.
         shared-key: network
 
-    - name: Start broker
-      run: tests/network/brokers/mosquitto/up.sh
+    - name: Start fixtures
+      run: tests/network/fixtures/up.sh mosquitto
 
     - name: Test
       env:
         MQTT_SERVER: mosquitto
       run: cargo test --features __network,websockets --test network
 
-    - name: Stop broker
+    - name: Stop fixtures
       if: always()
-      run: tests/network/brokers/mosquitto/down.sh
+      run: tests/network/fixtures/down.sh mosquitto
 
 
   # Coverage on the pinned toolchain. Separate from `test` because LLVM

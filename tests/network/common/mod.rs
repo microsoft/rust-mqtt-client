@@ -7,8 +7,6 @@
 //! dev-dependencies. Cargo does not allow optional dev-dependencies, so the first server
 //! that needs one of its own is the signal to move this suite into a detached crate.
 
-#![allow(unused)] // Not every test uses every helper.
-
 pub(crate) mod fixture;
 pub(crate) mod server;
 
@@ -19,18 +17,25 @@ use ms_mqtt_client::client::{
     KeepAliveConfig, Receiver, new_client,
 };
 use ms_mqtt_client::packet::{ConnAck, ConnectProperties, DisconnectProperties, Will};
-use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType, TlsConfig};
+use ms_mqtt_client::transport::{
+    ConnectionTransportConfig, ConnectionTransportType, Proxy, TlsConfig,
+};
 
 pub(crate) const ENV_MQTT_CERT_DIR: &str = "MQTT_CERT_DIR";
 pub(crate) const ENV_MQTT_HOST: &str = "MQTT_HOST";
+pub(crate) const ENV_MQTT_HTTP_PROXY_PORT: &str = "MQTT_HTTP_PROXY_PORT";
+pub(crate) const ENV_MQTT_HTTPS_PROXY_PORT: &str = "MQTT_HTTPS_PROXY_PORT";
 pub(crate) const ENV_MQTT_MTLS_PORT: &str = "MQTT_MTLS_PORT";
 pub(crate) const ENV_MQTT_PORT: &str = "MQTT_PORT";
+pub(crate) const ENV_MQTT_PROXY_HOST: &str = "MQTT_PROXY_HOST";
 pub(crate) const ENV_MQTT_SERVER: &str = "MQTT_SERVER";
 pub(crate) const ENV_MQTT_TLS_PORT: &str = "MQTT_TLS_PORT";
 pub(crate) const ENV_MQTT_WS_PORT: &str = "MQTT_WS_PORT";
 pub(crate) const ENV_MQTT_WSS_PORT: &str = "MQTT_WSS_PORT";
 
 pub(crate) const TCP_PORT: u16 = 1883;
+pub(crate) const HTTP_PROXY_PORT: u16 = 3128;
+pub(crate) const HTTPS_PROXY_PORT: u16 = 3129;
 pub(crate) const TLS_PORT: u16 = 8883;
 pub(crate) const MTLS_PORT: u16 = 8884;
 pub(crate) const WS_PORT: u16 = 8083;
@@ -63,7 +68,7 @@ pub(crate) fn port_from_env(name: &str, default: u16) -> u16 {
 
 fn certificate(name: &str) -> Vec<u8> {
     let directory = std::env::var(ENV_MQTT_CERT_DIR)
-        .unwrap_or_else(|_| "tests/network/brokers/certs".to_string());
+        .unwrap_or_else(|_| "tests/network/fixtures/brokers/certs".to_string());
     let path = format!("{directory}/{name}");
     std::fs::read(&path)
         .unwrap_or_else(|err| panic!("failed to read test certificate {path}: {err}"))
@@ -71,10 +76,6 @@ fn certificate(name: &str) -> Vec<u8> {
 
 pub(crate) fn tls_config() -> TlsConfig {
     TlsConfig::from_pem(None, &certificate("ca.crt")).expect("test CA certificate should be valid")
-}
-
-pub(crate) fn empty_tls_config() -> TlsConfig {
-    TlsConfig::from_pem(None, &[]).expect("an empty trust bundle should be valid")
 }
 
 pub(crate) fn mutual_tls_config() -> TlsConfig {
@@ -105,13 +106,13 @@ pub(crate) struct Endpoint {
 
 impl Endpoint {
     /// Reads `MQTT_HOST`/`MQTT_PORT`, which select the server endpoint under test.
-    pub(crate) fn from_env(default_port: u16) -> Self {
+    pub(crate) fn from_env() -> Self {
         let hostname = std::env::var(ENV_MQTT_HOST).unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = match std::env::var(ENV_MQTT_PORT) {
             Ok(port) => port
                 .parse()
                 .unwrap_or_else(|_| panic!("{ENV_MQTT_PORT} must be a valid port number")),
-            Err(_) => default_port,
+            Err(_) => TCP_PORT,
         };
         Self { hostname, port }
     }
@@ -138,6 +139,13 @@ impl Default for SessionOptions {
             properties: ConnectProperties::default(),
         }
     }
+}
+
+struct TestConnectionOptions {
+    keep_alive: KeepAliveConfig,
+    will: Option<Will>,
+    session: SessionOptions,
+    proxy: Option<Proxy>,
 }
 
 struct AbortOnDropTask<T>(Option<tokio::task::JoinHandle<T>>);
@@ -209,6 +217,7 @@ pub(crate) async fn connect_tcp(endpoint: &Endpoint, client_id: &str) -> TestCon
             hostname: endpoint.hostname.clone(),
             port: endpoint.port,
         },
+        None,
         client_id,
         KeepAliveConfig::Infinite,
     )
@@ -229,6 +238,7 @@ pub(crate) async fn connect_tcp_with_session(
         KeepAliveConfig::Infinite,
         None,
         session,
+        None,
     )
     .await
 }
@@ -247,6 +257,7 @@ pub(crate) async fn connect_tcp_with_will(
         KeepAliveConfig::Infinite,
         Some(will),
         SessionOptions::default(),
+        None,
     )
     .await
 }
@@ -254,6 +265,7 @@ pub(crate) async fn connect_tcp_with_will(
 /// Connects with the selected transport and starts a clean MQTT session.
 pub(crate) async fn connect_with_transport(
     transport_type: ConnectionTransportType,
+    proxy: Option<Proxy>,
     client_id: &str,
     keep_alive: KeepAliveConfig,
 ) -> TestConnection {
@@ -263,6 +275,7 @@ pub(crate) async fn connect_with_transport(
         keep_alive,
         None,
         SessionOptions::default(),
+        proxy,
     )
     .await
 }
@@ -273,6 +286,7 @@ async fn connect_new_client(
     keep_alive: KeepAliveConfig,
     will: Option<Will>,
     session: SessionOptions,
+    proxy: Option<Proxy>,
 ) -> TestConnection {
     let options = ClientOptions {
         client_id: Some(client_id.to_string()),
@@ -285,19 +299,22 @@ async fn connect_new_client(
         connect_handle,
         receiver,
         transport_type,
-        keep_alive,
-        will,
-        session,
+        TestConnectionOptions {
+            keep_alive,
+            will,
+            session,
+            proxy,
+        },
     )
     .await
 }
 
-/// Reconnects an existing client with the selected transport and a clean MQTT session.
 pub(crate) async fn reconnect_with_transport(
     client: Client,
     connect_handle: ConnectHandle,
     receiver: Receiver,
     transport_type: ConnectionTransportType,
+    proxy: Option<Proxy>,
     keep_alive: KeepAliveConfig,
 ) -> TestConnection {
     establish_connection(
@@ -305,9 +322,12 @@ pub(crate) async fn reconnect_with_transport(
         connect_handle,
         receiver,
         transport_type,
-        keep_alive,
-        None,
-        SessionOptions::default(),
+        TestConnectionOptions {
+            keep_alive,
+            will: None,
+            session: SessionOptions::default(),
+            proxy,
+        },
     )
     .await
 }
@@ -327,9 +347,12 @@ pub(crate) async fn reconnect_tcp_with_session(
             hostname: endpoint.hostname.clone(),
             port: endpoint.port,
         },
-        KeepAliveConfig::Infinite,
-        None,
-        session,
+        TestConnectionOptions {
+            keep_alive: KeepAliveConfig::Infinite,
+            will: None,
+            session,
+            proxy: None,
+        },
     )
     .await
 }
@@ -339,16 +362,20 @@ async fn establish_connection(
     connect_handle: ConnectHandle,
     receiver: Receiver,
     transport_type: ConnectionTransportType,
-    keep_alive: KeepAliveConfig,
-    will: Option<Will>,
-    session: SessionOptions,
+    options: TestConnectionOptions,
 ) -> TestConnection {
+    let TestConnectionOptions {
+        keep_alive,
+        will,
+        session,
+        proxy,
+    } = options;
     match connect_handle
         .connect(
             ConnectionTransportConfig {
                 transport_type,
                 timeout: Some(RESPONSE_TIMEOUT),
-                proxy: None,
+                proxy,
                 tcp_nodelay: false,
             },
             session.clean_start,
