@@ -6,8 +6,6 @@
 use crate::common::server::{ServerFeature, server_name, supports};
 use crate::common::{ENV_MQTT_SERVER, Endpoint, connect_tcp};
 
-const DEFAULT_PORT: u16 = 1883;
-
 /// Verifies that the fixture's server-capability inventory matches the capabilities advertised
 /// by the live server in CONNACK.
 #[tokio::test]
@@ -17,7 +15,7 @@ async fn inventory_matches_server() {
             println!("SKIP: {ENV_MQTT_SERVER} is unset, so there is no inventory to verify");
             return;
         };
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let live = connect_tcp(&endpoint, "inventory_matches_server").await;
 
         for &feature in ServerFeature::ALL {

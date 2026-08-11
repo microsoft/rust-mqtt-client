@@ -26,16 +26,15 @@ test:
 # plugs in the same way.
 # Deliberately not part of `test`: these need a broker running.
 BROKER ?= mosquitto
-NETWORK_BROKER_DIR = tests/network/brokers/$(BROKER)
 
 .PHONY: network-test
 network-test:
-	$(NETWORK_BROKER_DIR)/up.sh
+	tests/network/fixtures/up.sh $(BROKER)
 # Teardown shares one shell with the test run so it happens even on failure.
 	set -u; \
 	MQTT_SERVER=$(BROKER) cargo test --features __network,websockets --test network; \
 	status=$$?; \
-	$(NETWORK_BROKER_DIR)/down.sh; \
+	tests/network/fixtures/down.sh $(BROKER); \
 	exit $$status
 
 
@@ -50,14 +49,14 @@ coverage:
 .PHONY: network-coverage
 network-coverage:
 	cargo llvm-cov clean --workspace
-	$(NETWORK_BROKER_DIR)/up.sh
+	tests/network/fixtures/up.sh $(BROKER)
 	# Run every test with one feature set so LLVM coverage maps stay compatible.
 	set -u; \
 	MQTT_SERVER=$(BROKER) cargo llvm-cov --no-report \
 		--features websockets,__integration,__network \
 		--tests; \
 	test_status=$$?; \
-	$(NETWORK_BROKER_DIR)/down.sh; \
+	tests/network/fixtures/down.sh $(BROKER); \
 	down_status=$$?; \
 	if test "$$test_status" -ne 0; then exit "$$test_status"; fi; \
 	exit "$$down_status"

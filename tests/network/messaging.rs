@@ -18,10 +18,8 @@ use ms_mqtt_client::topic::{TopicFilter, TopicName};
 use crate::common::server::ServerFeature;
 use crate::common::{Endpoint, TestConnection, connect_tcp, connect_tcp_with_will};
 
-const DEFAULT_PORT: u16 = 1883;
-
 async fn connect_pair(test_name: &str) -> (TestConnection, TestConnection) {
-    let endpoint = Endpoint::from_env(DEFAULT_PORT);
+    let endpoint = Endpoint::from_env();
     let subscriber = connect_tcp(&endpoint, &format!("{test_name}_subscriber")).await;
     let publisher = connect_tcp(&endpoint, &format!("{test_name}_publisher")).await;
     (subscriber, publisher)
@@ -415,7 +413,7 @@ async fn no_local_suppresses_self_publish() {
 async fn subscribe_with_subscription_identifier() {
     crate::require_server_feature!(ServerFeature::SubscriptionIdentifiers);
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let mut connection =
             connect_tcp(&endpoint, "subscribe_with_subscription_identifier").await;
         let topic = "ms-mqtt-client/network/subid";
@@ -688,7 +686,7 @@ async fn wildcard_subscriptions_do_not_route_non_matching_topics() {
 #[tokio::test]
 async fn will_is_published_only_after_ungraceful_disconnect() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let mut subscriber = connect_tcp(&endpoint, "will_messages_subscriber").await;
         let topic = "ms-mqtt-client/network/will";
         subscribe_and_expect_success(&subscriber, topic, QoS::AtLeastOnce).await;

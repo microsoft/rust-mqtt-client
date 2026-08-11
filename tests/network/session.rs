@@ -20,7 +20,6 @@ use crate::common::{
     reconnect_tcp_with_session,
 };
 
-const DEFAULT_PORT: u16 = 1883;
 const PERSISTENT_SESSION_EXPIRY: u32 = 60;
 
 struct DisconnectedClient {
@@ -140,7 +139,7 @@ async fn receive_qos1_and_ack(connection: &mut TestConnection) -> Publish {
 #[tokio::test]
 async fn persistent_session_is_resumed() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let connection = connect_tcp_with_session(
             &endpoint,
             "persistent_session_is_resumed",
@@ -168,7 +167,7 @@ async fn persistent_session_is_resumed() {
 #[tokio::test]
 async fn persistent_subscription_receives_queued_qos1() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let subscriber = connect_tcp_with_session(
             &endpoint,
             "persistent_subscription_receives_queued_qos1_subscriber",
@@ -219,7 +218,7 @@ async fn persistent_subscription_receives_queued_qos1() {
 #[tokio::test]
 async fn clean_start_discards_existing_session() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let subscriber = connect_tcp_with_session(
             &endpoint,
             "clean_start_discards_existing_session_subscriber",
@@ -270,7 +269,7 @@ async fn clean_start_discards_existing_session() {
 #[tokio::test]
 async fn zero_expiry_does_not_preserve_session() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let connection = connect_tcp_with_session(
             &endpoint,
             "zero_expiry_does_not_preserve_session",
@@ -290,7 +289,7 @@ async fn zero_expiry_does_not_preserve_session() {
 #[tokio::test]
 async fn disconnect_can_delete_persistent_session() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let connection = connect_tcp_with_session(
             &endpoint,
             "disconnect_can_delete_persistent_session",
@@ -323,7 +322,7 @@ async fn disconnect_can_delete_persistent_session() {
 #[tokio::test]
 async fn session_expires_after_interval() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let connection = connect_tcp_with_session(
             &endpoint,
             "session_expires_after_interval",
@@ -351,7 +350,7 @@ async fn session_expires_after_interval() {
 #[tokio::test]
 async fn queued_qos1_messages_preserve_order() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let subscriber = connect_tcp_with_session(
             &endpoint,
             "queued_qos1_messages_preserve_order_subscriber",
@@ -403,7 +402,7 @@ async fn queued_qos1_messages_preserve_order() {
 #[tokio::test]
 async fn expired_queued_message_is_not_delivered() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let subscriber = connect_tcp_with_session(
             &endpoint,
             "expired_queued_message_is_not_delivered_subscriber",
@@ -458,7 +457,7 @@ async fn expired_queued_message_is_not_delivered() {
 #[tokio::test]
 async fn unsubscribe_is_preserved_across_resume() {
     crate::test_timeout! {
-        let endpoint = Endpoint::from_env(DEFAULT_PORT);
+        let endpoint = Endpoint::from_env();
         let subscriber = connect_tcp_with_session(
             &endpoint,
             "unsubscribe_is_preserved_across_resume_subscriber",

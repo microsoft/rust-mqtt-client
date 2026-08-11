@@ -6,11 +6,12 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use ms_mqtt_client::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResult, ConnectionTransportConfig,
-    ConnectionTransportType, KeepAliveConfig, ManualAcknowledgement, Receiver, new_client,
+    Client, ClientOptions, ConnectHandle, ConnectResult, KeepAliveConfig, ManualAcknowledgement,
+    Receiver, new_client,
 };
 use ms_mqtt_client::packet::{ConnectProperties, Publish, QoS, RetainOptions, SubscribeProperties};
 use ms_mqtt_client::topic::TopicFilter;
+use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 
 const CLIENT_ID: &str = "my_client";
 const HOSTNAME: &str = "localhost";
@@ -85,6 +86,8 @@ async fn mqtt_run(
                         port: PORT,
                     },
                     timeout: None,
+                    proxy: None,
+                    tcp_nodelay: false,
                 },
                 false,
                 KeepAliveConfig::Infinite,

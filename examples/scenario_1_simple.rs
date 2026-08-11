@@ -2,14 +2,15 @@
 // Licensed under the MIT License.
 
 use ms_mqtt_client::client::{
-    Client, ClientOptions, ConnectResult, Connection, ConnectionTransportConfig,
-    ConnectionTransportType, KeepAliveConfig, ManualAcknowledgement, Receiver, new_client,
+    Client, ClientOptions, ConnectResult, Connection, KeepAliveConfig, ManualAcknowledgement,
+    Receiver, new_client,
 };
 use ms_mqtt_client::packet::{
     ConnectProperties, PubAckProperties, PubCompProperties, PubRecProperties, PublishProperties,
     QoS, RetainOptions, SubscribeProperties,
 };
 use ms_mqtt_client::topic::{TopicFilter, TopicName};
+use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 
 const CLIENT_ID: &str = "my_client";
 const HOSTNAME: &str = "localhost";
@@ -32,6 +33,8 @@ async fn main() {
                 port: PORT,
             },
             timeout: None,
+            proxy: None,
+            tcp_nodelay: false,
         },
         false,
         KeepAliveConfig::Infinite,

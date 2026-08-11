@@ -5,8 +5,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-# shellcheck source=../lib.sh
-source ../lib.sh
+# shellcheck source=../compose.sh
+source ../compose.sh
 
 ../generate-certs.sh
 compose_up

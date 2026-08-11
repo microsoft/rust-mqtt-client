@@ -7,19 +7,23 @@ use std::time::Duration;
 
 use async_tungstenite::tungstenite::client::IntoClientRequest as _;
 use ms_mqtt_client::client::{
-    ClientOptions, ConnectResult, ConnectionTransportConfig, ConnectionTransportType,
-    DisconnectedEvent, KeepAliveConfig, new_client,
+    ClientOptions, ConnectResult, DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use ms_mqtt_client::error::ConnectError;
 use ms_mqtt_client::packet::ConnectProperties;
+use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType, TlsConfig};
 
 use crate::common::fixture::FixtureCapability;
 use crate::common::{
     ENV_MQTT_MTLS_PORT, ENV_MQTT_PORT, ENV_MQTT_TLS_PORT, ENV_MQTT_WS_PORT, ENV_MQTT_WSS_PORT,
-    MTLS_PORT, TCP_PORT, TLS_PORT, WS_PORT, WSS_PORT, connect_with_transport, empty_tls_config,
-    mutual_tls_config, mutual_tls_config_with_server_only_certificate,
-    mutual_tls_config_with_untrusted_client, port_from_env, tls_config,
+    MTLS_PORT, TCP_PORT, TLS_PORT, WS_PORT, WSS_PORT, connect_with_transport, mutual_tls_config,
+    mutual_tls_config_with_server_only_certificate, mutual_tls_config_with_untrusted_client,
+    port_from_env, tls_config,
 };
+
+fn tls_config_without_test_ca() -> TlsConfig {
+    TlsConfig::from_pem(None, &[]).expect("an empty trust bundle should be valid")
+}
 
 async fn connect_and_expect_failure(
     transport_type: ConnectionTransportType,
@@ -35,6 +39,8 @@ async fn connect_and_expect_failure(
             ConnectionTransportConfig {
                 transport_type,
                 timeout: Some(Duration::from_secs(2)),
+                proxy: None,
+                tcp_nodelay: false,
             },
             true,
             KeepAliveConfig::Infinite,
@@ -56,7 +62,7 @@ async fn connect_and_expect_application_disconnect(
     client_id: &str,
 ) {
     let connection =
-        connect_with_transport(transport_type, client_id, KeepAliveConfig::Infinite).await;
+        connect_with_transport(transport_type, None, client_id, KeepAliveConfig::Infinite).await;
     assert!(matches!(
         connection.disconnect().await,
         DisconnectedEvent::ApplicationDisconnect
@@ -70,7 +76,7 @@ async fn tls_accepts_trusted_server_certificate() {
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
             port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
-            config: tls_config(),
+            tls_config: tls_config(),
         },
         "transport_tls_trusted",
     )
@@ -89,7 +95,7 @@ async fn secure_websocket_accepts_trusted_server_certificate() {
             )
             .into_client_request()
             .expect("secure WebSocket URL should be valid"),
-            tls_config: tls_config(),
+            tls_config: Some(tls_config()),
         },
         "transport_wss_trusted",
     )
@@ -105,8 +111,9 @@ async fn mutual_tls_connect_disconnect() {
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
             port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
-            config: mutual_tls_config(),
+            tls_config: mutual_tls_config(),
         },
+        None,
         "transport_mutual_tls",
         KeepAliveConfig::Infinite,
     )
@@ -125,7 +132,7 @@ async fn tls_rejects_untrusted_server_certificate() {
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
             port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
-            config: empty_tls_config(),
+            tls_config: tls_config_without_test_ca(),
         },
         "transport_tls_untrusted",
     )
@@ -144,7 +151,7 @@ async fn tls_rejects_hostname_mismatch() {
         ConnectionTransportType::Tls {
             hostname: "127.0.0.1".to_string(),
             port: port_from_env(ENV_MQTT_TLS_PORT, TLS_PORT),
-            config: tls_config(),
+            tls_config: tls_config(),
         },
         "transport_tls_hostname_mismatch",
     )
@@ -163,7 +170,7 @@ async fn mutual_tls_requires_client_certificate() {
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
             port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
-            config: tls_config(),
+            tls_config: tls_config(),
         },
         "transport_mutual_tls_missing_identity",
     )
@@ -182,7 +189,7 @@ async fn mutual_tls_rejects_untrusted_client_certificate() {
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
             port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
-            config: mutual_tls_config_with_untrusted_client(),
+            tls_config: mutual_tls_config_with_untrusted_client(),
         },
         "transport_mutual_tls_untrusted_client",
     )
@@ -202,7 +209,7 @@ async fn mutual_tls_rejects_certificate_without_client_authentication_eku() {
         ConnectionTransportType::Tls {
             hostname: "localhost".to_string(),
             port: port_from_env(ENV_MQTT_MTLS_PORT, MTLS_PORT),
-            config: mutual_tls_config_with_server_only_certificate(),
+            tls_config: mutual_tls_config_with_server_only_certificate(),
         },
         "transport_mutual_tls_wrong_eku",
     )
@@ -225,7 +232,7 @@ async fn websocket_rejects_wrong_path() {
             )
             .into_client_request()
             .expect("WebSocket URL should be valid"),
-            tls_config: empty_tls_config(),
+            tls_config: None,
         },
         "transport_websocket_wrong_path",
     )
@@ -248,7 +255,7 @@ async fn websocket_rejects_plain_mqtt_endpoint() {
             )
             .into_client_request()
             .expect("WebSocket URL should be valid"),
-            tls_config: empty_tls_config(),
+            tls_config: None,
         },
         "transport_websocket_wrong_endpoint",
     )
