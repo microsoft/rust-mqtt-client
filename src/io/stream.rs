@@ -192,8 +192,13 @@ where
     // Validate the response status
     let mut status_parts = status_line.split_whitespace();
     let version = status_parts.next();
-    let status = status_parts.next();
-    if !matches!(version, Some("HTTP/1.1" | "HTTP/1.0")) || status != Some("200") {
+    let status = status_parts
+        .next()
+        .filter(|status| status.len() == 3)
+        .and_then(|status| status.parse::<u16>().ok());
+    if !matches!(version, Some("HTTP/1.1" | "HTTP/1.0"))
+        || !status.is_some_and(|status| (200..=299).contains(&status))
+    {
         return Err(io::Error::other(format!(
             "proxy CONNECT failed: {}",
             status_line.trim()
@@ -356,7 +361,7 @@ mod tests {
             http_connect_exchange(client, "example.com", 443, &ProxyAuthorization::None),
         )
         .await
-        .expect("proxy exchange should fail before the peer closes");
+        .expect("proxy exchange should finish before the peer closes");
         drop(proxy);
         result
     }
@@ -403,11 +408,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_status_code_with_200_prefix() {
-        let err = exchange_response(b"HTTP/1.1 2000 Not Really OK\r\n\r\n".to_vec())
-            .await
-            .unwrap_err();
+    async fn rejects_non_2xx_or_malformed_status_codes() {
+        for status in ["199", "300", "2000"] {
+            let response = format!("HTTP/1.1 {status} Not Successful\r\n\r\n").into_bytes();
+            let err = exchange_response(response).await.unwrap_err();
 
-        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+            assert_eq!(err.kind(), std::io::ErrorKind::Other);
+        }
+    }
+
+    #[tokio::test]
+    async fn accepts_any_2xx_status_code() {
+        for status in [201, 250, 299] {
+            let response = format!("HTTP/1.1 {status} Success\r\n\r\n").into_bytes();
+
+            exchange_response(response).await.unwrap();
+        }
     }
 }
