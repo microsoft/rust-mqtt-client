@@ -26,11 +26,11 @@ impl PubAckToken {
     /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
     ///
     /// Can only be successfully used during the same connection epoch on which it was received.
-    pub fn accept(
+    pub async fn accept(
         self,
         properties: PubAckProperties,
-    ) -> impl Future<Output = Result<PubAckCompletionToken, DetachedError>> {
-        self.0.accept(properties.into())
+    ) -> Result<PubAckCompletionToken, DetachedError> {
+        self.0.accept(properties.into()).await
     }
 
     /// Reject the received PUBLISH by issuing a PUBACK with an error reason code.
@@ -39,12 +39,12 @@ impl PubAckToken {
     ///
     /// Returns once the PUBACK has been accepted into the MQTT session.
     /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
-    pub fn reject(
+    pub async fn reject(
         self,
         reason: PubRejectReason,
         properties: PubAckProperties,
-    ) -> impl Future<Output = Result<PubAckCompletionToken, DetachedError>> {
-        self.0.reject(reason.into(), properties.into())
+    ) -> Result<PubAckCompletionToken, DetachedError> {
+        self.0.reject(reason.into(), properties.into()).await
     }
 }
 
@@ -78,12 +78,12 @@ impl PubRecToken {
     /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
     ///
     /// Can only be successfully used during the same session epoch on which it was received.
-    pub fn reject(
+    pub async fn reject(
         self,
         reason: PubRejectReason,
         properties: PubRecProperties,
-    ) -> impl Future<Output = Result<PubRecRejectCompletionToken, DetachedError>> {
-        self.0.reject(reason.into(), properties.into())
+    ) -> Result<PubRecRejectCompletionToken, DetachedError> {
+        self.0.reject(reason.into(), properties.into()).await
     }
 }
 
@@ -124,11 +124,11 @@ impl PubCompToken {
     /// The returned `CompletionToken` resolves once the PUBCOMP is sent (*after* any ordering necessary).
     ///
     /// Can only be successfully used during the same session epoch on which it was received.
-    pub fn confirm(
+    pub async fn confirm(
         self,
         properties: PubCompProperties,
-    ) -> impl Future<Output = Result<PubCompConfirmCompletionToken, DetachedError>> {
-        self.0.confirm(properties.into())
+    ) -> Result<PubCompConfirmCompletionToken, DetachedError> {
+        self.0.confirm(properties.into()).await
     }
 }
 
@@ -524,6 +524,30 @@ mod test {
         // There are no additional items in the channel (i.e. was only accepted once)
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         assert_eq!(rx.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn public_puback_accept_future_drop_before_poll() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let pkid = PacketIdentifier::new(1).unwrap();
+        let epoch = 3;
+        let token = super::PubAckToken(PubAckToken::new(pkid, epoch, tx));
+        let properties = crate::packet::PubAckProperties {
+            reason_string: Some("not submitted".into()),
+            user_properties: Vec::new(),
+        };
+
+        let accept = token.accept(properties);
+        drop(accept);
+
+        if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
+            assert_eq!(req_epoch, epoch);
+            assert_eq!(puback.packet_identifier, pkid);
+            assert_eq!(puback.reason_code, PubAckReasonCode::Success);
+            assert_eq!(puback.other_properties, Default::default());
+        } else {
+            panic!("Did not receive automatic PubAck acknowledgement request");
+        }
     }
 
     #[tokio::test]
