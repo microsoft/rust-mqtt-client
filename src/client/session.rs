@@ -316,7 +316,7 @@ where
     /// Returns the next outgoing MQTT packet request to be sent over the network
     async fn next_outgoing_request(&mut self) -> OutgoingPacketRequest<O::Shared> {
         // NOTE: A loop is used here because not all outgoing requests result in a packet being sent
-        // e.g. acknowledgement requests need to be ordered
+        // e.g. acknowledgement requests with ordering requirements may not be ready
         loop {
             // First check the ordering for a pending acknowledgement that is now ready
             if let Some((_, PendingAcknowledgement::Ready(ack_req))) =
@@ -348,9 +348,8 @@ where
                 )
                 .await;
 
-                // If it is acknowledgement, do not return it - instead, mark it as ready in the in_application tracker.
-                // This ensures ordering of acknowledgements.
-                // Do not return from the loop, as we need to continue it to determine the true next request.
+                // Route acknowledgements with ordering requirements through the in_application
+                // tracker. PUBCOMP has no ordering requirement and can be returned immediately.
                 if let OutgoingPacketRequest::AcknowledgementRequest(ack_req) = request {
                     let pkid = match &ack_req {
                         AcknowledgementRequest::PubAck(_, puback, _) => puback.packet_identifier,
@@ -359,7 +358,9 @@ where
                             pubrec.packet_identifier
                         }
                         AcknowledgementRequest::PubRel(_, pubrel) => pubrel.packet_identifier,
-                        AcknowledgementRequest::PubComp(_, pubcomp) => pubcomp.packet_identifier,
+                        AcknowledgementRequest::PubComp(_, _) => {
+                            break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
+                        }
                     };
                     let pending = self
                         .in_application
@@ -962,5 +963,59 @@ impl<T> Stream for ReceiverStream<T> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         self.0.poll_recv(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::BytesMut;
+    use tokio::sync::mpsc::{channel, unbounded_channel};
+
+    use super::{OutgoingPacketRequest, Session};
+    use crate::client::channel_data::AcknowledgementRequest;
+    use crate::client::token::completion::buffered::completion_pair;
+    use crate::mqtt_proto::{PacketIdentifier, PubComp, PubCompReasonCode};
+
+    #[tokio::test]
+    async fn pubcomp_bypasses_publish_acknowledgement_ordering() {
+        let (_sub_tx, sub_rx) = channel(1);
+        let (_publish_qos0_tx, publish_qos0_rx) = channel(1);
+        let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
+        let (ack_tx, ack_rx) = channel(1);
+        let (auth_tx, auth_rx) = channel(1);
+        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let mut session = Session::new(
+            sub_rx,
+            publish_qos0_rx,
+            publish_qos12_rx,
+            ack_rx,
+            auth_rx,
+            incoming_publish_tx,
+            ack_tx.clone(),
+            auth_tx,
+            PacketIdentifier::new(u16::MAX).unwrap(),
+            BytesMut::new(),
+        );
+        let pubcomp = PubComp {
+            packet_identifier: PacketIdentifier::new(1).unwrap(),
+            reason_code: PubCompReasonCode::Success,
+            other_properties: Default::default(),
+        };
+        let (notifier, _completion_token) = completion_pair();
+
+        ack_tx
+            .send(AcknowledgementRequest::PubComp(notifier, pubcomp.clone()))
+            .await
+            .unwrap();
+
+        let OutgoingPacketRequest::AcknowledgementRequest(AcknowledgementRequest::PubComp(
+            _,
+            outgoing_pubcomp,
+        )) = session.next_outgoing_request().await
+        else {
+            panic!("expected PUBCOMP acknowledgement request");
+        };
+        assert_eq!(outgoing_pubcomp, pubcomp);
+        assert!(session.in_application.publishes.is_empty());
     }
 }
