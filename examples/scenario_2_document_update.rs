@@ -3,6 +3,7 @@
 
 use std::{error::Error, pin::pin, str, time::Duration};
 
+use futures_util::FutureExt as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use ms_mqtt_client::client::{
@@ -32,60 +33,17 @@ async fn main() -> ExampleResult {
     };
     let (client, connect_handle, receiver) = new_client(options);
 
-    let (get_tx, get_rx) = unbounded_channel();
-    let (update_tx, update_rx) = unbounded_channel();
-
-    // The reconnect supervisor owns intentional shutdown. Poll it first so the receiver closure
-    // caused by that shutdown is not reported as an unexpected failure.
-    tokio::select! {
-        biased;
-        result = run_document_client(connect_handle, client, get_rx, update_rx) => {
-            result
-        }
-        result = mqtt_receive(receiver, get_tx, update_tx) => {
-            result?;
-            Err("Receiver closed unexpectedly".into())
-        }
-    }
-}
-
-async fn mqtt_receive(
-    mut receiver: Receiver,
-    get_tx: UnboundedSender<(Publish, ManualAcknowledgement)>,
-    update_tx: UnboundedSender<(Publish, ManualAcknowledgement)>,
-) -> ExampleResult {
-    let get_filter = TopicFilter::new(GET_FILTER)?;
-    let update_filter = TopicFilter::new(UPDATE_FILTER)?;
-    while let Some((publish, manual_ack)) = receiver.recv().await {
-        // NOTE: Explicit acknowledgement is not required. Drop `manual_ack` or leave it unbound by
-        // replacing it with `_` in the loop pattern. When acknowledgement is required,
-        // auto-acknowledgement is performed with default properties.
-
-        // Keep this dispatcher fast; document processing and acknowledgement happen downstream.
-
-        if publish.topic_name.matches_topic_filter(&get_filter) {
-            get_tx.send((publish, manual_ack))?;
-        } else if publish.topic_name.matches_topic_filter(&update_filter) {
-            update_tx.send((publish, manual_ack))?;
-        } else {
-            println!(
-                "Received publish on unrecognized topic: {:?}",
-                publish.topic_name
-            );
-            // Dropping `manual_ack` attempts auto-acknowledgement with default properties.
-        }
-    }
-
-    Ok(())
+    Box::pin(run_document_client(connect_handle, client, receiver)).await
 }
 
 async fn run_document_client(
     mut connect_handle: ConnectHandle,
     client: Client,
-    mut get_rx: UnboundedReceiver<(Publish, ManualAcknowledgement)>,
-    mut update_rx: UnboundedReceiver<(Publish, ManualAcknowledgement)>,
+    mut receiver: Receiver,
 ) -> ExampleResult {
     // Own the reconnect policy and start one fresh document workflow per successful connection.
+    let (get_tx, mut get_rx) = unbounded_channel();
+    let (update_tx, mut update_rx) = unbounded_channel();
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
 
@@ -127,11 +85,10 @@ async fn run_document_client(
                 let mut connection_driver = pin!(connection.run_until_disconnect());
                 connect_handle = tokio::select! {
                     (connect_handle, event) = &mut connection_driver => {
-                        // `select!` has canceled `maintain_document`, dropping its document state.
-                        // Discard queued messages from this connection so they cannot be applied
-                        // after reconnect.
-                        while get_rx.try_recv().is_ok() {}
-                        while update_rx.try_recv().is_ok() {}
+                        // `select!` has canceled both the document workflow and dispatcher. With
+                        // the connection driver stopped, no more old-connection publishes can
+                        // enter `receiver`, so drain it before rebuilding state after reconnect.
+                        discard_queued_messages(&mut receiver, &mut get_rx, &mut update_rx);
 
                         println!(
                             "Disconnected from MQTT server: {event:?}; reconnecting in 5 seconds..."
@@ -141,6 +98,10 @@ async fn run_document_client(
                     result = maintain_document(client.clone(), &mut get_rx, &mut update_rx) => {
                         result?;
                         return Err("Document maintainer exited unexpectedly".into());
+                    }
+                    result = mqtt_receive(&mut receiver, &get_tx, &update_tx) => {
+                        result?;
+                        return Err("Receiver closed unexpectedly".into());
                     }
                     result = &mut shutdown => {
                         result?;
@@ -171,6 +132,58 @@ async fn run_document_client(
     }
 }
 
+async fn mqtt_receive(
+    receiver: &mut Receiver,
+    get_tx: &UnboundedSender<(Publish, ManualAcknowledgement)>,
+    update_tx: &UnboundedSender<(Publish, ManualAcknowledgement)>,
+) -> ExampleResult {
+    let get_filter = TopicFilter::new(GET_FILTER)?;
+    let update_filter = TopicFilter::new(UPDATE_FILTER)?;
+    while let Some((publish, manual_ack)) = receiver.recv().await {
+        // NOTE: Explicit acknowledgement is not required. Drop `manual_ack` or leave it unbound by
+        // replacing it with `_` in the loop pattern. When acknowledgement is required,
+        // auto-acknowledgement is performed with default properties.
+
+        // Keep this dispatcher fast; document processing and acknowledgement happen downstream.
+
+        if publish.topic_name.matches_topic_filter(&get_filter) {
+            get_tx.send((publish, manual_ack))?;
+        } else if publish.topic_name.matches_topic_filter(&update_filter) {
+            update_tx.send((publish, manual_ack))?;
+        } else {
+            println!(
+                "Received publish on unrecognized topic: {:?}",
+                publish.topic_name
+            );
+            // Dropping `manual_ack` attempts auto-acknowledgement with default properties.
+        }
+    }
+
+    Ok(())
+}
+
+fn discard_queued_messages(
+    receiver: &mut Receiver,
+    get_rx: &mut UnboundedReceiver<(Publish, ManualAcknowledgement)>,
+    update_rx: &mut UnboundedReceiver<(Publish, ManualAcknowledgement)>,
+) {
+    let mut discarded = 0;
+
+    while receiver.recv().now_or_never().flatten().is_some() {
+        discarded += 1;
+    }
+    while get_rx.try_recv().is_ok() {
+        discarded += 1;
+    }
+    while update_rx.try_recv().is_ok() {
+        discarded += 1;
+    }
+
+    if discarded > 0 {
+        println!("Discarded {discarded} queued message(s) from the closed connection");
+    }
+}
+
 async fn maintain_document(
     client: Client,
     get_rx: &mut UnboundedReceiver<(Publish, ManualAcknowledgement)>,
@@ -189,6 +202,7 @@ async fn maintain_document(
         .await?
         .await?
         .as_result()?;
+    println!("Subscribed to {GET_FILTER}; waiting for a base document");
 
     while let Some((publish, manual_ack)) = get_rx.recv().await {
         // This example expects one base document per connection, followed by updates until
@@ -210,6 +224,7 @@ async fn maintain_document(
             .await?
             .await?
             .as_result()?;
+        println!("Subscribed to {UPDATE_FILTER}; waiting for document updates");
 
         while let Some((publish, manual_ack)) = update_rx.recv().await {
             let update_str = str::from_utf8(&publish.payload)?;

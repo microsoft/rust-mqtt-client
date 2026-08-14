@@ -12,9 +12,7 @@ use ms_mqtt_client::client::{
     ClientOptions, ConnectResult, DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use ms_mqtt_client::mqtt_proto::{self, ConnectReasonCode, Packet};
-use ms_mqtt_client::packet::{
-    ConnAck, ConnectProperties, QoS, RetainOptions, SubscribeProperties,
-};
+use ms_mqtt_client::packet::{ConnAck, ConnectProperties, QoS, RetainOptions, SubscribeProperties};
 use ms_mqtt_client::topic::TopicFilter;
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::unbounded_channel;

@@ -122,11 +122,14 @@
 //!
 //! # Runnable examples
 //!
-//! The repository examples are the canonical end-to-end patterns:
+//! The repository examples demonstrate these canonical end-to-end patterns:
 //!
-//! - [Simple client](https://github.com/microsoft/rust-mqtt-client/blob/main/examples/scenario_1_simple.rs): connect, subscribe, publish, receive, acknowledge, and shut down.
-//! - [Document updates](https://github.com/microsoft/rust-mqtt-client/blob/main/examples/scenario_2_document_update.rs): reconnect, resubscribe, and keep application state scoped to a connection epoch.
-//! - [Message relay](https://github.com/microsoft/rust-mqtt-client/blob/main/examples/scenario_3_relay.rs): coordinate two independently reconnecting clients.
+//! - **Single-client lifecycle:** connect, subscribe, publish, receive, acknowledge, and shut down.
+//!   See the [simple-client example](https://github.com/microsoft/rust-mqtt-client/blob/main/examples/scenario_1_simple.rs).
+//! - **Reconnect supervision:** retry, resubscribe, and rebuild connection-scoped state. See the
+//!   [document-update example](https://github.com/microsoft/rust-mqtt-client/blob/main/examples/scenario_2_document_update.rs).
+//! - **Multiple-client supervision:** independently reconnect clients and coordinate shutdown. See
+//!   the [message-relay example](https://github.com/microsoft/rust-mqtt-client/blob/main/examples/scenario_3_relay.rs).
 
 // Low-level modules
 // TODO: Revisit the exposed API of these modules, and remove the linting suppressions as necessary

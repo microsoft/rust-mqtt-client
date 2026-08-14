@@ -129,7 +129,8 @@ The crate documentation and runnable examples are the canonical references for a
 | Single-client lifecycle: connect, subscribe, publish, receive, acknowledge, and shut down | [Simple-client example](examples/scenario_1_simple.rs) |
 | Reconnect supervisor: retry, resubscribe, and rebuild connection-scoped state | [Document-update example](examples/scenario_2_document_update.rs) |
 | Multiple-client supervision: independently reconnect clients and coordinate shutdown | [Message-relay example](examples/scenario_3_relay.rs) |
-| Run the reference examples against an MQTT server | [Examples guide](examples/README.md) |
+
+The [examples guide](examples/README.md) explains how to configure and run these references against an MQTT server.
 
 Code built from these patterns must preserve four invariants:
 

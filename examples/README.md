@@ -1,9 +1,10 @@
 # Examples
 
-These are the canonical end-to-end usage patterns for the library. Start with the simple client,
-then use the document example for reconnecting applications or the relay for coordinated
-multi-connection applications. QoS 0 and QoS 1 are supported; QoS 2 is not yet implemented end to
-end.
+These runnable examples demonstrate the library's canonical end-to-end patterns: a complete
+single-client lifecycle, reconnect supervision with connection-scoped state, and coordinated
+supervision of multiple clients. Start with the simple-client example, then use the document-update
+example for reconnect supervision or the message-relay example for multiple-client supervision.
+QoS 0 and QoS 1 are supported; QoS 2 is not yet implemented end to end.
 
 Run these examples from the repository root. They work with any standards-compliant MQTT 5 server; Mosquitto is a convenient option, not a requirement. The first two examples default to an unauthenticated TCP server on `localhost:1883`. To use another server, update `HOSTNAME`, `PORT`, and any credentials near the top of the example. The relay defaults to separate downstream and upstream servers on `localhost:1883` and `localhost:1884`.
 
@@ -60,10 +61,15 @@ The example prints each publish and its echoed payload. Stop it with `Ctrl-C`.
 cargo run --example scenario_2_document_update
 ```
 
-After the example reports that it is connected, publish a document and an update with any MQTT client. For example:
+After the example reports `Subscribed to watchlist/get`, publish a base document with any MQTT client. For example:
 
 ```shell
 mosquitto_pub -V mqttv5 -q 1 -t watchlist/get -m "base"
+```
+
+Wait for the example to report `Subscribed to watchlist/update`, then publish an update:
+
+```shell
 mosquitto_pub -V mqttv5 -q 1 -t watchlist/update -m "+update"
 ```
 
