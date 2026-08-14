@@ -28,7 +28,8 @@
     - Acknowledgements (PUBACK / PUBREC / PUBREL / PUBCOMP)
     - AUTH (reauthentication)
     - Incoming PUBLISHes use an unbounded channel, since messages read off the network must go somewhere.
-- The control-packet channels are size 1 to avoid buffering packets not yet owned by the internal session state; the real queues live inside the `Connection`.
+- The acknowledgement channel is unbounded so affine acknowledgement tokens can synchronously submit their default response from `Drop`; acknowledgement ordering remains governed by the internal session state.
+- The other control-packet channels are size 1 to avoid buffering packets not yet owned by the internal session state; the real queues live inside the `Connection`.
 - The way the `Connection` pulls on the various channels is biased to allow prioritization and prevent starvation.
 - Session message queue size
     - Can it be configured to be smaller than the server receive maximum?

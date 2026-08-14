@@ -9,7 +9,7 @@ use derive_where::derive_where;
 use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
 use indexmap::IndexMap;
-use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
@@ -76,10 +76,10 @@ where
         sub_rx: Receiver<SubscriptionRequest<O::Shared>>,
         o_pub_q0_rx: Receiver<PublishRequestQoS0<O::Shared>>,
         o_pub_q12_rx: Receiver<PublishRequestQoS1QoS2<O::Shared>>,
-        ack_rx: Receiver<AcknowledgementRequest<O::Shared>>,
+        ack_rx: UnboundedReceiver<AcknowledgementRequest<O::Shared>>,
         auth_rx: Receiver<ReauthRequest<O::Shared>>,
         i_pub_tx: UnboundedSender<IncomingPublishAndToken<O::Shared>>,
-        ack_tx: Sender<AcknowledgementRequest<O::Shared>>,
+        ack_tx: UnboundedSender<AcknowledgementRequest<O::Shared>>,
         auth_tx: Sender<ReauthRequest<O::Shared>>,
         max_pkid: PacketIdentifier,
         owned: O,
@@ -750,8 +750,8 @@ where
     o_pub_q12_rx: Peekable<ReceiverStream<PublishRequestQoS1QoS2<S>>>,
     /// Channel for receiving outgoing SUBSCRIBE and UNSUBSCRIBE requests
     sub_rx: Peekable<ReceiverStream<SubscriptionRequest<S>>>,
-    /// Channel for receving outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
-    ack_rx: Receiver<AcknowledgementRequest<S>>,
+    /// Channel for receiving outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
+    ack_rx: UnboundedReceiver<AcknowledgementRequest<S>>,
     /// Channel for receiving outgoing AUTH requests
     auth_rx: Receiver<ReauthRequest<S>>,
     /// Channel for sending incoming PUBLISHes and associated acknowledgement tokens
@@ -760,7 +760,7 @@ where
     // --- Channels stored here to be cloned, and should not be used directly ---
     // TODO: Is this really the correct place for these?
     /// Channel for sending outgoing PUBACK, PUBREC, PUBREL and PUBCOMP requests
-    ack_tx: Sender<AcknowledgementRequest<S>>,
+    ack_tx: UnboundedSender<AcknowledgementRequest<S>>,
     /// Channel for sending outgoing AUTH requests
     pub(crate) auth_tx: Sender<ReauthRequest<S>>, // TODO: ideally this would not be pub crate
 }
