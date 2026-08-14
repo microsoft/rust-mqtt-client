@@ -17,8 +17,9 @@
 //! transmission after any required ordering. Dropping the completion token does not undo the
 //! submitted acknowledgement.
 //!
-//! QoS 2 acknowledgement token types reserve APIs with the same ownership and default-on-drop
-//! model, but end-to-end QoS 2 publishing and receiving are not yet supported.
+//! QoS 2 acknowledgement token types reserve the intended APIs, but their methods and drop
+//! behavior are not implemented because end-to-end QoS 2 publishing and receiving are not yet
+//! supported.
 
 use bytes::Bytes;
 
