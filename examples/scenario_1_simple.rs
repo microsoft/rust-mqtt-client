@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::error::Error;
+use std::{error::Error, str};
 
 use ms_mqtt_client::client::{
     Client, ClientOptions, ConnectResult, DisconnectedEvent, KeepAliveConfig,
     ManualAcknowledgement, Receiver, new_client,
 };
 use ms_mqtt_client::packet::{
-    ConnectProperties, DisconnectProperties, PubAckProperties, PublishProperties, QoS,
-    RetainOptions, SubscribeProperties,
+    ConnectProperties, DisconnectProperties, PubAckProperties, PubRejectReason, PublishProperties,
+    QoS, RetainOptions, SubscribeProperties,
 };
 use ms_mqtt_client::topic::{TopicFilter, TopicName};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
@@ -144,21 +144,37 @@ async fn receive(mut receiver: Receiver) -> ExampleResult {
         // worker tasks. Slow work here delays subsequent messages and can let the unbounded
         // receive queue grow.
 
-        // Process the message before acknowledging it so processing failures leave it unacknowledged.
-        println!("Payload: {:?}", String::from_utf8_lossy(&publish.payload));
-
+        // QoS 0 requires no acknowledgement. Dropping a QoS 1 `manual_ack`, including on early
+        // return or panic, attempts a successful default PUBACK. Keep expected processing failures
+        // as values so the QoS 1 path can explicitly accept or reject them below.
+        let processing_result = process_payload(&publish.payload);
         match manual_ack {
             ManualAcknowledgement::QoS0 => {
-                println!("Received publish on QoS 0");
-                println!("Publish does not require acknowledgment (QoS 0)");
+                if let Err(error) = processing_result {
+                    eprintln!("Discarded invalid UTF-8 payload: {error}");
+                } else {
+                    println!("Received publish on QoS 0");
+                    println!("Publish does not require acknowledgment (QoS 0)");
+                }
             }
             ManualAcknowledgement::QoS1(puback_token) => {
-                println!("Received publish on QoS 1");
-                let ct = puback_token.accept(PubAckProperties::default()).await?;
-                ct.await?;
-                // NOTE: Dropping `puback_token` instead performs auto-acknowledgement with default
-                // properties.
-                println!("Publish acknowledged! (QoS 1)");
+                if let Err(error) = processing_result {
+                    let ct = puback_token
+                        .reject(
+                            PubRejectReason::PayloadFormatInvalid,
+                            PubAckProperties::default(),
+                        )
+                        .await?;
+                    ct.await?;
+                    eprintln!("Rejected invalid UTF-8 payload: {error}");
+                } else {
+                    println!("Received publish on QoS 1");
+                    // NOTE: Dropping `puback_token` instead performs auto-acknowledgement with
+                    // default properties.
+                    let ct = puback_token.accept(PubAckProperties::default()).await?;
+                    ct.await?;
+                    println!("Publish acknowledged! (QoS 1)");
+                }
             }
             ManualAcknowledgement::QoS2(_) => unreachable!(
                 "the subscription requests a maximum of QoS 1, and QoS 2 is not supported"
@@ -166,5 +182,11 @@ async fn receive(mut receiver: Receiver) -> ExampleResult {
         }
     }
 
+    Ok(())
+}
+
+fn process_payload(payload: &[u8]) -> Result<(), str::Utf8Error> {
+    let payload = str::from_utf8(payload)?;
+    println!("Payload: {payload:?}");
     Ok(())
 }
