@@ -305,6 +305,12 @@ async fn disconnect_can_delete_persistent_session() {
         )
         .await;
 
+        // Some servers (e.g. HiveMQ CE) mark a session for deletion asynchronously after
+        // processing the DISCONNECT that overrides its expiry to zero, so a reconnect that
+        // races the deletion can still observe the still-present session. Give the server a
+        // brief moment to complete the deletion before reconnecting.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
         let reconnected = reconnect(
             &endpoint,
             disconnected,
