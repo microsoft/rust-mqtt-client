@@ -284,12 +284,12 @@ async fn subscribe_and_expect_success(connection: &TestConnection, topic: &str) 
 }
 
 async fn receive_qos1_and_acknowledge(connection: &mut TestConnection) -> Publish {
-    let (publish, acknowledgement) = connection
+    let (publish, manual_ack) = connection
         .receiver
         .recv()
         .await
         .expect("client should receive the PUBLISH");
-    let ManualAcknowledgement::QoS1(acknowledgement) = acknowledgement else {
+    let ManualAcknowledgement::QoS1(acknowledgement) = manual_ack else {
         panic!("QoS 1 delivery should require a PUBACK");
     };
     acknowledgement

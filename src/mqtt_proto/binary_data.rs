@@ -79,7 +79,7 @@ where
     /// This function decodes a `BinaryData` out from the given `Shared`. It is meant to be used from a streaming decoder,
     /// and thus handles the cases where the `Shared` has too little data or too much data.
     ///
-    /// See also [`from_shared`].
+    /// See also [`Self::from_shared`].
     ///
     /// # Returns
     ///
@@ -105,7 +105,7 @@ where
     /// the bytes of a valid Binary Data. It is meant to be used for decoding payloads that are known to consist
     /// entirely of a single binary data.
     ///
-    /// See also [`decode`].
+    /// See also [`Self::decode`].
     ///
     /// # Returns
     ///
@@ -128,7 +128,7 @@ where
         Ok(())
     }
 
-    /// Creates a copy of this `BinaryData` with another [`Shared`] type as the backing buffer.
+    /// Creates a copy of this `BinaryData` with another `Shared` type as the backing buffer.
     ///
     /// This is better than having the owner of `BinaryData<S1>` create `BinaryData<S2>` via `BinaryData::new(owned, byte_str.as_str())`
     /// because this does not need to recompute the length.

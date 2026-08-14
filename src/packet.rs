@@ -2,6 +2,9 @@
 // Licensed under the MIT License.
 
 //! MQTT packet types and associated properties and reason codes.
+//!
+//! QoS 0 and QoS 1 are supported end to end. QoS 2 packet and token types reserve the intended
+//! API, but QoS 2 publishing and receiving are not yet implemented.
 
 use std::fmt::Write as _;
 use std::num::{NonZeroU16, NonZeroU32};
@@ -22,8 +25,11 @@ use crate::{buffer_pool, mqtt_proto};
 /// Quality of Service
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum QoS {
+    /// QoS 0: at most once delivery.
     AtMostOnce = 0,
+    /// QoS 1: at least once delivery.
     AtLeastOnce = 1,
+    /// QoS 2: exactly once delivery. Not yet supported end to end by this client.
     ExactlyOnce = 2,
 }
 
@@ -51,8 +57,11 @@ impl From<QoS> for mqtt_proto::QoS {
 /// for QoS 1 and 2.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DeliveryQoS {
+    /// The PUBLISH was delivered at QoS 0.
     AtMostOnce,
+    /// The PUBLISH was delivered at QoS 1.
     AtLeastOnce(DeliveryInfo),
+    /// Reserved for QoS 2 receiving, which is not yet supported.
     ExactlyOnce(DeliveryInfo),
 }
 
@@ -172,6 +181,7 @@ where
     }
 }
 
+/// MQTT properties associated with a Will publication.
 #[derive(Clone)]
 pub struct WillProperties {
     pub delay_interval: u32,
@@ -228,10 +238,15 @@ pub struct ConnAck {
 }
 
 impl ConnAck {
+    /// Returns whether the server accepted the MQTT connection.
     pub fn is_success(&self) -> bool {
         matches!(self.reason, ConnAckReason::Success)
     }
 
+    /// Converts the MQTT reason code into a result.
+    ///
+    /// An unsuccessful reason becomes [`OperationFailure`], including the server-provided reason
+    /// string when present.
     pub fn as_result(&self) -> Result<(), OperationFailure> {
         if self.is_success() {
             Ok(())
@@ -299,6 +314,9 @@ pub struct PubAck {
 }
 
 impl PubAck {
+    /// Returns whether the server accepted the QoS 1 PUBLISH.
+    ///
+    /// Both `Success` and `NoMatchingSubscribers` are successful MQTT outcomes.
     pub fn is_success(&self) -> bool {
         matches!(
             self.reason,
@@ -306,6 +324,7 @@ impl PubAck {
         )
     }
 
+    /// Converts the server's MQTT reason code into a result.
     pub fn as_result(&self) -> Result<(), OperationFailure> {
         if self.is_success() {
             Ok(())
@@ -342,6 +361,9 @@ pub struct PubRec {
 }
 
 impl PubRec {
+    /// Returns whether the server accepted the initial QoS 2 PUBLISH exchange.
+    ///
+    /// QoS 2 publishing is not yet supported end to end by this client.
     pub fn is_success(&self) -> bool {
         matches!(
             self.reason,
@@ -349,6 +371,9 @@ impl PubRec {
         )
     }
 
+    /// Converts the server's MQTT reason code into a result.
+    ///
+    /// QoS 2 publishing is not yet supported end to end by this client.
     pub fn as_result(&self) -> Result<(), OperationFailure> {
         if self.is_success() {
             Ok(())
@@ -376,7 +401,7 @@ where
     }
 }
 
-// PUBREL packet
+/// PUBREL packet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubRel {
     pub packet_identifier: PacketIdentifier,
@@ -397,7 +422,7 @@ where
     }
 }
 
-// PUBCOMP packet
+/// PUBCOMP packet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubComp {
     pub packet_identifier: PacketIdentifier,
@@ -427,6 +452,7 @@ pub struct SubAck {
 }
 
 impl SubAck {
+    /// Returns whether every MQTT reason code grants the requested subscription.
     pub fn is_success(&self) -> bool {
         self.reasons.iter().all(|r| {
             matches!(
@@ -436,6 +462,7 @@ impl SubAck {
         })
     }
 
+    /// Converts the server's MQTT reason codes into a result.
     pub fn as_result(&self) -> Result<(), OperationFailure> {
         if self.is_success() {
             Ok(())
@@ -484,6 +511,9 @@ pub struct UnsubAck {
 }
 
 impl UnsubAck {
+    /// Returns whether every MQTT reason code accepts the unsubscribe operation.
+    ///
+    /// Both `Success` and `NoSubscriptionExisted` are successful MQTT outcomes.
     pub fn is_success(&self) -> bool {
         self.reasons.iter().all(|r| {
             matches!(
@@ -493,6 +523,7 @@ impl UnsubAck {
         })
     }
 
+    /// Converts the server's MQTT reason codes into a result.
     pub fn as_result(&self) -> Result<(), OperationFailure> {
         if self.is_success() {
             Ok(())

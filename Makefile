@@ -24,7 +24,7 @@ test:
 # provisioned -- the suite itself is server-agnostic. Each broker directory exposes
 # up.sh/down.sh, so a broker that isn't a container (AIO MQ needs a k3d cluster)
 # plugs in the same way.
-# Deliberately not part of `test`: these need a broker running.
+# Deliberately not part of `test`: these need a server running.
 BROKER ?= mosquitto
 
 .PHONY: network-test

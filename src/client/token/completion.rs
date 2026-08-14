@@ -1,7 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Synchronization for portable reporting of remote operations
+//! Futures for observing operation-specific completion events.
+//!
+//! Completion tokens are returned after an operation has been accepted by the client. Awaiting a
+//! token reports the operation-specific completion event. Dropping a token does not cancel or undo
+//! the accepted operation.
 
 use bytes::Bytes;
 use thiserror::Error;
@@ -9,8 +13,14 @@ use thiserror::Error;
 /// Indicates a failure that occurred during the completion of an MQTT operation.
 #[derive(Clone, PartialEq, Debug, Error)]
 pub enum CompletionError {
+    /// The client session was dropped before the operation produced a result.
+    ///
+    /// A completion token does not keep its [`crate::client::ConnectHandle`] or
+    /// [`crate::client::Connection`] alive.
     #[error("Communication channels with the client have been closed")]
     Detached,
+    /// The client canceled the operation because the connection ended or its MQTT session
+    /// expired.
     #[error("The operation was canceled due to {0}")]
     Canceled(String),
 }
@@ -72,20 +82,31 @@ macro_rules! make_completion_token_ty {
 }
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a QoS 0 PUBLISH operation
-    /// (i.e. when the PUBLISH has been sent out onto the network).
+    /// Completion token returned by [`crate::client::Client::publish_qos0`].
+    ///
+    /// Awaiting this token returns `Ok(())` when the session releases the PUBLISH for transmission,
+    /// or a [`CompletionError`] if the accepted operation cannot complete.
     pub struct PublishQoS0CompletionToken(CompletionToken<()>)
 );
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a QoS 1 PUBLISH operation
-    /// (i.e. when the PUBACK has been received from the server).
+    /// Completion token returned by [`crate::client::Client::publish_qos1`].
+    ///
+    /// Awaiting this token returns the server's [`crate::packet::PubAck`], or a
+    /// [`CompletionError`] if the accepted operation cannot complete.
     pub struct PublishQoS1CompletionToken(CompletionToken<crate::mqtt_proto::PubAck<Bytes>> -> crate::packet::PubAck { Into::into })
 );
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a QoS 2 PUBLISH operation
-    /// (i.e. when the PUBREC has been received from the server).
+    /// Completion token returned by [`crate::client::Client::publish_qos2`].
+    ///
+    /// Awaiting this token returns the server's [`crate::packet::PubRec`] and an optional
+    /// [`crate::client::token::acknowledgement::PubRelToken`], or a [`CompletionError`] if the
+    /// accepted operation cannot complete. The PUBREL token is present when PUBREC indicates
+    /// success; confirm it to continue the QoS 2 flow and receive PUBCOMP. Call
+    /// [`crate::packet::PubRec::as_result`] to check the PUBREC reason code.
+    ///
+    /// QoS 2 publishing is not yet implemented.
     pub struct PublishQoS2CompletionToken(
     CompletionToken<(
         crate::mqtt_proto::PubRec<Bytes>,
@@ -99,8 +120,15 @@ make_completion_token_ty!(
 );
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a PUBREC acceptance operation
-    /// (i.e. when the PUBREL has been received from the server).
+    /// Completion token returned by
+    /// [`crate::client::token::acknowledgement::PubRecToken::accept`].
+    ///
+    /// Awaiting this token returns the server's [`crate::packet::PubRel`] and a
+    /// [`crate::client::token::acknowledgement::PubCompToken`], or a [`CompletionError`] if the
+    /// submitted acknowledgement cannot complete. Use the PUBCOMP token to confirm the PUBREL and
+    /// complete the incoming QoS 2 flow.
+    ///
+    /// QoS 2 receiving is not yet supported.
     pub struct PubRecAcceptCompletionToken(
     CompletionToken<(
         crate::mqtt_proto::PubRel<Bytes>,
@@ -114,42 +142,68 @@ make_completion_token_ty!(
 );
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a PUBREC rejection operation
-    /// (i.e. when the PUBREC has been sent out onto the network).
+    /// Completion token returned by
+    /// [`crate::client::token::acknowledgement::PubRecToken::reject`].
+    ///
+    /// Awaiting this token returns `Ok(())` when the session releases the rejecting PUBREC for
+    /// transmission after any required acknowledgement ordering, or a [`CompletionError`] if the
+    /// submitted acknowledgement cannot complete.
+    ///
+    /// QoS 2 receiving is not yet supported.
     pub struct PubRecRejectCompletionToken(CompletionToken<()>));
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a PUBREL operation
-    /// (i.e. when the PUBCOMP has been received from the server).
+    /// Completion token returned by
+    /// [`crate::client::token::acknowledgement::PubRelToken::confirm`].
+    ///
+    /// Awaiting this token returns the server's [`crate::packet::PubComp`], or a
+    /// [`CompletionError`] if the submitted confirmation cannot complete.
+    ///
+    /// QoS 2 publishing is not yet implemented.
     pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<Bytes>> -> crate::packet::PubComp { Into::into })
 );
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a SUBSCRIBE operation.
-    /// (i.e. when the SUBACK has been received from the server).
+    /// Completion token returned by [`crate::client::Client::subscribe`].
+    ///
+    /// Awaiting this token returns the server's [`crate::packet::SubAck`], or a
+    /// [`CompletionError`] if the accepted operation cannot complete.
     pub struct SubscribeCompletionToken(CompletionToken<crate::mqtt_proto::SubAck<Bytes>> -> crate::packet::SubAck { Into::into })
 );
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of an UNSUBSCRIBE operation.
-    /// (i.e. when the UNSUBACK has been received from the server).
+    /// Completion token returned by [`crate::client::Client::unsubscribe`].
+    ///
+    /// Awaiting this token returns the server's [`crate::packet::UnsubAck`], or a
+    /// [`CompletionError`] if the accepted operation cannot complete.
     pub struct UnsubscribeCompletionToken(CompletionToken<crate::mqtt_proto::UnsubAck<Bytes>> -> crate::packet::UnsubAck { Into::into })
 );
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a re-authentication operation.
-    /// (i.e. when the AUTH response has been received from the server).
+    /// Completion token returned by [`crate::client::ReauthHandle::reauth`].
+    ///
+    /// Awaiting this token returns the server's [`crate::client::ReauthResult`], or a
+    /// [`CompletionError`] if the accepted operation cannot complete.
     pub struct ReauthCompletionToken(CompletionToken<crate::client::buffered::ReauthResult<Bytes>> -> crate::client::ReauthResult { Into::into }));
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a PUBACK operation.
-    /// (i.e. when the PUBACK has been sent out onto the network).
+    /// Completion token returned by [`crate::client::token::acknowledgement::PubAckToken::accept`]
+    /// or [`crate::client::token::acknowledgement::PubAckToken::reject`].
+    ///
+    /// Awaiting this token returns `Ok(())` when the session releases the PUBACK for transmission
+    /// after any required acknowledgement ordering, or a [`CompletionError`] if the submitted
+    /// acknowledgement cannot complete.
     pub struct PubAckCompletionToken(CompletionToken<()>)
 );
 
 make_completion_token_ty!(
-    /// Token that can be awaited for the eventual completion of a PUBCOMP operation.
-    /// (i.e. when the PUBCOMP has been sent out onto the network).
+    /// Completion token returned by
+    /// [`crate::client::token::acknowledgement::PubCompToken::confirm`].
+    ///
+    /// Awaiting this token returns `Ok(())` when the session releases the PUBCOMP for transmission,
+    /// or a [`CompletionError`] if the submitted confirmation cannot complete.
+    ///
+    /// QoS 2 receiving is not yet supported.
     pub struct PubCompConfirmCompletionToken(CompletionToken<()>)
 );
 

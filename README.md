@@ -16,16 +16,135 @@ A low-level MQTT 5 client library that prioritizes **correctness** — upholding
 
 It is built to facilitate demanding, long-lived applications such as edge and IoT services, message relays, and higher-level SDKs — systems that need many concurrent components to share a single reliable connection and to reason precisely about the fate of every operation.
 
-The client id designed to be compatible with any MQTT broker, such as Mosquitto MQTT Broker or Azure Event Grid MQTT Broker.
+The client is designed for use with any standards-compliant MQTT 5 servers, such as Mosquitto.
 
 ## Design
 
 - **Three independent components.** `new_client()` returns a `Client` (outgoing operations), a `ConnectHandle`/`Connection` (connection lifecycle and I/O), and a `Receiver` (incoming publishes). Each can be owned by a different task, so concerns stay cleanly separated.
 - **Cloneable connection actor.** The `Client` is a cheap, cloneable handle to a single connection "actor". Because the internal channels are multi-producer, many tasks or threads can multiplex their operations over one shared connection, and the connection task serializes them to preserve protocol ordering and flow control.
 - **Lifecycle enforced by the type system.** Connect, run, and reconnect are expressed through ownership (`ConnectHandle` → `Connection` → `ConnectHandle`), so illegal states such as connecting twice or running a disconnected connection are compile errors rather than runtime faults.
-- **Tiered result reporting.** Every operation distinguishes acceptance by the client, completion on the network, and the broker's own verdict (MQTT reason codes) — each surfaced at the moment it becomes known, via awaitable completion tokens.
-- **Explicit QoS and acknowledgement.** QoS 0/1/2 have dedicated methods and token types that make each packet flow explicit, and incoming messages are acknowledged automatically on drop while still allowing full manual control.
-- **You own the runtime.** The library spawns no background tasks; the application drives the connection and chooses its own task topology, reconnect policy, and message dispatch.
+- **Tiered result reporting.** The API separately reports the stages applicable to each operation: acceptance by the client, operation-specific completion, and, when provided by the protocol, the server's verdict through an MQTT reason code.
+- **Explicit QoS and acknowledgement.** Publishing uses QoS-specific methods, and incoming PUBLISHes expose the acknowledgement control appropriate to their QoS. Applications can handle acknowledgement flows explicitly, while dropping an unused control attempts the default successful response where one is required.
+  - **QoS 2 is not yet implemented**
+- **You drive the connection.** The library does not drive the MQTT connection in the background; the application chooses its own task topology, reconnect policy, and message dispatch.
+
+## Getting started
+
+### Requirements
+
+- A Tokio runtime
+- OpenSSL development libraries discoverable by `pkg-config`
+
+Install the OpenSSL build dependencies for your platform:
+
+```shell
+# Debian or Ubuntu
+sudo apt-get update
+sudo apt-get install pkg-config libssl-dev
+
+# Fedora or RHEL
+sudo dnf install pkgconf-pkg-config openssl-devel
+
+# macOS with Homebrew
+brew install pkg-config openssl@3
+```
+
+TCP and TLS transports are available by default. WebSocket transports are available through the `websockets` feature.
+
+### Simple Connect and Publish
+
+```rust
+use std::error::Error;
+
+use ms_mqtt_client::client::{
+  ClientOptions, ConnectResult, KeepAliveConfig, new_client,
+};
+use ms_mqtt_client::packet::{
+  ConnectProperties, DisconnectProperties, PublishProperties,
+};
+use ms_mqtt_client::topic::TopicName;
+use ms_mqtt_client::transport::{
+  ConnectionTransportConfig, ConnectionTransportType,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+  let (client, connect_handle, _receiver) = new_client(ClientOptions::default());
+  let result = connect_handle
+    .connect(
+      ConnectionTransportConfig {
+        transport_type: ConnectionTransportType::Tcp {
+          hostname: "localhost".into(),
+          port: 1883,
+        },
+        timeout: None,
+        proxy: None,
+        tcp_nodelay: false,
+      },
+      true,
+      KeepAliveConfig::Infinite,
+      None,
+      None,
+      None,
+      ConnectProperties::default(),
+      None,
+    )
+    .await;
+
+  let (connection, disconnect_handle) = match result {
+    ConnectResult::Success(connection, _, disconnect_handle) => {
+      (connection, disconnect_handle)
+    }
+    ConnectResult::Failure(_, error) => return Err(error.into()),
+  };
+  let connection_task = tokio::spawn(connection.run_until_disconnect());
+
+  let publish_result: Result<(), Box<dyn Error>> = async {
+    let puback = client
+      .publish_qos1(
+        TopicName::new("example/topic")?,
+        "hello".into(),
+        false,
+        PublishProperties::default(),
+      )
+      .await?
+      .await?;
+    puback.as_result()?;
+    Ok(())
+  }
+  .await;
+
+  let _ = disconnect_handle.disconnect(&DisconnectProperties::default());
+  let _ = connection_task.await?;
+  publish_result
+}
+```
+
+## Canonical usage patterns
+
+The crate documentation and runnable examples are the canonical references for application code and coding assistants. Start from the pattern that matches the intended task:
+
+| Canonical pattern | Reference |
+| --- | --- |
+| Single-client lifecycle: connect, subscribe, publish, receive, acknowledge, and shut down | [Simple-client example](examples/scenario_1_simple.rs) |
+| Reconnect supervisor: retry, resubscribe, and rebuild connection-scoped state | [Document-update example](examples/scenario_2_document_update.rs) |
+| Multiple-client supervision: independently reconnect clients and coordinate shutdown | [Message-relay example](examples/scenario_3_relay.rs) |
+| Run the reference examples against an MQTT server | [Examples guide](examples/README.md) |
+
+Code built from these patterns must preserve four invariants:
+
+1. Continuously poll `Connection::run_until_disconnect()` while using the client or receiver; no background task drives MQTT I/O.
+2. Distinguish three phases: successful completion of a `Client` operation future means submission, awaiting its completion token reports operation-specific completion, and `as_result()` on an acknowledgement reports the MQTT server's verdict.
+3. For an orderly shutdown, call `DisconnectHandle::disconnect()` and keep driving the connection until it returns.
+4. Use QoS 0 or QoS 1 only. QoS 2 types and methods reserve a future API and are not implemented end to end.
+
+## Implementation status
+
+QoS 0 and QoS 1 are supported. The QoS 2 types and methods reserve the intended public API, but end-to-end QoS 2 publishing and receiving are not yet implemented.
+
+## Contributing and support
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and the project's code of conduct. For help, see [SUPPORT.md](SUPPORT.md). Report security vulnerabilities according to [SECURITY.md](SECURITY.md).
 
 ## License
 

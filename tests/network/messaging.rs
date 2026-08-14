@@ -126,12 +126,12 @@ async fn publish_qos1_with_retain_and_expect_success(
 }
 
 async fn receive_qos1_and_ack(subscriber: &mut TestConnection) -> Publish {
-    let (publish, acknowledgement) = subscriber
+    let (publish, manual_ack) = subscriber
         .receiver
         .recv()
         .await
         .expect("subscriber should receive the PUBLISH");
-    let ManualAcknowledgement::QoS1(acknowledgement) = acknowledgement else {
+    let ManualAcknowledgement::QoS1(acknowledgement) = manual_ack else {
         panic!("QoS 1 PUBLISH should require a PUBACK");
     };
     acknowledgement
@@ -174,7 +174,7 @@ async fn publish_receive_qos0() {
         )
         .await;
 
-        let (publish, acknowledgement) = subscriber
+        let (publish, manual_ack) = subscriber
             .receiver
             .recv()
             .await
@@ -182,7 +182,7 @@ async fn publish_receive_qos0() {
         assert_eq!(publish.topic_name, TopicName::new(topic).unwrap());
         assert_eq!(publish.payload, Bytes::from_static(b"qos0 payload"));
         assert_eq!(publish.qos, DeliveryQoS::AtMostOnce);
-        assert!(matches!(acknowledgement, ManualAcknowledgement::QoS0));
+        assert!(matches!(manual_ack, ManualAcknowledgement::QoS0));
 
         disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
     }
@@ -437,7 +437,7 @@ async fn subscribe_with_subscription_identifier() {
             PublishProperties::default(),
         )
         .await;
-        let (publish, acknowledgement) = connection
+        let (publish, manual_ack) = connection
             .receiver
             .recv()
             .await
@@ -446,7 +446,7 @@ async fn subscribe_with_subscription_identifier() {
             publish.properties.subscription_identifiers,
             vec![NonZeroU32::new(1).unwrap()]
         );
-        assert!(matches!(acknowledgement, ManualAcknowledgement::QoS0));
+        assert!(matches!(manual_ack, ManualAcknowledgement::QoS0));
 
         assert!(matches!(
             connection.disconnect().await,
@@ -471,13 +471,13 @@ async fn delivery_qos_is_negotiated() {
             PublishProperties::default(),
         )
         .await;
-        let (publish, acknowledgement) = subscriber
+        let (publish, manual_ack) = subscriber
             .receiver
             .recv()
             .await
             .expect("subscriber should receive the QoS 1 publication at QoS 0");
         assert_eq!(publish.qos, DeliveryQoS::AtMostOnce);
-        assert!(matches!(acknowledgement, ManualAcknowledgement::QoS0));
+        assert!(matches!(manual_ack, ManualAcknowledgement::QoS0));
 
         let qos1_subscription_topic = "ms-mqtt-client/network/qos-negotiation/qos1-subscription";
         subscribe_and_expect_success(&subscriber, qos1_subscription_topic, QoS::AtLeastOnce).await;
@@ -488,13 +488,13 @@ async fn delivery_qos_is_negotiated() {
             PublishProperties::default(),
         )
         .await;
-        let (publish, acknowledgement) = subscriber
+        let (publish, manual_ack) = subscriber
             .receiver
             .recv()
             .await
             .expect("subscriber should receive the QoS 0 publication at QoS 0");
         assert_eq!(publish.qos, DeliveryQoS::AtMostOnce);
-        assert!(matches!(acknowledgement, ManualAcknowledgement::QoS0));
+        assert!(matches!(manual_ack, ManualAcknowledgement::QoS0));
 
         disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
     }
