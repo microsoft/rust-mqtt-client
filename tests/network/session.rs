@@ -15,6 +15,7 @@ use ms_mqtt_client::packet::{
 };
 use ms_mqtt_client::topic::{TopicFilter, TopicName};
 
+use crate::common::server::supports_disconnect_session_expiry_override;
 use crate::common::{
     Endpoint, SessionOptions, TestConnection, connect_tcp, connect_tcp_with_session,
     reconnect_tcp_with_session,
@@ -289,6 +290,11 @@ async fn zero_expiry_does_not_preserve_session() {
 #[tokio::test]
 async fn disconnect_can_delete_persistent_session() {
     crate::test_timeout! {
+        if !supports_disconnect_session_expiry_override() {
+            println!("SKIP: HiveMQ CE does not honor DISCONNECT session-expiry overrides");
+            return;
+        }
+
         let endpoint = Endpoint::from_env();
         let connection = connect_tcp_with_session(
             &endpoint,

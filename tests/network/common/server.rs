@@ -70,6 +70,11 @@ pub(crate) fn supports(feature: ServerFeature) -> bool {
         .any(|(name, missing)| *name == server && missing.contains(&feature))
 }
 
+/// Whether the server honors a DISCONNECT session-expiry override.
+pub(crate) fn supports_disconnect_session_expiry_override() -> bool {
+    server_name().as_deref() != Some(HIVEMQ_CE)
+}
+
 /// Skips the calling test when the MQTT server under test lacks `$feature`.
 #[macro_export]
 macro_rules! require_server_feature {
