@@ -39,6 +39,7 @@ pub struct ConnectionTransportConfig {
 /// The type of transport to use for the new MQTT connection.
 // The `Ws` variant is large (it holds a full HTTP request), but it is feature-gated and
 // constructed at most once per connection, so the size difference is not worth boxing.
+#[allow(clippy::large_enum_variant)]
 pub enum ConnectionTransportType {
     Tcp {
         hostname: String,
