@@ -80,8 +80,9 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     // buffering packets that are not yet owned by the internal session state.
     let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
     let (auth_tx, auth_rx) = tokio::sync::mpsc::channel(1);
-    // Acknowledgement tokens can submit their default response from Drop, which cannot await
-    // channel capacity. Explicit and automatic acknowledgements use the same path.
+    // NOTE: We use an unbounded channel for acknowledgements, as there could be many ocurring simultaneously
+    // and the fallback Drop implementation cannot await channel capacity without spawning many tasks/threads
+    // in a way which severely affects performance.
     let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel();
     // NOTE: We use an unbounded channel for incoming publishes, as messages read off the network must go
     // somewhere.
