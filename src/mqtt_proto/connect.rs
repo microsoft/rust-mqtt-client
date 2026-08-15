@@ -837,7 +837,6 @@ mod tests {
         true
     )]
     // Lint wants `encoding` to be taken as borrow, but that makes the `test_case()` exprs more complicated.
-    #[allow(clippy::needless_pass_by_value)]
     fn password_flag_set_but_not_username_flag(
         encoding: &[u8],
         version: ProtocolVersion,

@@ -41,7 +41,6 @@ macro_rules! define_u8_code {
     ) => {
         $(#[$meta])*
         #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd, enum_iterator::Sequence)]
-        #[allow(clippy::enum_variant_names)]
         pub enum $ty {
             $($variant),*
         }
@@ -850,7 +849,6 @@ pub type UserProperties<S> = Vec<UserProperty<S>>;
 
 /// A combination of the packet identifier, dup flag and QoS that only allows valid combinations of these three properties.
 /// Used in [`Packet::Publish`]
-#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PacketIdentifierDupQoS {
     AtMostOnce,

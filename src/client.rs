@@ -62,7 +62,6 @@ mod timer;
 pub mod token;
 
 /// Creates the three components needed to run the MQTT client
-#[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
 pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let (o_pub_q12_tx, o_pub_q12_rx) =
         tokio::sync::mpsc::channel(options.publish_qos1_qos2_queue_size);
