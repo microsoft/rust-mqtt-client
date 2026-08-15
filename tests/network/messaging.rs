@@ -9,9 +9,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use ms_mqtt_client::client::{DisconnectedEvent, ManualAcknowledgement};
 use ms_mqtt_client::packet::{
-    DeliveryQoS, PayloadFormatIndicator, PubAckProperties, Publish, PublishProperties, QoS,
-    RetainHandling, RetainOptions, SubscribeProperties, UnsubscribeProperties, Will,
-    WillProperties,
+    DeliveryQoS, PayloadFormatIndicator, PubAckProperties, PubCompProperties, PubRecProperties,
+    PubRelProperties, Publish, PublishProperties, QoS, RetainHandling, RetainOptions,
+    SubscribeProperties, UnsubscribeProperties, Will, WillProperties,
 };
 use ms_mqtt_client::topic::{TopicFilter, TopicName};
 
@@ -209,6 +209,76 @@ async fn publish_receive_qos1() {
         assert_eq!(publish.topic_name, TopicName::new(topic).unwrap());
         assert_eq!(publish.payload, Bytes::from_static(b"qos1 payload"));
         assert!(matches!(publish.qos, DeliveryQoS::AtLeastOnce(_)));
+
+        disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
+    }
+}
+
+/// Verifies end-to-end QoS 2 delivery and both explicit four-packet handshakes.
+#[tokio::test]
+async fn publish_receive_qos2() {
+    crate::require_server_feature!(ServerFeature::Qos2);
+    crate::test_timeout! {
+        let (mut subscriber, publisher) = connect_pair("publish_receive_qos2").await;
+        let topic = "ms-mqtt-client/network/qos2";
+        subscribe_and_expect_success(&subscriber, topic, QoS::ExactlyOnce).await;
+
+        let publisher_flow = async {
+            let ct = publisher
+                .client
+                .publish_qos2(
+                    TopicName::new(topic).unwrap(),
+                    Bytes::from_static(b"qos2 payload"),
+                    false,
+                    PublishProperties::default(),
+                )
+                .await
+                .expect("publisher should still be attached");
+            let (pubrec, Some(pubrel_token)) = ct
+                .await
+                .expect("QoS 2 PUBLISH should receive PUBREC")
+            else {
+                panic!("server rejected QoS 2 PUBLISH");
+            };
+            assert!(pubrec.is_success(), "server rejected PUBLISH: {pubrec:?}");
+            let ct = pubrel_token
+                .confirm(PubRelProperties::default())
+                .await
+                .expect("publisher should still be attached");
+            let pubcomp = ct.await.expect("QoS 2 PUBLISH should receive PUBCOMP");
+            assert_eq!(pubcomp.packet_identifier, pubrec.packet_identifier);
+        };
+
+        let subscriber_flow = async {
+            let (publish, manual_ack) = subscriber
+                .receiver
+                .recv()
+                .await
+                .expect("subscriber should receive the PUBLISH");
+            let ManualAcknowledgement::QoS2(pubrec_token) = manual_ack else {
+                panic!("QoS 2 PUBLISH should require PUBREC");
+            };
+            let ct = pubrec_token
+                .accept(PubRecProperties::default())
+                .await
+                .expect("subscriber should still be attached");
+            let (pubrel, pubcomp_token) =
+                ct.await.expect("subscriber should receive PUBREL");
+            let ct = pubcomp_token
+                .confirm(PubCompProperties::default())
+                .await
+                .expect("subscriber should still be attached");
+            ct.await.expect("PUBCOMP should be sent");
+
+            assert_eq!(publish.topic_name, TopicName::new(topic).unwrap());
+            assert_eq!(publish.payload, Bytes::from_static(b"qos2 payload"));
+            let DeliveryQoS::ExactlyOnce(delivery) = publish.qos else {
+                panic!("server did not deliver at QoS 2");
+            };
+            assert_eq!(pubrel.packet_identifier, delivery.packet_identifier);
+        };
+
+        tokio::join!(publisher_flow, subscriber_flow);
 
         disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
     }

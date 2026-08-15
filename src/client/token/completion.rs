@@ -71,8 +71,8 @@ macro_rules! make_completion_token_ty {
                     std::task::Poll::Ready(Ok(value)) => {
                         std::task::Poll::Ready(Ok(($map_fn)(value)))
                     }
-                    std::task::Poll::Ready(Err(_)) => {
-                        std::task::Poll::Ready(Err($crate::client::token::completion::CompletionError::Detached))
+                    std::task::Poll::Ready(Err(error)) => {
+                        std::task::Poll::Ready(Err(error))
                     }
                     std::task::Poll::Pending => std::task::Poll::Pending,
                 }
@@ -105,8 +105,6 @@ make_completion_token_ty!(
     /// accepted operation cannot complete. The PUBREL token is present when PUBREC indicates
     /// success; confirm it to continue the QoS 2 flow and receive PUBCOMP. Call
     /// [`crate::packet::PubRec::as_result`] to check the PUBREC reason code.
-    ///
-    /// QoS 2 publishing is not yet implemented.
     pub struct PublishQoS2CompletionToken(
     CompletionToken<(
         crate::mqtt_proto::PubRec<Bytes>,
@@ -127,8 +125,6 @@ make_completion_token_ty!(
     /// [`crate::client::token::acknowledgement::PubCompToken`], or a [`CompletionError`] if the
     /// submitted acknowledgement cannot complete. Use the PUBCOMP token to confirm the PUBREL and
     /// complete the incoming QoS 2 flow.
-    ///
-    /// QoS 2 receiving is not yet supported.
     pub struct PubRecAcceptCompletionToken(
     CompletionToken<(
         crate::mqtt_proto::PubRel<Bytes>,
@@ -148,8 +144,6 @@ make_completion_token_ty!(
     /// Awaiting this token returns `Ok(())` when the session releases the rejecting PUBREC for
     /// transmission after any required acknowledgement ordering, or a [`CompletionError`] if the
     /// submitted acknowledgement cannot complete.
-    ///
-    /// QoS 2 receiving is not yet supported.
     pub struct PubRecRejectCompletionToken(CompletionToken<()>));
 
 make_completion_token_ty!(
@@ -158,8 +152,6 @@ make_completion_token_ty!(
     ///
     /// Awaiting this token returns the server's [`crate::packet::PubComp`], or a
     /// [`CompletionError`] if the submitted confirmation cannot complete.
-    ///
-    /// QoS 2 publishing is not yet implemented.
     pub struct PubRelCompletionToken(CompletionToken<crate::mqtt_proto::PubComp<Bytes>> -> crate::packet::PubComp { Into::into })
 );
 
@@ -202,8 +194,6 @@ make_completion_token_ty!(
     ///
     /// Awaiting this token returns `Ok(())` when the session releases the PUBCOMP for transmission,
     /// or a [`CompletionError`] if the submitted confirmation cannot complete.
-    ///
-    /// QoS 2 receiving is not yet supported.
     pub struct PubCompConfirmCompletionToken(CompletionToken<()>)
 );
 
@@ -325,7 +315,10 @@ pub(crate) mod buffered {
 
 #[cfg(test)]
 mod test {
+    use bytes::Bytes;
+
     use super::CompletionError;
+    use super::PublishQoS1CompletionToken;
     use super::buffered::*;
 
     #[tokio::test]
@@ -347,6 +340,22 @@ mod test {
 
         let res = token.await;
         assert_eq!(res, Err(CompletionError::Canceled("test".to_string())));
+    }
+
+    #[tokio::test]
+    async fn mapped_completion_preserves_cancellation() {
+        let (notifier, token): (
+            CompletionNotifier<crate::mqtt_proto::PubAck<Bytes>>,
+            CompletionToken<crate::mqtt_proto::PubAck<Bytes>>,
+        ) = completion_pair();
+        let token = PublishQoS1CompletionToken(token);
+
+        notifier.cancel("test").unwrap();
+
+        assert_eq!(
+            token.await,
+            Err(CompletionError::Canceled("test".to_string()))
+        );
     }
 
     #[tokio::test]

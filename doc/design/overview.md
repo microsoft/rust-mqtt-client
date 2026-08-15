@@ -70,8 +70,8 @@ let client_result: Result<PublishQoS1CompletionToken, DetachedError> = client.pu
     false,                                  // Retain
     PublishProperties::default()            // Properties
 ).await;
-let completion_token = client_result.unwrap();
-let completion_result: Result<PubAck, CompletionError> = completion_token.await;
+let ct = client_result.unwrap();
+let completion_result: Result<PubAck, CompletionError> = ct.await;
 let pub_ack = completion_result.unwrap();
 
 // Inspect the PUBACK for details about the operation.
@@ -96,8 +96,8 @@ let client_result: Result<PublishQoS2CompletionToken, DetachedError> = client.pu
     false,                                  // Retain
     PublishProperties::default()            // Properties
 ).await;
-let completion_token = client_result.unwrap();
-let completion_result: Result<(PubRec, Option<PubRelToken>), CompletionError> = completion_token.await;
+let ct = client_result.unwrap();
+let completion_result: Result<(PubRec, Option<PubRelToken>), CompletionError> = ct.await;
 let (pub_rec, pubrel_token) = completion_result.unwrap();
 
 // PUBREC (or any packet) can then be inspected for details about the operation
@@ -106,14 +106,18 @@ if pub_rec.is_success() {
 
     // Manually acknowledge the PUBREC, or could simply drop the pubrel_token
     if let Some(pubrel_token) = pubrel_token {
-        let completion_token = pubrel_token.confirm(PubRelProperties::default()).await.unwrap();
-        let pubcomp = completion_token.await.unwrap();
+        let ct = pubrel_token.confirm(PubRelProperties::default()).await.unwrap();
+        let pubcomp = ct.await.unwrap();
     }
 } else {
     println!("Publish failed: {:?}", pub_rec.reason);
     // pubrel_token will be None, there is no need to use it
 }
 ```
+
+QoS 2 packet exchange, duplicate suppression, and session-present recovery are implemented. The
+connection-level Receive Maximum and Maximum QoS controls tracked in
+[`questions.md`](questions.md#mqtt-5-flow-control-and-capability-limits) remain deferred.
 
 Broadly, the idea is that there are distinct failure types that are able to be reported at different times:
 1. Failure of the client to accept the operation because its `ConnectHandle` or `Connection` was dropped (`DetachedError`).
@@ -161,7 +165,8 @@ If dropped without explicit acknowledgement by the user, the `ManualAcknowledgem
 
 In order to be maximally compatible with MQTT servers (and in particular, the AIO MQ broker), a `PubAckToken` (used with QoS1) is valid only for the connection epoch in which it was received. Once the connection epoch changes, the token can no longer acknowledge its PUBLISH: a PUBACK from the old epoch is not transmitted on the new connection, and any still-pending completion token resolves with an error. Completion tokens that resolved before the epoch changed are unaffected.
 
-If using QoS2, `PubRecToken` and `PubCompToken` are not subject to this limitation as all MQTT servers are required to redeliver.
+QoS 2 controls are scoped to the MQTT session rather than one connection. They remain valid across
+a reconnect when CONNACK reports Session Present, and are canceled when that session expires.
 
 ### Dispatching
 

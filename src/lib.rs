@@ -3,9 +3,9 @@
 
 //! A low-level asynchronous MQTT 5 client library.
 //!
-//! QoS 0 and QoS 1 are supported end to end. QoS 2 types and methods reserve the intended public
-//! API, but QoS 2 publishing and receiving are not yet implemented and must not be used in
-//! applications.
+//! QoS 0, QoS 1, and QoS 2 packet exchanges are supported end to end, including QoS 2 session
+//! recovery. Some MQTT 5 flow-control and capability limits remain deferred; see the repository's
+//! `doc/design/questions.md` for scope.
 //!
 //! # Client components
 //!
@@ -28,7 +28,7 @@
 //! | Construct a client | [`client::new_client`] and [`client::ClientOptions`] |
 //! | Connect and drive MQTT I/O | [`client::ConnectHandle::connect`] and [`client::Connection::run_until_disconnect`] |
 //! | Configure TCP, TLS, or `WebSockets` | [`transport::ConnectionTransportConfig`] and [`transport::ConnectionTransportType`] |
-//! | Publish at QoS 0 or QoS 1 | [`client::Client::publish_qos0`] or [`client::Client::publish_qos1`] |
+//! | Publish at QoS 0, QoS 1, or QoS 2 | [`client::Client::publish_qos0`], [`client::Client::publish_qos1`], or [`client::Client::publish_qos2`] |
 //! | Subscribe or unsubscribe | [`client::Client::subscribe`] or [`client::Client::unsubscribe`] |
 //! | Receive and acknowledge publishes | [`client::Receiver::recv`] and [`client::ManualAcknowledgement`] |
 //! | Disconnect cleanly | [`client::DisconnectHandle::disconnect`], while continuing to drive the connection |

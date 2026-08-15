@@ -243,14 +243,11 @@ impl Client {
         Ok(PublishQoS1CompletionToken(token))
     }
 
-    /// Reserves the API for sending a PUBLISH packet at QoS 2.
+    /// Sends a PUBLISH packet to the server at QoS 2.
     ///
-    /// QoS 2 publishing is not yet implemented. Use [`Self::publish_qos0`] or
-    /// [`Self::publish_qos1`] in applications.
-    ///
-    /// # Panics
-    ///
-    /// The future returned by this method always panics without submitting a PUBLISH.
+    /// On success, the operation has been submitted to the client and a completion token is
+    /// returned. Awaiting the token returns the server's [`crate::packet::PubRec`] and, when the
+    /// server accepts the PUBLISH, a [`crate::client::token::acknowledgement::PubRelToken`].
     pub async fn publish_qos2(
         &self,
         topic_name: TopicName,
@@ -258,19 +255,18 @@ impl Client {
         retain: bool,
         properties: PublishProperties,
     ) -> Result<PublishQoS2CompletionToken, DetachedError> {
-        // let (notifier, token) = completion_pair();
-        // self.pub_qos12_tx
-        //     .send(PublishRequestQoS1QoS2::PublishQoS2(
-        //         notifier,
-        //         topic_name.into_inner().into(),
-        //         payload,
-        //         retain,
-        //         properties.into(),
-        //     ))
-        //     .await
-        //     .map_err(|_| DetachedError {})?;
-        // Ok(PublishQoS2CompletionToken(token))
-        unimplemented!()
+        let (notifier, token) = completion_pair();
+        self.pub_qos12_tx
+            .send(PublishRequestQoS1QoS2::PublishQoS2(
+                notifier,
+                topic_name.into_inner().into(),
+                payload,
+                retain,
+                properties.into(),
+            ))
+            .await
+            .map_err(|_| DetachedError {})?;
+        Ok(PublishQoS2CompletionToken(token))
     }
 
     /// Send a SUBSCRIBE packet to the server.
@@ -280,10 +276,6 @@ impl Client {
     /// [`crate::packet::SubAck::as_result`] to check its MQTT reason code. This API submits one
     /// topic filter per operation.
     ///
-    /// # Panics
-    ///
-    /// The future returned by this method panics without submitting a SUBSCRIBE if `max_qos` is
-    /// [`QoS::ExactlyOnce`], because QoS 2 receiving is not yet supported.
     pub async fn subscribe(
         &self,
         topic_filter: TopicFilter,
@@ -292,10 +284,6 @@ impl Client {
         retain_options: RetainOptions,
         properties: SubscribeProperties,
     ) -> Result<SubscribeCompletionToken, DetachedError> {
-        if max_qos == QoS::ExactlyOnce {
-            unimplemented!("QoS 2 subscriptions are not yet supported");
-        }
-
         let (notifier, token) = completion_pair();
 
         let options = mqtt_proto::SubscribeOptions {
@@ -351,8 +339,8 @@ pub struct Receiver {
 impl Receiver {
     /// Receives an incoming [`Publish`] and its [`ManualAcknowledgement`] control.
     ///
-    /// Ignoring the acknowledgement drops its control value. For QoS 1, this attempts to accept
-    /// the publish with default PUBACK properties. Bind it instead to control acknowledgement
+    /// Ignoring the acknowledgement drops its control value. For QoS 1 and QoS 2, this attempts
+    /// the successful default acknowledgement flow. Bind it instead to control acknowledgement
     /// timing, properties, or outcome.
     ///
     /// Returning `None` indicates that the corresponding [`ConnectHandle`],
@@ -372,14 +360,15 @@ impl Receiver {
     /// ```
     ///
     /// To control acknowledgements explicitly, match on [`ManualAcknowledgement`]. QoS 0 requires
-    /// no acknowledgement, while QoS 1 provides a token for accepting or rejecting the publish.
-    /// Receiving at QoS 2 is not yet supported.
+    /// no acknowledgement, while QoS 1 and QoS 2 provide controls for their packet exchanges.
     ///
     /// ```no_run
     /// use std::error::Error;
     ///
     /// use ms_mqtt_client::client::{ManualAcknowledgement, Receiver};
-    /// use ms_mqtt_client::packet::PubAckProperties;
+    /// use ms_mqtt_client::packet::{
+    ///     PubAckProperties, PubCompProperties, PubRecProperties,
+    /// };
     ///
     /// async fn receive(mut receiver: Receiver) -> Result<(), Box<dyn Error>> {
     ///     while let Some((publish, manual_ack)) = receiver.recv().await {
@@ -388,11 +377,16 @@ impl Receiver {
     ///         match manual_ack {
     ///             ManualAcknowledgement::QoS0 => {}
     ///             ManualAcknowledgement::QoS1(token) => {
-    ///                 let completion = token.accept(PubAckProperties::default()).await?;
-    ///                 completion.await?; // Observe release for transmission.
+    ///                 let ct = token.accept(PubAckProperties::default()).await?;
+    ///                 ct.await?; // Observe release for transmission.
     ///             }
-    ///             ManualAcknowledgement::QoS2(_) => {
-    ///                 // Receiving at QoS 2 is not yet supported.
+    ///             ManualAcknowledgement::QoS2(token) => {
+    ///                 let ct = token.accept(PubRecProperties::default()).await?;
+    ///                 let (_, pubcomp_token) = ct.await?;
+    ///                 let ct = pubcomp_token
+    ///                     .confirm(PubCompProperties::default())
+    ///                     .await?;
+    ///                 ct.await?;
     ///             }
     ///         }
     ///     }
@@ -1026,7 +1020,11 @@ impl Connection {
     #[doc(alias = "event_loop")]
     #[doc(alias = "connection_driver")]
     pub async fn run_until_disconnect(mut self) -> (ConnectHandle, DisconnectedEvent) {
-        let event = match self.run_until_disconnect_inner().await {
+        let result = self.run_until_disconnect_inner().await;
+        if let Err(err) = &result {
+            self.session.transport_disconnect(err);
+        }
+        let event = match result {
             Ok(InnerDisconnect::Application) => DisconnectedEvent::ApplicationDisconnect,
             Ok(InnerDisconnect::Server(disconnect)) => {
                 DisconnectedEvent::ServerDisconnect(disconnect)
@@ -1122,6 +1120,14 @@ impl Connection {
                         .session
                         .complete_inflight(CompletedOperation::PublishQoS2(pubrec))?,
 
+                    Packet::PubRel(pubrel) => self
+                        .session
+                        .complete_inflight(CompletedOperation::PubRec(pubrel))?,
+
+                    Packet::PubComp(pubcomp) => self
+                        .session
+                        .complete_inflight(CompletedOperation::PubRel(pubcomp))?,
+
                     Packet::Disconnect(disconnect) => {
                         self.session.server_disconnect(&disconnect);
                         return Ok(InnerDisconnect::Server(disconnect.into()));
@@ -1136,15 +1142,11 @@ impl Connection {
 
                     packet => {
                         let err = ProtocolError::from(ProtocolErrorRepr::UnexpectedPacket).into();
-                        self.session.transport_disconnect(&err);
                         return Err(err);
                     }
                 },
 
-                future::Either::Right(Err(err)) => {
-                    self.session.transport_disconnect(&err);
-                    return Err(err);
-                }
+                future::Either::Right(Err(err)) => return Err(err),
             }
         }
     }
@@ -1311,8 +1313,8 @@ enum InnerDisconnect {
 
 /// Acknowledgement control associated with an incoming [`Publish`].
 ///
-/// Dropping this value also drops any contained token. For QoS 1, that attempts to accept the
-/// publish with default PUBACK properties.
+/// Dropping this value also drops any contained token. For QoS 1 and QoS 2, that attempts the
+/// successful default acknowledgement transition for the current protocol phase.
 // TODO: Rename to `ManualAcknowledgment` with the next set of breaking changes.
 #[doc(alias = "ManualAcknowledgment")]
 pub enum ManualAcknowledgement {
@@ -1320,7 +1322,7 @@ pub enum ManualAcknowledgement {
     QoS0,
     /// Controls accepting or rejecting an incoming QoS 1 PUBLISH.
     QoS1(PubAckToken),
-    /// Reserved acknowledgement control for QoS 2, which is not yet supported.
+    /// Controls accepting or rejecting an incoming QoS 2 PUBLISH.
     QoS2(PubRecToken),
 }
 

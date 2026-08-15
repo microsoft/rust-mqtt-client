@@ -3,10 +3,9 @@
 
 //! Controls for acknowledging incoming MQTT packet flows.
 //!
-//! Acknowledgement tokens are protocol controls, not passive completion observers. For the
-//! supported QoS 1 flow, dropping an unused [`PubAckToken`] attempts to submit a successful PUBACK
-//! with default properties so acknowledgement ordering can continue. Retain the token to choose
-//! when to acknowledge, reject the publish, or supply acknowledgement properties.
+//! Acknowledgement tokens are protocol controls, not passive completion observers. Dropping an
+//! unused token attempts to submit the successful default response for its protocol phase so the
+//! exchange can continue. Retain the token to control timing, rejection, or packet properties.
 //!
 //! On success, [`PubAckToken::accept`] and [`PubAckToken::reject`] have submitted the selected
 //! PUBACK to the MQTT session and return a completion token. These methods take ownership of the
@@ -17,9 +16,8 @@
 //! transmission after any required ordering. Dropping the completion token does not undo the
 //! submitted acknowledgement.
 //!
-//! QoS 2 acknowledgement token types reserve the intended APIs, but their methods and drop
-//! behavior are not implemented because end-to-end QoS 2 publishing and receiving are not yet
-//! supported.
+//! QoS 1 tokens are connection-scoped. QoS 2 tokens are MQTT-session-scoped and remain valid
+//! across a reconnect only when the server reports that the previous session is present.
 
 use bytes::Bytes;
 
@@ -95,8 +93,6 @@ impl PubAckToken {
 /// submit different properties or reject the publish, use [`Self::accept`] or [`Self::reject`].
 /// These methods take ownership of the token. Canceling an in-progress call drops the token, so
 /// the same default behavior applies.
-///
-/// Receiving at QoS 2 is not yet supported.
 #[derive(Debug)]
 pub struct PubRecToken(pub(crate) buffered::PubRecToken<Bytes>);
 
@@ -109,7 +105,8 @@ impl PubRecToken {
     /// returned; this does not mean the packet has been written to the transport. Awaiting the
     /// completion token returns the server's [`crate::packet::PubRel`] and its [`PubCompToken`].
     ///
-    /// Can only be successfully used during the same session epoch on which it was received.
+    /// Can only be successfully used during the same MQTT session generation in which it was
+    /// received.
     ///
     /// # Cancellation
     ///
@@ -134,7 +131,8 @@ impl PubRecToken {
     /// completion token reports when the session releases the PUBREC for transmission after any
     /// required ordering.
     ///
-    /// Can only be successfully used during the same session epoch on which it was received.
+    /// Can only be successfully used during the same MQTT session generation in which it was
+    /// received.
     ///
     /// # Cancellation
     ///
@@ -154,8 +152,6 @@ impl PubRecToken {
 /// Dropping an unused token attempts confirmation with default PUBREL properties. To supply
 /// different properties, use [`Self::confirm`]. This method takes ownership of the token.
 /// Canceling an in-progress call drops the token, so the same default behavior applies.
-///
-/// QoS 2 publishing is not yet supported end to end.
 #[derive(Debug)]
 pub struct PubRelToken(pub(crate) buffered::PubRelToken<Bytes>);
 
@@ -168,7 +164,8 @@ impl PubRelToken {
     /// returned; this does not mean the packet has been written to the transport. Awaiting the
     /// completion token returns the server's [`crate::packet::PubComp`].
     ///
-    /// Can only be successfully used during the same session epoch on which it was received.
+    /// Can only be successfully used during the same MQTT session generation in which it was
+    /// received.
     ///
     /// # Cancellation
     ///
@@ -190,8 +187,6 @@ impl PubRelToken {
 /// Dropping an unused token attempts confirmation with default PUBCOMP properties. To supply
 /// different properties, use [`Self::confirm`]. This method takes ownership of the token.
 /// Canceling an in-progress call drops the token, so the same default behavior applies.
-///
-/// Receiving at QoS 2 is not yet supported.
 #[derive(Debug)]
 pub struct PubCompToken(pub(crate) buffered::PubCompToken<Bytes>);
 
@@ -204,7 +199,8 @@ impl PubCompToken {
     /// returned; this does not mean the packet has been written to the transport. Awaiting the
     /// completion token reports when the session releases the PUBCOMP for transmission.
     ///
-    /// Can only be successfully used during the same session epoch on which it was received.
+    /// Can only be successfully used during the same MQTT session generation in which it was
+    /// received.
     ///
     /// # Cancellation
     ///
@@ -230,8 +226,9 @@ pub(crate) mod buffered {
     };
     use crate::error::DetachedError;
     use crate::mqtt_proto::{
-        PacketIdentifier, PubAck, PubAckOtherProperties, PubAckReasonCode, PubCompOtherProperties,
-        PubRecOtherProperties, PubRecReasonCode, PubRelOtherProperties,
+        PacketIdentifier, PubAck, PubAckOtherProperties, PubAckReasonCode, PubComp,
+        PubCompOtherProperties, PubCompReasonCode, PubRec, PubRecOtherProperties, PubRecReasonCode,
+        PubRel, PubRelOtherProperties, PubRelReasonCode,
     };
 
     /// Used to accept or reject an incoming QoS 1 PUBLISH with PUBACK.
@@ -319,10 +316,9 @@ pub(crate) mod buffered {
             properties: PubAckOtherProperties<S>,
             reason: PubAckReasonCode,
         ) -> Result<PubAckCompletionToken, DetachedError> {
-            let completion =
-                PubAckToken::inner_send(&self.tx, self.pkid, properties, reason, self.epoch)?;
+            let ct = PubAckToken::inner_send(&self.tx, self.pkid, properties, reason, self.epoch)?;
             self.triggered = true;
-            Ok(completion)
+            Ok(ct)
         }
 
         /// Internal helper to send the acknowledgement request.
@@ -374,6 +370,7 @@ pub(crate) mod buffered {
         S: Shared,
     {
         pkid: PacketIdentifier,
+        generation: u64,
         tx: UnboundedSender<AcknowledgementRequest<S>>,
         triggered: bool,
     }
@@ -384,10 +381,12 @@ pub(crate) mod buffered {
     {
         pub(crate) fn new(
             pkid: PacketIdentifier,
+            generation: u64,
             tx: UnboundedSender<AcknowledgementRequest<S>>,
         ) -> Self {
             Self {
                 pkid,
+                generation,
                 tx,
                 triggered: false,
             }
@@ -401,7 +400,8 @@ pub(crate) mod buffered {
         /// returned; this does not mean the packet has been written to the transport. Awaiting the
         /// completion token returns the server's PUBREL and its [`PubCompToken`].
         ///
-        /// Can only be successfully used during the same session epoch on which it was received.
+        /// Can only be successfully used during the same MQTT session generation in which it was
+        /// received.
         ///
         /// # Cancellation
         ///
@@ -411,7 +411,7 @@ pub(crate) mod buffered {
             self,
             properties: PubRecOtherProperties<S>,
         ) -> Result<PubRecAcceptCompletionToken<S>, DetachedError> {
-            unimplemented!()
+            self.send_accept(properties).await
         }
 
         /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
@@ -423,7 +423,8 @@ pub(crate) mod buffered {
         /// completion token reports when the session releases the PUBREC for transmission after
         /// any required ordering.
         ///
-        /// Can only be successfully used during the same session epoch on which it was received.
+        /// Can only be successfully used during the same MQTT session generation in which it was
+        /// received.
         ///
         /// # Cancellation
         ///
@@ -434,7 +435,57 @@ pub(crate) mod buffered {
             reason: PubRecReasonCode,
             properties: PubRecOtherProperties<S>,
         ) -> Result<PubRecRejectCompletionToken, DetachedError> {
-            unimplemented!()
+            self.send_reject(reason, properties).await
+        }
+
+        async fn send_accept(
+            mut self,
+            properties: PubRecOtherProperties<S>,
+        ) -> Result<PubRecAcceptCompletionToken<S>, DetachedError> {
+            let ct = Self::inner_accept(&self.tx, self.pkid, properties, self.generation)?;
+            self.triggered = true;
+            Ok(ct)
+        }
+
+        fn inner_accept(
+            tx: &UnboundedSender<AcknowledgementRequest<S>>,
+            packet_identifier: PacketIdentifier,
+            other_properties: PubRecOtherProperties<S>,
+            generation: u64,
+        ) -> Result<PubRecAcceptCompletionToken<S>, DetachedError> {
+            let (notifier, token) = completion_pair();
+            let pubrec = PubRec {
+                packet_identifier,
+                reason_code: PubRecReasonCode::Success,
+                other_properties,
+            };
+            tx.send(AcknowledgementRequest::PubRecAccept(
+                notifier, pubrec, generation,
+            ))
+            .map_err(|_| DetachedError {})?;
+            Ok(PubRecAcceptCompletionToken(token))
+        }
+
+        async fn send_reject(
+            mut self,
+            reason_code: PubRecReasonCode,
+            other_properties: PubRecOtherProperties<S>,
+        ) -> Result<PubRecRejectCompletionToken, DetachedError> {
+            let (notifier, token) = completion_pair();
+            let pubrec = PubRec {
+                packet_identifier: self.pkid,
+                reason_code,
+                other_properties,
+            };
+            self.tx
+                .send(AcknowledgementRequest::PubRecReject(
+                    notifier,
+                    pubrec,
+                    self.generation,
+                ))
+                .map_err(|_| DetachedError {})?;
+            self.triggered = true;
+            Ok(PubRecRejectCompletionToken(token))
         }
     }
 
@@ -443,8 +494,10 @@ pub(crate) mod buffered {
         S: Shared,
     {
         fn drop(&mut self) {
-            // Must accept
-            unimplemented!()
+            if !self.triggered {
+                let _ =
+                    Self::inner_accept(&self.tx, self.pkid, Default::default(), self.generation);
+            }
         }
     }
 
@@ -457,6 +510,7 @@ pub(crate) mod buffered {
         S: Shared,
     {
         pkid: PacketIdentifier,
+        generation: u64,
         tx: UnboundedSender<AcknowledgementRequest<S>>,
         triggered: bool,
     }
@@ -467,10 +521,12 @@ pub(crate) mod buffered {
     {
         pub(crate) fn new(
             pkid: PacketIdentifier,
+            generation: u64,
             tx: UnboundedSender<AcknowledgementRequest<S>>,
         ) -> Self {
             Self {
                 pkid,
+                generation,
                 tx,
                 triggered: false,
             }
@@ -484,7 +540,8 @@ pub(crate) mod buffered {
         /// returned; this does not mean the packet has been written to the transport. Awaiting the
         /// completion token returns the server's PUBCOMP.
         ///
-        /// Can only be successfully used during the same session epoch on which it was received.
+        /// Can only be successfully used during the same MQTT session generation in which it was
+        /// received.
         ///
         /// # Cancellation
         ///
@@ -494,7 +551,33 @@ pub(crate) mod buffered {
             self,
             properties: PubRelOtherProperties<S>,
         ) -> Result<PubRelConfirmCompletionToken<S>, DetachedError> {
-            unimplemented!()
+            self.send(properties).await
+        }
+
+        async fn send(
+            mut self,
+            properties: PubRelOtherProperties<S>,
+        ) -> Result<PubRelConfirmCompletionToken<S>, DetachedError> {
+            let ct = Self::inner_send(&self.tx, self.pkid, properties, self.generation)?;
+            self.triggered = true;
+            Ok(ct)
+        }
+
+        fn inner_send(
+            tx: &UnboundedSender<AcknowledgementRequest<S>>,
+            packet_identifier: PacketIdentifier,
+            other_properties: PubRelOtherProperties<S>,
+            generation: u64,
+        ) -> Result<PubRelConfirmCompletionToken<S>, DetachedError> {
+            let (notifier, token) = completion_pair();
+            let pubrel = PubRel {
+                packet_identifier,
+                reason_code: PubRelReasonCode::Success,
+                other_properties,
+            };
+            tx.send(AcknowledgementRequest::PubRel(notifier, pubrel, generation))
+                .map_err(|_| DetachedError {})?;
+            Ok(PubRelConfirmCompletionToken(token))
         }
     }
 
@@ -503,8 +586,9 @@ pub(crate) mod buffered {
         S: Shared,
     {
         fn drop(&mut self) {
-            // Must confirm
-            unimplemented!()
+            if !self.triggered {
+                let _ = Self::inner_send(&self.tx, self.pkid, Default::default(), self.generation);
+            }
         }
     }
 
@@ -517,6 +601,7 @@ pub(crate) mod buffered {
         S: Shared,
     {
         pkid: PacketIdentifier,
+        generation: u64,
         tx: UnboundedSender<AcknowledgementRequest<S>>,
         triggered: bool,
     }
@@ -527,10 +612,12 @@ pub(crate) mod buffered {
     {
         pub(crate) fn new(
             pkid: PacketIdentifier,
+            generation: u64,
             tx: UnboundedSender<AcknowledgementRequest<S>>,
         ) -> Self {
             Self {
                 pkid,
+                generation,
                 tx,
                 triggered: false,
             }
@@ -544,7 +631,8 @@ pub(crate) mod buffered {
         /// is returned; this does not mean the packet has been written to the transport. Awaiting
         /// the completion token reports when the session releases the PUBCOMP for transmission.
         ///
-        /// Can only be successfully used during the same session epoch on which it was received.
+        /// Can only be successfully used during the same MQTT session generation in which it was
+        /// received.
         ///
         /// # Cancellation
         ///
@@ -554,7 +642,35 @@ pub(crate) mod buffered {
             self,
             properties: PubCompOtherProperties<S>,
         ) -> Result<PubCompConfirmCompletionToken, DetachedError> {
-            unimplemented!()
+            self.send(properties).await
+        }
+
+        async fn send(
+            mut self,
+            properties: PubCompOtherProperties<S>,
+        ) -> Result<PubCompConfirmCompletionToken, DetachedError> {
+            let ct = Self::inner_send(&self.tx, self.pkid, properties, self.generation)?;
+            self.triggered = true;
+            Ok(ct)
+        }
+
+        fn inner_send(
+            tx: &UnboundedSender<AcknowledgementRequest<S>>,
+            packet_identifier: PacketIdentifier,
+            other_properties: PubCompOtherProperties<S>,
+            generation: u64,
+        ) -> Result<PubCompConfirmCompletionToken, DetachedError> {
+            let (notifier, token) = completion_pair();
+            let pubcomp = PubComp {
+                packet_identifier,
+                reason_code: PubCompReasonCode::Success,
+                other_properties,
+            };
+            tx.send(AcknowledgementRequest::PubComp(
+                notifier, pubcomp, generation,
+            ))
+            .map_err(|_| DetachedError {})?;
+            Ok(PubCompConfirmCompletionToken(token))
         }
     }
 
@@ -563,8 +679,9 @@ pub(crate) mod buffered {
         S: Shared,
     {
         fn drop(&mut self) {
-            // Must confirm
-            unimplemented!()
+            if !self.triggered {
+                let _ = Self::inner_send(&self.tx, self.pkid, Default::default(), self.generation);
+            }
         }
     }
 }
@@ -614,7 +731,7 @@ mod test {
             ],
         };
         let token = PubAckToken::new(pkid, epoch, tx);
-        let completion_token = token.accept(properties.clone()).await.unwrap();
+        let ct = token.accept(properties.clone()).await.unwrap();
         if let Some(AcknowledgementRequest::PubAck(notifier, puback, req_epoch)) = rx.recv().await {
             // The correct data was sent in the acknowledgement request
             assert_eq!(req_epoch, epoch);
@@ -624,7 +741,7 @@ mod test {
             // Using the acknowledgement request notifier completes the completion token that was returned
             let completion_value = ();
             notifier.complete(completion_value).unwrap();
-            assert_eq!(completion_token.await, Ok(completion_value));
+            assert_eq!(ct.await, Ok(completion_value));
         } else {
             panic!("Did not receive PubAck acknowledgement request");
         }
@@ -643,7 +760,7 @@ mod test {
             ],
         };
         let token = PubAckToken::new(pkid, epoch, tx);
-        let completion_token = token
+        let ct = token
             .reject(PubAckReasonCode::NotAuthorized, properties.clone())
             .await
             .unwrap();
@@ -655,7 +772,7 @@ mod test {
             // Using the acknowledgement request notifier completes the completion token that was returned
             let completion_value = ();
             notifier.complete(completion_value).unwrap();
-            assert_eq!(completion_token.await, Ok(completion_value));
+            assert_eq!(ct.await, Ok(completion_value));
         } else {
             panic!("Did not receive PubAck acknowledgement request");
         }
@@ -734,7 +851,7 @@ mod test {
         };
         let token = PubAckToken::new(pkid, epoch, tx);
         // Use the token to send an acceptance
-        let completion_token = token.accept(properties.clone()).await.unwrap();
+        let ct = token.accept(properties.clone()).await.unwrap();
         if let Some(AcknowledgementRequest::PubAck(_, puback, req_epoch)) = rx.recv().await {
             assert_eq!(req_epoch, epoch);
             assert_eq!(puback.packet_identifier, pkid);
@@ -746,7 +863,7 @@ mod test {
         // There are currently no other items in the channel
         assert_eq!(rx.len(), 0);
         // Now drop the token
-        drop(completion_token);
+        drop(ct);
         // There should still be no additional items in the channel (i.e. was only accepted once)
         assert_eq!(rx.len(), 0);
     }

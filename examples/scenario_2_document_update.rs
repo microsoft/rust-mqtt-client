@@ -217,7 +217,7 @@ async fn reject_invalid_utf8(
             eprintln!("Rejected {context} with invalid UTF-8: {error}");
         }
         ManualAcknowledgement::QoS2(_) => {
-            unreachable!("QoS 2 receiving is not supported")
+            unreachable!("the subscription requests a maximum of QoS 1")
         }
     }
 

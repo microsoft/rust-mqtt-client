@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -22,7 +22,7 @@ use crate::client::{
     },
     session::pkid::PkidPool,
     timer::Timer,
-    token::acknowledgement::buffered::{PubAckToken, PubCompToken, PubRelToken},
+    token::acknowledgement::buffered::{PubAckToken, PubCompToken, PubRecToken, PubRelToken},
     token::completion::buffered::{
         PubRecAcceptCompletionNotifier, PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
         PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, ReauthCompletionNotifier,
@@ -33,9 +33,9 @@ use crate::client::{
 use crate::error::{ProtocolError, ProtocolErrorRepr};
 use crate::mqtt_proto::{
     Auth, AuthenticateReasonCode, ByteStr, ConnAck, ConnectReasonCode, Disconnect, KeepAlive,
-    Packet, PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec, PubRel,
-    Publish, PublishOtherProperties, SessionExpiryInterval, SubAck, Subscribe, SubscribeTo, Topic,
-    UnsubAck, Unsubscribe,
+    Packet, PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubCompReasonCode,
+    PubRec, PubRel, PubRelReasonCode, Publish, PublishOtherProperties, SessionExpiryInterval,
+    SubAck, Subscribe, SubscribeTo, Topic, UnsubAck, Unsubscribe,
 };
 
 mod pkid;
@@ -52,6 +52,8 @@ where
     /// Queue of outgoing operations that are not yet in-flight
     /// *Technically* not part of an MQTT Session, but it makes sense to keep it here.
     outgoing_queue: VecDeque<OutgoingOperation<O::Shared>>,
+    /// Connection-scoped packets generated internally in response to incoming packets
+    connection_packets: VecDeque<Packet<O::Shared>>,
     /// Tracker of all inflight MQTT packets awaiting a response
     inflight: InflightTracker<O::Shared>,
     /// Tracker of MQTT packets sent to the application, awaiting a response
@@ -60,6 +62,9 @@ where
     connected: ConnectionState<O::Shared>,
     /// Identifier for the current connection epoch
     connection_epoch: u64,
+    /// Identifier for the current MQTT session generation
+    #[allow(clippy::struct_field_names)]
+    session_generation: u64,
     /// Whether the session is transient (i.e. non-persistent, can expire)
     transient: bool,
     /// Timer for tracking when to send the next PINGREQ (based on keep-alive)
@@ -99,11 +104,13 @@ where
             ch,
             pkid_pool: PkidPool::new(max_pkid),
             outgoing_queue: Default::default(),
+            connection_packets: Default::default(),
             inflight: InflightTracker::default(),
             in_application: InApplicationTracker::default(),
             connected: ConnectionState::Disconnected,
             connection_epoch: 0, // move this to the connection state?
-            transient: false,    // move this to the connection state?
+            session_generation: 0,
+            transient: false, // move this to the connection state?
             pingreq_timer: None,
             owned,
         }
@@ -140,6 +147,8 @@ where
                 }
                 other => other,
             }
+        } else if let Some(packet) = self.connection_packets.pop_front() {
+            packet
         }
         // Otherwise get the next outgoing request
         else {
@@ -159,27 +168,28 @@ where
                             Packet::PubAck(puback)
                         }
 
-                        AcknowledgementRequest::PubRecAccept(notifier, pubrec) => {
+                        AcknowledgementRequest::PubRecAccept(notifier, pubrec, _) => {
                             self.inflight
-                                .pubrec
+                                .incoming_pubrec
                                 .insert(pubrec.packet_identifier, (pubrec.clone(), notifier));
                             Packet::PubRec(pubrec)
                         }
 
-                        AcknowledgementRequest::PubRecReject(notifier, pubrec) => {
+                        AcknowledgementRequest::PubRecReject(notifier, pubrec, _) => {
                             // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                             let _ = notifier.complete(());
                             Packet::PubRec(pubrec)
                         }
 
-                        AcknowledgementRequest::PubRel(notifier, pubrel) => {
-                            self.inflight
-                                .pubrel
-                                .insert(pubrel.packet_identifier, (pubrel.clone(), notifier));
+                        AcknowledgementRequest::PubRel(notifier, pubrel, _) => {
+                            self.inflight.outgoing_pubrel.insert(
+                                pubrel.packet_identifier,
+                                OutgoingPubRel::Application(pubrel.clone(), notifier),
+                            );
                             Packet::PubRel(pubrel)
                         }
 
-                        AcknowledgementRequest::PubComp(notifier, pubcomp) => {
+                        AcknowledgementRequest::PubComp(notifier, pubcomp, _) => {
                             // Do not care about result - if the token was dropped, the user is no longer waiting for it.
                             let _ = notifier.complete(());
                             Packet::PubComp(pubcomp)
@@ -262,9 +272,10 @@ where
                                 payload,
                                 other_properties,
                             };
-                            self.inflight
-                                .publish_qos1
-                                .insert(packet_identifier, (publish.clone(), notifier));
+                            self.inflight.publish.insert(
+                                packet_identifier,
+                                OutgoingPublish::QoS1(publish.clone(), notifier),
+                            );
                             publish
                         }
 
@@ -286,9 +297,10 @@ where
                                 payload,
                                 other_properties,
                             };
-                            self.inflight
-                                .publish_qos2
-                                .insert(packet_identifier, (publish.clone(), notifier));
+                            self.inflight.publish.insert(
+                                packet_identifier,
+                                OutgoingPublish::QoS2(publish.clone(), notifier),
+                            );
                             publish
                         }
                     };
@@ -319,60 +331,131 @@ where
         // e.g. acknowledgement requests with ordering requirements may not be ready
         loop {
             // First check the ordering for a pending acknowledgement that is now ready
-            if let Some((_, PendingAcknowledgement::Ready(ack_req))) =
-                self.in_application.publishes.first()
+            if self
+                .in_application
+                .publishes
+                .first()
+                .is_some_and(|(_, publish)| publish.is_ready())
             {
-                if let (_, PendingAcknowledgement::Ready(ack_req)) = self
+                let (_, publish) = self
                     .in_application
                     .publishes
                     .shift_remove_index(0)
-                    .expect("Already checked")
-                {
-                    // Ignore request if its epoch does not match the current connection epoch.
-                    match &ack_req {
-                        AcknowledgementRequest::PubAck(_, _, epoch) => {
-                            if *epoch == self.connection_epoch {
-                                break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
-                            }
-                        }
-                        _ => break OutgoingPacketRequest::AcknowledgementRequest(ack_req),
-                    }
-                }
+                    .expect("already checked");
+                break OutgoingPacketRequest::AcknowledgementRequest(
+                    publish.into_ready().expect("already checked"),
+                );
             }
-            // Otherwise, poll for next outgoing request
-            else {
-                let request = poll_for_outgoing_request(
-                    &mut self.ch,
-                    self.pingreq_timer.as_mut(),
-                    &mut self.pkid_pool,
-                )
-                .await;
+            // PUBREL packets are released in the order their successful PUBRECs were received.
+            else if self
+                .inflight
+                .outgoing_pubrel_pending
+                .first()
+                .is_some_and(|(_, pending)| pending.is_ready())
+            {
+                let (_, pending) = self
+                    .inflight
+                    .outgoing_pubrel_pending
+                    .shift_remove_index(0)
+                    .expect("already checked");
+                break OutgoingPacketRequest::AcknowledgementRequest(
+                    pending.into_ready().expect("already checked"),
+                );
+            }
 
-                // Route acknowledgements with ordering requirements through the in_application
-                // tracker. PUBCOMP has no ordering requirement and can be returned immediately.
-                if let OutgoingPacketRequest::AcknowledgementRequest(ack_req) = request {
-                    let pkid = match &ack_req {
-                        AcknowledgementRequest::PubAck(_, puback, _) => puback.packet_identifier,
-                        AcknowledgementRequest::PubRecAccept(_, pubrec)
-                        | AcknowledgementRequest::PubRecReject(_, pubrec) => {
-                            pubrec.packet_identifier
-                        }
-                        AcknowledgementRequest::PubRel(_, pubrel) => pubrel.packet_identifier,
-                        AcknowledgementRequest::PubComp(_, _) => {
-                            break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
-                        }
-                    };
-                    let pending = self
-                        .in_application
-                        .publishes
-                        .get_mut(&pkid)
-                        .expect("application forged an AcknowledgementRequest for a PUBLISH that we didn't give it");
-                    *pending = PendingAcknowledgement::Ready(ack_req);
+            // Otherwise, poll for the next request and route acknowledgements through their
+            // protocol-specific ordering state.
+            let request = poll_for_outgoing_request(
+                &mut self.ch,
+                self.pingreq_timer.as_mut(),
+                &mut self.pkid_pool,
+            )
+            .await;
+            if let OutgoingPacketRequest::AcknowledgementRequest(ack_req) = request {
+                if let Some(ack_req) = self.route_acknowledgement(ack_req) {
+                    break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
                 }
-                // For all other request types, return them as-is
-                else {
-                    break request;
-                }
+            } else {
+                break request;
+            }
+        }
+    }
+
+    fn route_acknowledgement(
+        &mut self,
+        ack_req: AcknowledgementRequest<O::Shared>,
+    ) -> Option<AcknowledgementRequest<O::Shared>> {
+        let valid = match &ack_req {
+            AcknowledgementRequest::PubAck(_, puback, epoch) => {
+                *epoch == self.connection_epoch
+                    && matches!(
+                        self.in_application.publishes.get(&puback.packet_identifier),
+                        Some(IncomingPublishState::QoS1(PendingAcknowledgement::NotReady))
+                    )
+            }
+            AcknowledgementRequest::PubRecAccept(_, pubrec, generation)
+            | AcknowledgementRequest::PubRecReject(_, pubrec, generation) => {
+                *generation == self.session_generation
+                    && matches!(
+                        self.in_application.publishes.get(&pubrec.packet_identifier),
+                        Some(IncomingPublishState::QoS2(PendingAcknowledgement::NotReady))
+                    )
+            }
+            AcknowledgementRequest::PubRel(_, pubrel, generation) => {
+                *generation == self.session_generation
+                    && matches!(
+                        self.inflight
+                            .outgoing_pubrel_pending
+                            .get(&pubrel.packet_identifier),
+                        Some(PendingPubRel::AwaitingApplication)
+                    )
+            }
+            AcknowledgementRequest::PubComp(_, pubcomp, generation) => {
+                *generation == self.session_generation
+                    && self
+                        .inflight
+                        .incoming_pubcomp
+                        .contains(&pubcomp.packet_identifier)
+            }
+        };
+
+        if !valid {
+            cancel_acknowledgement(ack_req, "Acknowledgement token is no longer valid");
+            return None;
+        }
+
+        let packet_identifier = match &ack_req {
+            AcknowledgementRequest::PubAck(_, packet, _) => packet.packet_identifier,
+            AcknowledgementRequest::PubRecAccept(_, packet, _)
+            | AcknowledgementRequest::PubRecReject(_, packet, _) => packet.packet_identifier,
+            AcknowledgementRequest::PubRel(_, packet, _) => packet.packet_identifier,
+            AcknowledgementRequest::PubComp(_, packet, _) => packet.packet_identifier,
+        };
+
+        match ack_req {
+            ack_req @ (AcknowledgementRequest::PubAck(_, _, _)
+            | AcknowledgementRequest::PubRecAccept(_, _, _)
+            | AcknowledgementRequest::PubRecReject(_, _, _)) => {
+                let pending = self
+                    .in_application
+                    .publishes
+                    .get_mut(&packet_identifier)
+                    .expect("validated above");
+                pending.set_ready(ack_req);
+                None
+            }
+            ack_req @ AcknowledgementRequest::PubRel(_, _, _) => {
+                let pending = self
+                    .inflight
+                    .outgoing_pubrel_pending
+                    .get_mut(&packet_identifier)
+                    .expect("validated above");
+                *pending = PendingPubRel::Ready(ack_req);
+                None
+            }
+            ack_req @ AcknowledgementRequest::PubComp(_, _, _) => {
+                self.inflight.incoming_pubcomp.remove(&packet_identifier);
+                Some(ack_req)
             }
         }
     }
@@ -405,57 +488,116 @@ where
                 _ = notifier.complete(unsuback);
             }
             CompletedOperation::PublishQoS1(puback) => {
-                self.pkid_pool.release_pkid(puback.packet_identifier);
-                let Some((_, notifier)) = self
+                if !matches!(
+                    self.inflight.publish.get(&puback.packet_identifier),
+                    Some(OutgoingPublish::QoS1(_, _))
+                ) {
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
+                }
+                let Some(OutgoingPublish::QoS1(_, notifier)) = self
                     .inflight
-                    .publish_qos1
+                    .publish
                     .shift_remove(&puback.packet_identifier)
                 else {
-                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
+                    unreachable!("PUBLISH variant was validated above");
                 };
+                self.pkid_pool.release_pkid(puback.packet_identifier);
                 _ = notifier.complete(puback);
             }
             CompletedOperation::PublishQoS2(pubrec) => {
+                let packet_identifier = pubrec.packet_identifier;
+                if matches!(
+                    self.inflight.publish.get(&packet_identifier),
+                    Some(OutgoingPublish::QoS1(_, _))
+                ) {
+                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
+                }
+                let Some(publish) = self.inflight.publish.shift_remove(&packet_identifier) else {
+                    if self
+                        .inflight
+                        .outgoing_pubrel_pending
+                        .contains_key(&packet_identifier)
+                    {
+                        return Ok(());
+                    }
+
+                    if let Some(pubrel) = self
+                        .inflight
+                        .outgoing_pubrel
+                        .get(&packet_identifier)
+                        .map(OutgoingPubRel::packet)
+                    {
+                        self.connection_packets
+                            .push_back(Packet::PubRel(pubrel.clone()));
+                        return Ok(());
+                    }
+
+                    let recovery = PubRel {
+                        packet_identifier,
+                        reason_code: PubRelReasonCode::PacketIdentifierNotFound,
+                        other_properties: Default::default(),
+                    };
+                    self.inflight.outgoing_pubrel.insert(
+                        packet_identifier,
+                        OutgoingPubRel::Recovery(recovery.clone()),
+                    );
+                    self.connection_packets.push_back(Packet::PubRel(recovery));
+                    return Ok(());
+                };
+                let OutgoingPublish::QoS2(_, notifier) = publish else {
+                    unreachable!("PUBLISH variant was validated above");
+                };
+
                 let token = if pubrec.reason_code.is_success() {
-                    // Pubrec accept token
+                    self.inflight
+                        .outgoing_pubrel_pending
+                        .insert(packet_identifier, PendingPubRel::AwaitingApplication);
                     Some(PubRelToken::new(
-                        pubrec.packet_identifier,
+                        packet_identifier,
+                        self.session_generation,
                         self.ch.ack_tx.clone(),
                     ))
                 } else {
-                    // Release pkid because there will be no pubrel/pubcomp exchange
-                    self.pkid_pool.release_pkid(pubrec.packet_identifier);
-                    // No token
+                    self.pkid_pool.release_pkid(packet_identifier);
                     None
                 };
-                let Some((_, notifier)) = self
-                    .inflight
-                    .publish_qos2
-                    .shift_remove(&pubrec.packet_identifier)
-                else {
-                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
-                };
-
                 _ = notifier.complete((pubrec, token));
             }
             CompletedOperation::PubRec(pubrel) => {
-                let Some((_, notifier)) = self.inflight.pubrec.remove(&pubrel.packet_identifier)
-                else {
-                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
-                };
-                let token = PubCompToken::new(pubrel.packet_identifier, self.ch.ack_tx.clone());
-                _ = notifier.complete((pubrel, token));
+                let packet_identifier = pubrel.packet_identifier;
+                if let Some((_, notifier)) =
+                    self.inflight.incoming_pubrec.remove(&packet_identifier)
+                {
+                    self.inflight.incoming_pubcomp.insert(packet_identifier);
+                    let token = PubCompToken::new(
+                        packet_identifier,
+                        self.session_generation,
+                        self.ch.ack_tx.clone(),
+                    );
+                    _ = notifier.complete((pubrel, token));
+                } else if !self.inflight.incoming_pubcomp.contains(&packet_identifier) {
+                    self.connection_packets.push_back(Packet::PubComp(PubComp {
+                        packet_identifier,
+                        reason_code: PubCompReasonCode::PacketIdentifierNotFound,
+                        other_properties: Default::default(),
+                    }));
+                }
             }
             CompletedOperation::PubRel(pubcomp) => {
-                self.pkid_pool.release_pkid(pubcomp.packet_identifier);
-                let Some((_, notifier)) = self
+                let Some(pubrel) = self
                     .inflight
-                    .pubrel
+                    .outgoing_pubrel
                     .shift_remove(&pubcomp.packet_identifier)
                 else {
                     return Err(ProtocolErrorRepr::UnexpectedPacket)?;
                 };
-                _ = notifier.complete(pubcomp);
+                match pubrel {
+                    OutgoingPubRel::Application(_, notifier) => {
+                        self.pkid_pool.release_pkid(pubcomp.packet_identifier);
+                        _ = notifier.complete(pubcomp);
+                    }
+                    OutgoingPubRel::Recovery(_) => {}
+                }
             }
         }
         Ok(())
@@ -545,39 +687,62 @@ where
     /// An incoming PUBLISH packet has been received from the server
     pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
         let incoming = match publish.packet_identifier_dup_qos {
-            PacketIdentifierDupQoS::AtMostOnce => IncomingPublishAndToken::QoS0(publish),
+            PacketIdentifierDupQoS::AtMostOnce => Some(IncomingPublishAndToken::QoS0(publish)),
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
-                let r = self
-                    .in_application
-                    .publishes
-                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
+                let r = self.in_application.publishes.insert(
+                    packet_identifier,
+                    IncomingPublishState::QoS1(PendingAcknowledgement::NotReady),
+                );
                 // TODO: How to handle if the pkid already exists? What should the error
                 // story / experience be precisely?
                 assert!(
                     r.is_none(),
                     "TODO: Handle the case where pkid already exists"
                 );
-                IncomingPublishAndToken::QoS1(
+                Some(IncomingPublishAndToken::QoS1(
                     publish,
                     PubAckToken::new(
                         packet_identifier,
                         self.connection_epoch,
                         self.ch.ack_tx.clone(),
                     ),
-                )
+                ))
             }
             PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
-                self.in_application
+                if let Some((pubrec, _)) = self.inflight.incoming_pubrec.get(&packet_identifier) {
+                    self.connection_packets
+                        .push_back(Packet::PubRec(pubrec.clone()));
+                    None
+                } else if self
+                    .in_application
                     .publishes
-                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
-                todo!()
+                    .contains_key(&packet_identifier)
+                    || self.inflight.incoming_pubcomp.contains(&packet_identifier)
+                {
+                    None
+                } else {
+                    self.in_application.publishes.insert(
+                        packet_identifier,
+                        IncomingPublishState::QoS2(PendingAcknowledgement::NotReady),
+                    );
+                    Some(IncomingPublishAndToken::QoS2(
+                        publish,
+                        PubRecToken::new(
+                            packet_identifier,
+                            self.session_generation,
+                            self.ch.ack_tx.clone(),
+                        ),
+                    ))
+                }
             }
         };
 
         // Ignore error from sending to incoming PUBLISH receiver.
         // If there is an error, it's because the application dropped the incoming PUBLISH receiver,
         // in which case `incoming` will be dropped here and will auto-ack it via dropping the ack token.
-        _ = self.ch.i_pub_tx.send(incoming);
+        if let Some(incoming) = incoming {
+            _ = self.ch.i_pub_tx.send(incoming);
+        }
     }
 
     /// An incoming AUTH packet has been received from the server
@@ -621,6 +786,7 @@ where
 
         self.connected = ConnectionState::Disconnected;
         self.pingreq_timer = None;
+        self.connection_packets.clear();
         // Remove and cancel all in-flight SUBSCRIBEs
         for (pkid, notifier) in self.inflight.subscribe.drain() {
             let _ = notifier.cancel("Client disconnected");
@@ -637,25 +803,34 @@ where
             .take()
             .map(|n| n.cancel("Client disconnected"));
 
+        // Incoming QoS 1 acknowledgement controls are connection-scoped. QoS 2 controls belong
+        // to the MQTT session and remain valid if the server resumes that session.
+        let mut retained = IndexMap::new();
+        for (packet_identifier, publish) in std::mem::take(&mut self.in_application.publishes) {
+            match publish {
+                IncomingPublishState::QoS1(pending) => {
+                    pending.cancel("Client disconnected");
+                }
+                publish @ IncomingPublishState::QoS2(_) => {
+                    retained.insert(packet_identifier, publish);
+                }
+            }
+        }
+        self.in_application.publishes = retained;
+
         // Build list of packets to replay
         self.inflight.packets_to_replay.clear();
-        for (pubrel, _) in self.inflight.pubrel.values() {
+        for pubrel in self
+            .inflight
+            .outgoing_pubrel
+            .values()
+            .map(OutgoingPubRel::packet)
+        {
             self.inflight
                 .packets_to_replay
                 .push_back(Packet::PubRel(pubrel.clone()));
         }
-        for publish in self
-            .inflight
-            .publish_qos1
-            .values()
-            .map(|(publish, _)| publish)
-            .chain(
-                self.inflight
-                    .publish_qos2
-                    .values()
-                    .map(|(publish, _)| publish),
-            )
-        {
+        for publish in self.inflight.publish.values().map(OutgoingPublish::packet) {
             let mut publish = publish.clone();
             if let PacketIdentifierDupQoS::AtLeastOnce(_, dup)
             | PacketIdentifierDupQoS::ExactlyOnce(_, dup) =
@@ -675,31 +850,41 @@ where
     /// 2. The client closed the connect via a DISCONNECT with session expiry interval == 0
     /// 3. A new connection was established and the CONNACK says session present == false
     fn session_expired(&mut self) {
-        // Remove and cancel all in-flight QoS 1 PUBLISHes
-        for (pkid, (_, notifier)) in self.inflight.publish_qos1.drain(..) {
-            let _ = notifier.cancel("MQTT session expired");
+        self.session_generation += 1;
+
+        // Remove and cancel all in-flight PUBLISHes
+        for (pkid, publish) in self.inflight.publish.drain(..) {
+            publish.cancel("MQTT session expired");
             self.pkid_pool.release_pkid(pkid);
         }
-        // Remove and cancel all in-flight QoS 2 PUBLISHes
-        for (pkid, (_, notifier)) in self.inflight.publish_qos2.drain(..) {
+        // Remove and cancel accepted inbound PUBLISHes awaiting PUBREL.
+        for (_, (_, notifier)) in self.inflight.incoming_pubrec.drain() {
             let _ = notifier.cancel("MQTT session expired");
+        }
+        self.inflight.incoming_pubcomp.clear();
+
+        // Release every outbound packet identifier that has progressed beyond PUBREC.
+        for (pkid, pending) in self.inflight.outgoing_pubrel_pending.drain(..) {
+            pending.cancel("MQTT session expired");
             self.pkid_pool.release_pkid(pkid);
         }
-        // Remove and cancel all in-flight PUBREC
-        for (pkid, (_, notifier)) in self.inflight.pubrec.drain() {
-            let _ = notifier.cancel("MQTT session expired");
+        for (pkid, pubrel) in self.inflight.outgoing_pubrel.drain(..) {
+            if let OutgoingPubRel::Application(_, notifier) = pubrel {
+                let _ = notifier.cancel("MQTT session expired");
+                self.pkid_pool.release_pkid(pkid);
+            }
         }
-        // Remove and cancel all in-flight PUBREL
-        for (pkid, (_, notifier)) in self.inflight.pubrel.drain(..) {
-            let _ = notifier.cancel("MQTT session expired");
+
+        for (_, publish) in self.in_application.publishes.drain(..) {
+            publish.cancel("MQTT session expired");
         }
+
+        self.connection_packets.clear();
         self.inflight.packets_to_replay.clear();
 
         // NOTE: No need to clear subscribe/unsubscribe/auth here because those are cleared on
         // any disconnect. So any session expiry that happens, either due to disconnect or on the
         // reconnect after the disconnect has already been handled.
-
-        // NOTE: PUBREC/PUBREL do not release their PKIDs because those are not leased from the PKID pool.
 
         // NOTE: connection_epoch is NOT reset here, since that would allow for old tokens to become valid again.
     }
@@ -721,6 +906,36 @@ where
     Subscribe(PacketIdentifier, SubscribeCompletionNotifier<S>),
     Unsubscribe(PacketIdentifier, UnsubscribeCompletionNotifier<S>),
     PublishQoS1(Publish<S>, PublishQoS1CompletionNotifier<S>),
+}
+
+enum OutgoingPublish<S>
+where
+    S: Shared,
+{
+    QoS1(Publish<S>, PublishQoS1CompletionNotifier<S>),
+    QoS2(Publish<S>, PublishQoS2CompletionNotifier<S>),
+}
+
+impl<S> OutgoingPublish<S>
+where
+    S: Shared,
+{
+    fn packet(&self) -> &Publish<S> {
+        match self {
+            Self::QoS1(publish, _) | Self::QoS2(publish, _) => publish,
+        }
+    }
+
+    fn cancel(self, reason: &str) {
+        match self {
+            Self::QoS1(_, notifier) => {
+                let _ = notifier.cancel(reason);
+            }
+            Self::QoS2(_, notifier) => {
+                let _ = notifier.cancel(reason);
+            }
+        }
+    }
 }
 
 /// A response to an operation initiated by the client
@@ -913,10 +1128,8 @@ where
     // --- Operation tracking ---
     // None of these hashmaps should ever use the same key at the same time, although this is not
     // enforced for simplicity.
-    /// All inflight QoS 1 PUBLISH operations
-    publish_qos1: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS1CompletionNotifier<S>)>,
-    /// All inflight QoS 2 PUBLISH operations
-    publish_qos2: IndexMap<PacketIdentifier, (Publish<S>, PublishQoS2CompletionNotifier<S>)>,
+    /// All inflight QoS 1 and QoS 2 PUBLISH operations, in original send order
+    publish: IndexMap<PacketIdentifier, OutgoingPublish<S>>,
     /// All inflight SUBSCRIBE operations
     subscribe: HashMap<PacketIdentifier, SubscribeCompletionNotifier<S>>,
     /// All inflight UNSUBSCRIBE operations
@@ -925,10 +1138,14 @@ where
     // --- Acknowledgement tracking ---
     // None of these hashmaps should ever use the same key at the same time, although this is not
     // enforced for simplicity.
-    /// All inflight PUBREC operations
-    pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier<S>)>,
-    /// All inflight PUBREL operations
-    pubrel: IndexMap<PacketIdentifier, (PubRel<S>, PubRelCompletionNotifier<S>)>,
+    /// Successful outbound PUBRECs awaiting application confirmation, in receive order
+    outgoing_pubrel_pending: IndexMap<PacketIdentifier, PendingPubRel<S>>,
+    /// Outbound PUBREL packets awaiting PUBCOMP
+    outgoing_pubrel: IndexMap<PacketIdentifier, OutgoingPubRel<S>>,
+    /// Accepted inbound QoS 2 PUBLISHes awaiting PUBREL
+    incoming_pubrec: HashMap<PacketIdentifier, (PubRec<S>, PubRecAcceptCompletionNotifier<S>)>,
+    /// Inbound PUBREL packets awaiting application confirmation
+    incoming_pubcomp: HashSet<PacketIdentifier>,
 
     packets_to_replay: VecDeque<Packet<S>>,
 
@@ -942,7 +1159,51 @@ struct InApplicationTracker<S>
 where
     S: Shared,
 {
-    publishes: IndexMap<PacketIdentifier, PendingAcknowledgement<S>>,
+    publishes: IndexMap<PacketIdentifier, IncomingPublishState<S>>,
+}
+
+enum IncomingPublishState<S>
+where
+    S: Shared,
+{
+    QoS1(PendingAcknowledgement<S>),
+    QoS2(PendingAcknowledgement<S>),
+}
+
+impl<S> IncomingPublishState<S>
+where
+    S: Shared,
+{
+    fn is_ready(&self) -> bool {
+        matches!(
+            self,
+            Self::QoS1(PendingAcknowledgement::Ready(_))
+                | Self::QoS2(PendingAcknowledgement::Ready(_))
+        )
+    }
+
+    fn set_ready(&mut self, ack_req: AcknowledgementRequest<S>) {
+        let pending = match self {
+            Self::QoS1(pending) | Self::QoS2(pending) => pending,
+        };
+        debug_assert!(matches!(pending, PendingAcknowledgement::NotReady));
+        *pending = PendingAcknowledgement::Ready(ack_req);
+    }
+
+    fn into_ready(self) -> Option<AcknowledgementRequest<S>> {
+        match self {
+            Self::QoS1(PendingAcknowledgement::Ready(ack_req))
+            | Self::QoS2(PendingAcknowledgement::Ready(ack_req)) => Some(ack_req),
+            Self::QoS1(PendingAcknowledgement::NotReady)
+            | Self::QoS2(PendingAcknowledgement::NotReady) => None,
+        }
+    }
+
+    fn cancel(self, reason: &str) {
+        match self {
+            Self::QoS1(pending) | Self::QoS2(pending) => pending.cancel(reason),
+        }
+    }
 }
 
 enum PendingAcknowledgement<S>
@@ -951,6 +1212,85 @@ where
 {
     NotReady,
     Ready(AcknowledgementRequest<S>),
+}
+
+impl<S> PendingAcknowledgement<S>
+where
+    S: Shared,
+{
+    fn cancel(self, reason: &str) {
+        if let Self::Ready(ack_req) = self {
+            cancel_acknowledgement(ack_req, reason);
+        }
+    }
+}
+
+enum PendingPubRel<S>
+where
+    S: Shared,
+{
+    AwaitingApplication,
+    Ready(AcknowledgementRequest<S>),
+}
+
+impl<S> PendingPubRel<S>
+where
+    S: Shared,
+{
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready(_))
+    }
+
+    fn into_ready(self) -> Option<AcknowledgementRequest<S>> {
+        match self {
+            Self::Ready(ack_req) => Some(ack_req),
+            Self::AwaitingApplication => None,
+        }
+    }
+
+    fn cancel(self, reason: &str) {
+        if let Self::Ready(ack_req) = self {
+            cancel_acknowledgement(ack_req, reason);
+        }
+    }
+}
+
+enum OutgoingPubRel<S>
+where
+    S: Shared,
+{
+    Application(PubRel<S>, PubRelCompletionNotifier<S>),
+    Recovery(PubRel<S>),
+}
+
+impl<S> OutgoingPubRel<S>
+where
+    S: Shared,
+{
+    fn packet(&self) -> &PubRel<S> {
+        match self {
+            Self::Application(pubrel, _) | Self::Recovery(pubrel) => pubrel,
+        }
+    }
+}
+
+fn cancel_acknowledgement<S>(ack_req: AcknowledgementRequest<S>, reason: &str)
+where
+    S: Shared,
+{
+    match ack_req {
+        AcknowledgementRequest::PubAck(notifier, _, _)
+        | AcknowledgementRequest::PubRecReject(notifier, _, _)
+        | AcknowledgementRequest::PubComp(notifier, _, _) => {
+            let _ = notifier.cancel(reason);
+        }
+        AcknowledgementRequest::PubRecAccept(notifier, _, _) => {
+            let _ = notifier.cancel(reason);
+        }
+        AcknowledgementRequest::PubRel(notifier, _, _) => {
+            let _ = notifier.cancel(reason);
+        }
+    }
 }
 
 struct ReceiverStream<T>(Receiver<T>);
