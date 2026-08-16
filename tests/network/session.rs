@@ -63,6 +63,8 @@ fn reconnect(
     clean_start: bool,
     expiry_seconds: u32,
 ) -> impl std::future::Future<Output = TestConnection> + '_ {
+    // Boxing here prevents the QoS 2 session state from triggering Clippy's
+    // `large_futures` lint at every reconnect call site.
     Box::pin(reconnect_tcp_with_session(
         disconnected.client,
         disconnected.connect_handle,

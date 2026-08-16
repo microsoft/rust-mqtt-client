@@ -15,17 +15,34 @@ use ms_mqtt_client::client::{
 };
 use ms_mqtt_client::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
-    PubCompReasonCode, PubRecReasonCode, PubRelReasonCode, topic,
+    PubCompReasonCode, PubRecReasonCode, PubRelReasonCode, SubscribeReasonCode, topic,
 };
 use ms_mqtt_client::packet::{
     ConnectProperties, PubCompProperties, PubRecProperties, PubRejectReason, PubRelProperties,
+    PublishProperties, QoS, RetainOptions, SessionExpiryInterval, SubscribeProperties,
 };
-use ms_mqtt_client::topic::TopicName;
+use ms_mqtt_client::topic::{TopicFilter, TopicName};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 mod common;
 use common::receive_publish;
+
+const PERSISTENT_SESSION_EXPIRY: u32 = 60;
+
+fn persistent_connect_properties() -> ConnectProperties {
+    ConnectProperties {
+        session_expiry_interval: SessionExpiryInterval::Duration(PERSISTENT_SESSION_EXPIRY),
+        ..Default::default()
+    }
+}
+
+fn test_client_options() -> ClientOptions {
+    ClientOptions {
+        client_id: Some("qos2-test".to_string()),
+        ..Default::default()
+    }
+}
 
 async fn connect() -> (
     Client,
@@ -34,11 +51,17 @@ async fn connect() -> (
     UnboundedSender<Packet<Bytes>>,
     UnboundedReceiver<Packet<Bytes>>,
 ) {
-    let options = ClientOptions {
-        client_id: Some("qos2-test".to_string()),
-        ..Default::default()
-    };
-    connect_with_options(options).await
+    connect_with_options(test_client_options()).await
+}
+
+async fn connect_persistent() -> (
+    Client,
+    Receiver,
+    Connection,
+    UnboundedSender<Packet<Bytes>>,
+    UnboundedReceiver<Packet<Bytes>>,
+) {
+    connect_persistent_with_options(test_client_options()).await
 }
 
 async fn connect_with_options(
@@ -50,6 +73,32 @@ async fn connect_with_options(
     UnboundedSender<Packet<Bytes>>,
     UnboundedReceiver<Packet<Bytes>>,
 ) {
+    connect_inner(options, ConnectProperties::default()).await
+}
+
+async fn connect_persistent_with_options(
+    options: ClientOptions,
+) -> (
+    Client,
+    Receiver,
+    Connection,
+    UnboundedSender<Packet<Bytes>>,
+    UnboundedReceiver<Packet<Bytes>>,
+) {
+    connect_inner(options, persistent_connect_properties()).await
+}
+
+async fn connect_inner(
+    options: ClientOptions,
+    connect_properties: ConnectProperties,
+) -> (
+    Client,
+    Receiver,
+    Connection,
+    UnboundedSender<Packet<Bytes>>,
+    UnboundedReceiver<Packet<Bytes>>,
+) {
+    let expected_session_expiry_interval = connect_properties.session_expiry_interval;
     let (client, connect_handle, receiver) = new_client(options);
     let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
     let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();
@@ -79,7 +128,7 @@ async fn connect_with_options(
             None,
             None,
             None,
-            ConnectProperties::default(),
+            connect_properties,
             None,
         )
         .await
@@ -89,7 +138,13 @@ async fn connect_with_options(
 
     assert_matches!(
         outgoing_packets_rx.recv().await,
-        Some(Packet::Connect(mqtt_proto::Connect { .. }))
+        Some(Packet::Connect(mqtt_proto::Connect {
+            other_properties: mqtt_proto::ConnectOtherProperties {
+                session_expiry_interval,
+                ..
+            },
+            ..
+        })) if session_expiry_interval == expected_session_expiry_interval
     );
 
     (
@@ -101,14 +156,36 @@ async fn connect_with_options(
     )
 }
 
-async fn reconnect(
+async fn reconnect_without_session(
     connect_handle: ConnectHandle,
-    session_present: bool,
 ) -> (
     Connection,
     UnboundedSender<Packet<Bytes>>,
     UnboundedReceiver<Packet<Bytes>>,
 ) {
+    reconnect_inner(connect_handle, false, ConnectProperties::default()).await
+}
+
+async fn reconnect_persistent(
+    connect_handle: ConnectHandle,
+) -> (
+    Connection,
+    UnboundedSender<Packet<Bytes>>,
+    UnboundedReceiver<Packet<Bytes>>,
+) {
+    reconnect_inner(connect_handle, true, persistent_connect_properties()).await
+}
+
+async fn reconnect_inner(
+    connect_handle: ConnectHandle,
+    session_present: bool,
+    connect_properties: ConnectProperties,
+) -> (
+    Connection,
+    UnboundedSender<Packet<Bytes>>,
+    UnboundedReceiver<Packet<Bytes>>,
+) {
+    let expected_session_expiry_interval = connect_properties.session_expiry_interval;
     let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
     let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();
     incoming_packets_tx
@@ -134,7 +211,7 @@ async fn reconnect(
             None,
             None,
             None,
-            ConnectProperties::default(),
+            connect_properties,
             None,
         )
         .await
@@ -143,7 +220,13 @@ async fn reconnect(
     };
     assert_matches!(
         outgoing_packets_rx.recv().await,
-        Some(Packet::Connect(mqtt_proto::Connect { .. }))
+        Some(Packet::Connect(mqtt_proto::Connect {
+            other_properties: mqtt_proto::ConnectOtherProperties {
+                session_expiry_interval,
+                ..
+            },
+            ..
+        })) if session_expiry_interval == expected_session_expiry_interval
     );
     (connection, incoming_packets_tx, outgoing_packets_rx)
 }
@@ -172,18 +255,19 @@ async fn outbound_qos2_success() {
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
     );
-    assert_matches!(
-        outgoing_packets_rx.recv().now_or_never(),
-        Some(Some(Packet::Publish(mqtt_proto::Publish {
-            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false),
-            payload,
-            ..
-        }))) if packet_identifier.get() == 1 && &*payload == b"payload"
-    );
+    let Some(Some(Packet::Publish(mqtt_proto::Publish {
+        packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false),
+        payload,
+        ..
+    }))) = outgoing_packets_rx.recv().now_or_never()
+    else {
+        panic!("expected outbound QoS 2 PUBLISH");
+    };
+    assert_eq!(&*payload, b"payload");
 
     incoming_packets_tx
         .send(Packet::PubRec(mqtt_proto::PubRec {
-            packet_identifier: PacketIdentifier::new(1).unwrap(),
+            packet_identifier,
             reason_code: PubRecReasonCode::Success,
             other_properties: mqtt_proto::PubRecOtherProperties {
                 reason_string: Some("received".into()),
@@ -221,20 +305,20 @@ async fn outbound_qos2_success() {
     assert_matches!(
         outgoing_packets_rx.recv().now_or_never(),
         Some(Some(Packet::PubRel(mqtt_proto::PubRel {
-            packet_identifier,
+            packet_identifier: outgoing_identifier,
             reason_code: PubRelReasonCode::Success,
             other_properties: mqtt_proto::PubRelOtherProperties {
                 reason_string: Some(reason_string),
                 user_properties,
             },
-        }))) if packet_identifier.get() == 1
+        }))) if outgoing_identifier == packet_identifier
             && reason_string == "release"
             && user_properties.len() == 1
     );
 
     incoming_packets_tx
         .send(Packet::PubComp(mqtt_proto::PubComp {
-            packet_identifier: PacketIdentifier::new(1).unwrap(),
+            packet_identifier,
             reason_code: PubCompReasonCode::Success,
             other_properties: mqtt_proto::PubCompOtherProperties {
                 reason_string: Some("complete".into()),
@@ -252,7 +336,7 @@ async fn outbound_qos2_success() {
         pubcomp.properties.reason_string.as_deref(),
         Some("complete")
     );
-    assert_eq!(pubcomp.packet_identifier.get(), 1);
+    assert_eq!(pubcomp.packet_identifier, packet_identifier);
 }
 
 #[tokio::test(start_paused = true)]
@@ -339,19 +423,6 @@ async fn inbound_qos2_success_and_duplicates() {
     let (pubrel, pubcomp_token) = output;
     assert_eq!(pubrel.properties.reason_string.as_deref(), Some("release"));
 
-    incoming_packets_tx
-        .send(Packet::PubRel(mqtt_proto::PubRel {
-            packet_identifier,
-            reason_code: PubRelReasonCode::Success,
-            other_properties: Default::default(),
-        }))
-        .unwrap();
-    assert_matches!(
-        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
-        Err(_)
-    );
-    assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
-
     let pubcomp_ct = pubcomp_token
         .confirm(PubCompProperties {
             reason_string: Some("complete".to_string()),
@@ -392,6 +463,24 @@ async fn inbound_qos2_success_and_duplicates() {
             ..
         }))) if outgoing_identifier == packet_identifier
     );
+
+    // DUP=1 does not imply that the receiver saw an earlier copy (section 3.3.1.1).
+    // After PUBCOMP, it must treat any PUBLISH with this identifier as a new
+    // Application Message [MQTT-4.3.3-12].
+    incoming_packets_tx
+        .send(Packet::Publish(mqtt_proto::Publish {
+            topic_name: topic("qos2/inbound/reused"),
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, true),
+            retain: false,
+            payload: Bytes::from_static(b"new message"),
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    let (delivered, manual_ack) = receive_publish(&mut connection, &mut receiver).await;
+    assert_eq!(delivered.payload, Bytes::from_static(b"new message"));
+    let ManualAcknowledgement::QoS2(_) = manual_ack else {
+        panic!("expected QoS 2 acknowledgement");
+    };
 }
 
 #[tokio::test(start_paused = true)]
@@ -402,7 +491,7 @@ async fn rejected_pubrec_releases_packet_identifier() {
         ..Default::default()
     };
     let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
-        connect_with_options(options).await;
+        connect_persistent_with_options(options).await;
     let mut connection = pin!(connection.run_until_disconnect());
 
     let rejected_ct = client
@@ -441,6 +530,18 @@ async fn rejected_pubrec_releases_packet_identifier() {
     assert!(!pubrec.is_success());
     assert!(token.is_none());
 
+    drop(incoming_packets_tx);
+    let (connect_handle, event) = connection.await;
+    assert_matches!(event, DisconnectedEvent::IoError(_));
+    let (reconnected, _incoming_packets_tx, mut outgoing_packets_rx) =
+        reconnect_persistent(connect_handle).await;
+    let mut connection = pin!(reconnected.run_until_disconnect());
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
+
     client
         .publish_qos2(
             TopicName::new("qos2/reused").unwrap(),
@@ -462,6 +563,387 @@ async fn rejected_pubrec_releases_packet_identifier() {
             ..
         }))) if packet_identifier.get() == 1 && &*payload == b"reused"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_matching_subscribers_pubrec_continues_outbound_qos2() {
+    let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
+        connect().await;
+    let mut connection = pin!(connection.run_until_disconnect());
+    let publish_ct = client
+        .publish_qos2(
+            TopicName::new("qos2/no-matching-subscribers").unwrap(),
+            Bytes::new(),
+            false,
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    let Some(Some(Packet::Publish(mqtt_proto::Publish {
+        packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false),
+        ..
+    }))) = outgoing_packets_rx.recv().now_or_never()
+    else {
+        panic!("expected outbound QoS 2 PUBLISH");
+    };
+
+    incoming_packets_tx
+        .send(Packet::PubRec(mqtt_proto::PubRec {
+            packet_identifier,
+            reason_code: PubRecReasonCode::NoMatchingSubscribers,
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    let (pubrec, Some(pubrel_token)) = publish_ct.await.unwrap() else {
+        panic!("No Matching Subscribers is a successful PUBREC");
+    };
+    assert!(pubrec.is_success());
+    let _pubcomp_ct = pubrel_token.confirm(Default::default()).await.unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::PubRel(mqtt_proto::PubRel {
+            packet_identifier: outgoing_identifier,
+            reason_code: PubRelReasonCode::Success,
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn qos2_publish_and_subscribe_share_packet_identifier_space() {
+    let options = ClientOptions {
+        client_id: Some("qos2-unified-pkid".to_string()),
+        max_packet_identifier: PacketIdentifier::new(1).unwrap(),
+        ..Default::default()
+    };
+    let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
+        connect_with_options(options).await;
+    let mut connection = pin!(connection.run_until_disconnect());
+    let packet_identifier = PacketIdentifier::new(1).unwrap();
+    let publish_ct = client
+        .publish_qos2(
+            TopicName::new("qos2/unified-pkid/publish").unwrap(),
+            Bytes::new(),
+            false,
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::Publish(mqtt_proto::Publish {
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
+                outgoing_identifier,
+                false
+            ),
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+
+    let subscribe_ct = client
+        .subscribe(
+            TopicFilter::new("qos2/unified-pkid/subscribe").unwrap(),
+            QoS::ExactlyOnce,
+            false,
+            RetainOptions::default(),
+            SubscribeProperties::default(),
+        )
+        .await
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
+
+    incoming_packets_tx
+        .send(Packet::PubRec(mqtt_proto::PubRec {
+            packet_identifier,
+            reason_code: PubRecReasonCode::NotAuthorized,
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    let (pubrec, pubrel_token) = publish_ct.await.unwrap();
+    assert!(!pubrec.is_success());
+    assert!(pubrel_token.is_none());
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::Subscribe(mqtt_proto::Subscribe {
+            packet_identifier: outgoing_identifier,
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+
+    incoming_packets_tx
+        .send(Packet::SubAck(mqtt_proto::SubAck {
+            packet_identifier,
+            reason_codes: vec![SubscribeReasonCode::GrantedQoS2],
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert!(subscribe_ct.await.unwrap().is_success());
+}
+
+#[tokio::test(start_paused = true)]
+async fn pubcomp_packet_identifier_not_found_completes_outbound_qos2() {
+    let options = ClientOptions {
+        client_id: Some("qos2-pubcomp-not-found".to_string()),
+        max_packet_identifier: PacketIdentifier::new(1).unwrap(),
+        ..Default::default()
+    };
+    let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
+        connect_with_options(options).await;
+    let mut connection = pin!(connection.run_until_disconnect());
+    let packet_identifier = PacketIdentifier::new(1).unwrap();
+
+    let publish_ct = client
+        .publish_qos2(
+            TopicName::new("qos2/pubcomp-not-found").unwrap(),
+            Bytes::new(),
+            false,
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::Publish(mqtt_proto::Publish {
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
+                outgoing_identifier,
+                false
+            ),
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+
+    incoming_packets_tx
+        .send(Packet::PubRec(mqtt_proto::PubRec {
+            packet_identifier,
+            reason_code: PubRecReasonCode::Success,
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    let (_, Some(pubrel_token)) = publish_ct.await.unwrap() else {
+        panic!("PUBLISH should be accepted");
+    };
+    let pubcomp_ct = pubrel_token.confirm(Default::default()).await.unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::PubRel(mqtt_proto::PubRel {
+            packet_identifier: outgoing_identifier,
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+
+    incoming_packets_tx
+        .send(Packet::PubComp(mqtt_proto::PubComp {
+            packet_identifier,
+            reason_code: PubCompReasonCode::PacketIdentifierNotFound,
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    pubcomp_ct.await.unwrap();
+
+    client
+        .publish_qos2(
+            TopicName::new("qos2/pubcomp-not-found/reused").unwrap(),
+            Bytes::new(),
+            false,
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::Publish(mqtt_proto::Publish {
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
+                outgoing_identifier,
+                false
+            ),
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn outbound_qos2_does_not_expire_after_publish_is_sent() {
+    let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
+        connect().await;
+    let mut connection = pin!(connection.run_until_disconnect());
+    let publish_ct = client
+        .publish_qos2(
+            TopicName::new("qos2/expiry/outbound").unwrap(),
+            Bytes::new(),
+            false,
+            PublishProperties {
+                message_expiry_interval: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    let Some(Some(Packet::Publish(mqtt_proto::Publish {
+        packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false),
+        other_properties:
+            mqtt_proto::PublishOtherProperties {
+                message_expiry_interval: Some(1),
+                ..
+            },
+        ..
+    }))) = outgoing_packets_rx.recv().now_or_never()
+    else {
+        panic!("expected outbound QoS 2 PUBLISH with Message Expiry Interval");
+    };
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(2), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
+
+    incoming_packets_tx
+        .send(Packet::PubRec(mqtt_proto::PubRec {
+            packet_identifier,
+            reason_code: PubRecReasonCode::Success,
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    let (_, Some(pubrel_token)) = publish_ct.await.unwrap() else {
+        panic!("PUBLISH should remain pending until PUBREC");
+    };
+    let _pubcomp_ct = pubrel_token.confirm(Default::default()).await.unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::PubRel(mqtt_proto::PubRel {
+            packet_identifier: outgoing_identifier,
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn inbound_qos2_continues_after_message_expiry() {
+    let (_client, mut receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
+        connect().await;
+    let mut connection = pin!(connection.run_until_disconnect());
+    let packet_identifier = PacketIdentifier::new(7).unwrap();
+    incoming_packets_tx
+        .send(Packet::Publish(mqtt_proto::Publish {
+            topic_name: topic("qos2/expiry/inbound"),
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
+                packet_identifier,
+                false,
+            ),
+            retain: false,
+            payload: Bytes::new(),
+            other_properties: mqtt_proto::PublishOtherProperties {
+                message_expiry_interval: Some(1),
+                ..Default::default()
+            },
+        }))
+        .unwrap();
+    let (_, ManualAcknowledgement::QoS2(pubrec_token)) =
+        receive_publish(&mut connection, &mut receiver).await
+    else {
+        panic!("expected incoming QoS 2 PUBLISH");
+    };
+    let pubrec_ct = pubrec_token.accept(Default::default()).await.unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::PubRec(mqtt_proto::PubRec {
+            packet_identifier: outgoing_identifier,
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(2), &mut connection).await,
+        Err(_)
+    );
+
+    incoming_packets_tx
+        .send(Packet::PubRel(mqtt_proto::PubRel {
+            packet_identifier,
+            reason_code: PubRelReasonCode::Success,
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    let (_, pubcomp_token) = pubrec_ct.await.unwrap();
+    let pubcomp_ct = pubcomp_token.confirm(Default::default()).await.unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::PubComp(mqtt_proto::PubComp {
+            packet_identifier: outgoing_identifier,
+            ..
+        }))) if outgoing_identifier == packet_identifier
+    );
+    pubcomp_ct.await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -492,19 +974,25 @@ async fn pubrel_follows_pubrec_receive_order() {
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
     );
-    assert_matches!(
-        outgoing_packets_rx.recv().now_or_never(),
-        Some(Some(Packet::Publish(_)))
-    );
-    assert_matches!(
-        outgoing_packets_rx.recv().now_or_never(),
-        Some(Some(Packet::Publish(_)))
-    );
+    let Some(Some(Packet::Publish(mqtt_proto::Publish {
+        packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(first_identifier, false),
+        ..
+    }))) = outgoing_packets_rx.recv().now_or_never()
+    else {
+        panic!("expected first outbound QoS 2 PUBLISH");
+    };
+    let Some(Some(Packet::Publish(mqtt_proto::Publish {
+        packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(second_identifier, false),
+        ..
+    }))) = outgoing_packets_rx.recv().now_or_never()
+    else {
+        panic!("expected second outbound QoS 2 PUBLISH");
+    };
 
-    for packet_identifier in [2, 1] {
+    for packet_identifier in [second_identifier, first_identifier] {
         incoming_packets_tx
             .send(Packet::PubRec(mqtt_proto::PubRec {
-                packet_identifier: PacketIdentifier::new(packet_identifier).unwrap(),
+                packet_identifier,
                 reason_code: PubRecReasonCode::Success,
                 other_properties: Default::default(),
             }))
@@ -523,33 +1011,24 @@ async fn pubrel_follows_pubrec_receive_order() {
     };
 
     let first_pubrel_ct = first_token.confirm(Default::default()).await.unwrap();
-    assert_matches!(
-        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
-        Err(_)
-    );
-    assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
-
     let second_pubrel_ct = second_token.confirm(Default::default()).await.unwrap();
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
     );
-    assert_matches!(
-        outgoing_packets_rx.recv().now_or_never(),
-        Some(Some(Packet::PubRel(mqtt_proto::PubRel { packet_identifier, .. })))
-            if packet_identifier.get() == 2
-    );
-    assert_matches!(
-        outgoing_packets_rx.recv().now_or_never(),
-        Some(Some(Packet::PubRel(mqtt_proto::PubRel { packet_identifier, .. })))
-            if packet_identifier.get() == 1
-    );
+    for expected_identifier in [second_identifier, first_identifier] {
+        assert_matches!(
+            outgoing_packets_rx.recv().now_or_never(),
+            Some(Some(Packet::PubRel(mqtt_proto::PubRel { packet_identifier, .. })))
+                if packet_identifier == expected_identifier
+        );
+    }
     drop(first_pubrel_ct);
     drop(second_pubrel_ct);
 }
 
 #[tokio::test(start_paused = true)]
-async fn dropping_tokens_uses_default_qos2_progression() {
+async fn api_policy_dropping_tokens_uses_default_qos2_progression() {
     let (client, mut receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
         connect().await;
     let mut connection = pin!(connection.run_until_disconnect());
@@ -612,12 +1091,12 @@ async fn dropping_tokens_uses_default_qos2_progression() {
             other_properties: Default::default(),
         }))
         .unwrap();
-    let (_, ManualAcknowledgement::QoS2(inbound_token)) =
+    let (_, ManualAcknowledgement::QoS2(inbound_pubrec_token)) =
         receive_publish(&mut connection, &mut receiver).await
     else {
         panic!("expected incoming QoS 2 PUBLISH");
     };
-    drop(inbound_token);
+    drop(inbound_pubrec_token);
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
@@ -653,7 +1132,11 @@ async fn dropping_tokens_uses_default_qos2_progression() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn unknown_pubrec_uses_terminal_recovery() {
+async fn unknown_pubrec_sends_packet_identifier_not_found_pubrel() {
+    // MQTT-4.3.3-4 requires PUBREL for every successful PUBREC. With no original PUBLISH
+    // state, Table 3-6's 0x92 reason identifies the mismatch while still completing that
+    // required transition. The specification does not explicitly select 0x92 here, so this
+    // test records our interpretation of the two requirements rather than an unambiguous MUST.
     let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
         connect().await;
     let mut connection = pin!(connection.run_until_disconnect());
@@ -709,9 +1192,9 @@ async fn unknown_pubrec_uses_terminal_recovery() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn outbound_qos2_recovers_each_session_phase() {
+async fn mixed_outbound_qos2_session_recovery_with_manual_pubrel() {
     let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
-        connect().await;
+        connect_persistent().await;
     let mut connection = pin!(connection.run_until_disconnect());
     let publish_ct = client
         .publish_qos2(
@@ -736,7 +1219,7 @@ async fn outbound_qos2_recovers_each_session_phase() {
     assert_matches!(event, DisconnectedEvent::IoError(_));
 
     let (reconnected, incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, true).await;
+        reconnect_persistent(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
@@ -770,7 +1253,7 @@ async fn outbound_qos2_recovers_each_session_phase() {
     assert_matches!(event, DisconnectedEvent::IoError(_));
 
     let (reconnected, incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, true).await;
+        reconnect_persistent(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
@@ -794,7 +1277,7 @@ async fn outbound_qos2_recovers_each_session_phase() {
     assert_matches!(event, DisconnectedEvent::IoError(_));
 
     let (reconnected, incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, true).await;
+        reconnect_persistent(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
@@ -824,7 +1307,7 @@ async fn outbound_qos2_recovers_each_session_phase() {
 #[tokio::test(start_paused = true)]
 async fn reconnect_preserves_cross_qos_publish_order() {
     let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
-        connect().await;
+        connect_persistent().await;
     let mut connection = pin!(connection.run_until_disconnect());
 
     client
@@ -869,7 +1352,7 @@ async fn reconnect_preserves_cross_qos_publish_order() {
     let (connect_handle, event) = connection.await;
     assert_matches!(event, DisconnectedEvent::IoError(_));
     let (reconnected, _incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, true).await;
+        reconnect_persistent(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
@@ -895,9 +1378,12 @@ async fn reconnect_preserves_cross_qos_publish_order() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn mismatched_pubrec_preserves_qos1_publish_for_replay() {
+async fn mixed_mismatched_pubrec_disconnects_and_preserves_qos1_for_replay() {
+    // A PUBREC cannot acknowledge this QoS 1 flow, so it is inconsistent with Client state
+    // and therefore a Protocol Error under section 1.2. Section 4.13.1 says a Client SHOULD
+    // close after detecting it; this test fixes that recommended behavior as Client policy.
     let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
-        connect().await;
+        connect_persistent().await;
     let mut connection = pin!(connection.run_until_disconnect());
     let publish_ct = client
         .publish_qos1(
@@ -931,7 +1417,7 @@ async fn mismatched_pubrec_preserves_qos1_publish_for_replay() {
     assert_matches!(event, DisconnectedEvent::ProtocolError(_));
 
     let (reconnected, incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, true).await;
+        reconnect_persistent(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
@@ -960,9 +1446,12 @@ async fn mismatched_pubrec_preserves_qos1_publish_for_replay() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn mismatched_puback_preserves_qos2_publish_for_replay() {
+async fn mixed_mismatched_puback_disconnects_and_preserves_qos2_for_replay() {
+    // A PUBACK cannot acknowledge this QoS 2 flow. As above, disconnecting is the Client's
+    // chosen response to section 4.13.1's SHOULD, while preserving the Session makes the
+    // still-unacknowledged PUBLISH subject to MQTT-4.4.0-1 on reconnect.
     let (client, _receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
-        connect().await;
+        connect_persistent().await;
     let mut connection = pin!(connection.run_until_disconnect());
     let publish_ct = client
         .publish_qos2(
@@ -996,7 +1485,7 @@ async fn mismatched_puback_preserves_qos2_publish_for_replay() {
     assert_matches!(event, DisconnectedEvent::ProtocolError(_));
 
     let (reconnected, incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, true).await;
+        reconnect_persistent(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
@@ -1049,7 +1538,7 @@ async fn mismatched_puback_preserves_qos2_publish_for_replay() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_expiry_invalidates_qos2_token_and_releases_identifier() {
+async fn mixed_session_loss_cancels_outbound_qos2_token_and_releases_identifier() {
     let options = ClientOptions {
         client_id: Some("qos2-expiry".to_string()),
         max_packet_identifier: PacketIdentifier::new(1).unwrap(),
@@ -1094,7 +1583,7 @@ async fn session_expiry_invalidates_qos2_token_and_releases_identifier() {
     let (connect_handle, event) = connection.await;
     assert_matches!(event, DisconnectedEvent::IoError(_));
     let (reconnected, _incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, false).await;
+        reconnect_without_session(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
 
     let stale_ct = pubrel_token.confirm(Default::default()).await.unwrap();
@@ -1128,7 +1617,7 @@ async fn session_expiry_invalidates_qos2_token_and_releases_identifier() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_expiry_invalidates_inbound_qos2_tokens() {
+async fn mixed_session_loss_cancels_inbound_qos2_tokens() {
     let (_client, mut receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
         connect().await;
     let mut connection = pin!(connection.run_until_disconnect());
@@ -1194,7 +1683,7 @@ async fn session_expiry_invalidates_inbound_qos2_tokens() {
     let (connect_handle, event) = connection.await;
     assert_matches!(event, DisconnectedEvent::IoError(_));
     let (reconnected, _incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, false).await;
+        reconnect_without_session(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
 
     let ct = pubrec_token.accept(Default::default()).await.unwrap();
@@ -1215,7 +1704,7 @@ async fn session_expiry_invalidates_inbound_qos2_tokens() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn inbound_qos2_rejection_finishes_receiver_state() {
+async fn inbound_qos2_rejection_allows_packet_identifier_reuse() {
     let (_client, mut receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
         connect().await;
     let mut connection = pin!(connection.run_until_disconnect());
@@ -1261,6 +1750,9 @@ async fn inbound_qos2_rejection_finishes_receiver_state() {
     );
     reject_ct.await.unwrap();
 
+    // This PUBREL is inconsistent with peer sender state: an error PUBREC acknowledges
+    // the PUBLISH [MQTT-4.4.0-2], and PUBREL is required only below 0x80
+    // [MQTT-4.3.3-4]. The client must still answer it with PUBCOMP [MQTT-4.3.3-11].
     incoming_packets_tx
         .send(Packet::PubRel(mqtt_proto::PubRel {
             packet_identifier,
@@ -1280,6 +1772,24 @@ async fn inbound_qos2_rejection_finishes_receiver_state() {
             ..
         }))) if outgoing_identifier == packet_identifier
     );
+
+    // DUP=1 does not imply that the receiver saw an earlier copy. After the failed
+    // PUBREC, the client must treat this same-ID PUBLISH as a new Application Message
+    // [MQTT-4.3.3-9].
+    incoming_packets_tx
+        .send(Packet::Publish(mqtt_proto::Publish {
+            topic_name: topic("qos2/reject/reused"),
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, true),
+            retain: false,
+            payload: Bytes::from_static(b"new message"),
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    let (publication, manual_ack) = receive_publish(&mut connection, &mut receiver).await;
+    assert_eq!(publication.payload, Bytes::from_static(b"new message"));
+    let ManualAcknowledgement::QoS2(_) = manual_ack else {
+        panic!("expected QoS 2 acknowledgement");
+    };
 }
 
 #[tokio::test(start_paused = true)]
@@ -1302,25 +1812,22 @@ async fn inbound_pubrec_follows_publish_order() {
             }))
             .unwrap();
     }
-    let (_, ManualAcknowledgement::QoS2(first)) =
+    let (_, ManualAcknowledgement::QoS2(first_pubrec_token)) =
         receive_publish(&mut connection, &mut receiver).await
     else {
         panic!("expected first QoS 2 PUBLISH");
     };
-    let (_, ManualAcknowledgement::QoS2(second)) =
+    let (_, ManualAcknowledgement::QoS2(second_pubrec_token)) =
         receive_publish(&mut connection, &mut receiver).await
     else {
         panic!("expected second QoS 2 PUBLISH");
     };
 
-    let second_ct = second.accept(Default::default()).await.unwrap();
-    assert_matches!(
-        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
-        Err(_)
-    );
-    assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
-
-    let first_ct = first.accept(Default::default()).await.unwrap();
+    let second_pubrec_ct = second_pubrec_token
+        .accept(Default::default())
+        .await
+        .unwrap();
+    let first_pubrec_ct = first_pubrec_token.accept(Default::default()).await.unwrap();
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
@@ -1332,14 +1839,14 @@ async fn inbound_pubrec_follows_publish_order() {
                 if packet_identifier.get() == expected
         );
     }
-    drop(first_ct);
-    drop(second_ct);
+    drop(first_pubrec_ct);
+    drop(second_pubrec_ct);
 }
 
 #[tokio::test(start_paused = true)]
-async fn inbound_qos2_recovers_each_session_phase() {
+async fn mixed_inbound_qos2_session_recovery_with_manual_pubcomp() {
     let (_client, mut receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
-        connect().await;
+        connect_persistent().await;
     let mut connection = pin!(connection.run_until_disconnect());
     let packet_identifier = PacketIdentifier::new(31).unwrap();
     let publish = mqtt_proto::Publish {
@@ -1371,7 +1878,7 @@ async fn inbound_qos2_recovers_each_session_phase() {
     let (connect_handle, event) = connection.await;
     assert_matches!(event, DisconnectedEvent::IoError(_));
     let (reconnected, incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, true).await;
+        reconnect_persistent(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
 
     let mut duplicate = publish;
@@ -1408,7 +1915,7 @@ async fn inbound_qos2_recovers_each_session_phase() {
     let (connect_handle, event) = connection.await;
     assert_matches!(event, DisconnectedEvent::IoError(_));
     let (reconnected, incoming_packets_tx, mut outgoing_packets_rx) =
-        reconnect(connect_handle, true).await;
+        reconnect_persistent(connect_handle).await;
     let mut connection = pin!(reconnected.run_until_disconnect());
     incoming_packets_tx
         .send(Packet::PubRel(mqtt_proto::PubRel {
@@ -1441,9 +1948,8 @@ async fn packet_identifiers_are_independent_by_direction() {
     let (client, mut receiver, connection, incoming_packets_tx, mut outgoing_packets_rx) =
         connect().await;
     let mut connection = pin!(connection.run_until_disconnect());
-    let packet_identifier = PacketIdentifier::new(1).unwrap();
 
-    let outbound_ct = client
+    let outbound_publish_ct = client
         .publish_qos2(
             TopicName::new("qos2/bidirectional/outbound").unwrap(),
             Bytes::new(),
@@ -1456,10 +1962,13 @@ async fn packet_identifiers_are_independent_by_direction() {
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
     );
-    assert_matches!(
-        outgoing_packets_rx.recv().now_or_never(),
-        Some(Some(Packet::Publish(_)))
-    );
+    let Some(Some(Packet::Publish(mqtt_proto::Publish {
+        packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false),
+        ..
+    }))) = outgoing_packets_rx.recv().now_or_never()
+    else {
+        panic!("expected outbound QoS 2 PUBLISH");
+    };
 
     incoming_packets_tx
         .send(Packet::Publish(mqtt_proto::Publish {
@@ -1473,12 +1982,15 @@ async fn packet_identifiers_are_independent_by_direction() {
             other_properties: Default::default(),
         }))
         .unwrap();
-    let (_, ManualAcknowledgement::QoS2(inbound_token)) =
+    let (_, ManualAcknowledgement::QoS2(inbound_pubrec_token)) =
         receive_publish(&mut connection, &mut receiver).await
     else {
         panic!("expected inbound QoS 2 PUBLISH");
     };
-    let inbound_ct = inbound_token.accept(Default::default()).await.unwrap();
+    let inbound_pubrec_ct = inbound_pubrec_token
+        .accept(Default::default())
+        .await
+        .unwrap();
     incoming_packets_tx
         .send(Packet::PubRec(mqtt_proto::PubRec {
             packet_identifier,
@@ -1494,7 +2006,7 @@ async fn packet_identifiers_are_independent_by_direction() {
         outgoing_packets_rx.recv().now_or_never(),
         Some(Some(Packet::PubRec(_)))
     );
-    let (_, Some(outbound_token)) = outbound_ct.await.unwrap() else {
+    let (_, Some(outbound_pubrel_token)) = outbound_publish_ct.await.unwrap() else {
         panic!("outbound PUBLISH should be accepted");
     };
 
@@ -1509,8 +2021,11 @@ async fn packet_identifiers_are_independent_by_direction() {
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
     );
-    let (_, inbound_pubcomp_token) = inbound_ct.await.unwrap();
-    let outbound_pubcomp_ct = outbound_token.confirm(Default::default()).await.unwrap();
+    let (_, inbound_pubcomp_token) = inbound_pubrec_ct.await.unwrap();
+    let outbound_pubrel_ct = outbound_pubrel_token
+        .confirm(Default::default())
+        .await
+        .unwrap();
     let inbound_pubcomp_ct = inbound_pubcomp_token
         .confirm(Default::default())
         .await
@@ -1540,5 +2055,5 @@ async fn packet_identifiers_are_independent_by_direction() {
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
     );
-    outbound_pubcomp_ct.await.unwrap();
+    outbound_pubrel_ct.await.unwrap();
 }

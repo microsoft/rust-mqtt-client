@@ -9,91 +9,10 @@ use matches::assert_matches;
 use ms_mqtt_client::client::{
     ClientOptions, ConnectResult, DisconnectedEvent, KeepAliveConfig, new_client,
 };
-use ms_mqtt_client::mqtt_proto::{
-    self, ConnectReasonCode, Packet, PacketIdentifier, SubscribeReasonCode,
-};
-use ms_mqtt_client::packet::{ConnAck, ConnectProperties, QoS, RetainOptions, SubscribeProperties};
-use ms_mqtt_client::topic::TopicFilter;
+use ms_mqtt_client::mqtt_proto::{self, ConnectReasonCode, Packet};
+use ms_mqtt_client::packet::{ConnAck, ConnectProperties};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::unbounded_channel;
-
-#[tokio::test(start_paused = true)]
-async fn subscribe_qos2() {
-    let (client, connect_handle, _receiver) = new_client(ClientOptions::default());
-    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
-    let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();
-    incoming_packets_tx
-        .send(Packet::ConnAck(mqtt_proto::ConnAck {
-            reason_code: ConnectReasonCode::Success {
-                session_present: false,
-            },
-            other_properties: Default::default(),
-        }))
-        .unwrap();
-    let ConnectResult::Success(connection, _, _) = connect_handle
-        .connect(
-            ConnectionTransportConfig {
-                transport_type: ConnectionTransportType::Test {
-                    incoming_packets: incoming_packets_rx,
-                    outgoing_packets: outgoing_packets_tx,
-                },
-                timeout: None,
-                proxy: None,
-                tcp_nodelay: false,
-            },
-            false,
-            KeepAliveConfig::Infinite,
-            None,
-            None,
-            None,
-            ConnectProperties::default(),
-            None,
-        )
-        .await
-    else {
-        panic!("expected successful connect");
-    };
-    assert_matches!(
-        outgoing_packets_rx.recv().await,
-        Some(Packet::Connect(mqtt_proto::Connect { .. }))
-    );
-    let mut connection = pin!(connection.run_until_disconnect());
-
-    let ct = client
-        .subscribe(
-            TopicFilter::new("test/topic").unwrap(),
-            QoS::ExactlyOnce,
-            false,
-            RetainOptions::default(),
-            SubscribeProperties::default(),
-        )
-        .await
-        .unwrap();
-    assert_matches!(
-        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
-        Err(_)
-    );
-    assert_matches!(
-        outgoing_packets_rx.recv().await,
-        Some(Packet::Subscribe(mqtt_proto::Subscribe { packet_identifier, subscribe_to, .. }))
-            if packet_identifier.get() == 1
-                && subscribe_to.len() == 1
-                && subscribe_to[0].options.maximum_qos == mqtt_proto::QoS::ExactlyOnce
-    );
-
-    incoming_packets_tx
-        .send(Packet::SubAck(mqtt_proto::SubAck {
-            packet_identifier: PacketIdentifier::new(1).unwrap(),
-            reason_codes: vec![SubscribeReasonCode::GrantedQoS2],
-            other_properties: Default::default(),
-        }))
-        .unwrap();
-    assert_matches!(
-        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
-        Err(_)
-    );
-    assert!(ct.await.unwrap().is_success());
-}
 
 #[tokio::test(start_paused = true)]
 async fn connect_connack_success() {

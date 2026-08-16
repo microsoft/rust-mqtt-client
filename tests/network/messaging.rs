@@ -31,30 +31,13 @@ async fn subscribe_and_expect_success(subscriber: &TestConnection, filter: &str,
         filter,
         qos,
         false,
+        RetainOptions::default(),
         SubscribeProperties::default(),
     )
     .await;
 }
 
 async fn subscribe_with_options_and_expect_success(
-    subscriber: &TestConnection,
-    filter: &str,
-    qos: QoS,
-    no_local: bool,
-    properties: SubscribeProperties,
-) {
-    subscribe_with_retain_options_and_expect_success(
-        subscriber,
-        filter,
-        qos,
-        no_local,
-        RetainOptions::default(),
-        properties,
-    )
-    .await;
-}
-
-async fn subscribe_with_retain_options_and_expect_success(
     subscriber: &TestConnection,
     filter: &str,
     qos: QoS,
@@ -100,15 +83,6 @@ async fn publish_qos1_and_expect_success(
     publisher: &TestConnection,
     topic: &str,
     payload: Bytes,
-    properties: PublishProperties,
-) {
-    publish_qos1_with_retain_and_expect_success(publisher, topic, payload, false, properties).await;
-}
-
-async fn publish_qos1_with_retain_and_expect_success(
-    publisher: &TestConnection,
-    topic: &str,
-    payload: Bytes,
     retain: bool,
     properties: PublishProperties,
 ) {
@@ -123,6 +97,31 @@ async fn publish_qos1_with_retain_and_expect_success(
         puback.is_success(),
         "server rejected the PUBLISH: {puback:?}"
     );
+}
+
+async fn publish_qos2_and_expect_success(
+    publisher: &TestConnection,
+    topic: &str,
+    payload: Bytes,
+    retain: bool,
+    properties: PublishProperties,
+) {
+    let ct = publisher
+        .client
+        .publish_qos2(TopicName::new(topic).unwrap(), payload, retain, properties)
+        .await
+        .expect("publisher should still be attached");
+    let (pubrec, Some(pubrel_token)) = ct.await.expect("QoS 2 PUBLISH should receive PUBREC")
+    else {
+        panic!("server rejected QoS 2 PUBLISH");
+    };
+    assert!(pubrec.is_success(), "server rejected PUBLISH: {pubrec:?}");
+    let ct = pubrel_token
+        .confirm(PubRelProperties::default())
+        .await
+        .expect("publisher should still be attached");
+    let pubcomp = ct.await.expect("QoS 2 PUBLISH should receive PUBCOMP");
+    assert_eq!(pubcomp.packet_identifier, pubrec.packet_identifier);
 }
 
 async fn receive_qos1_and_ack(subscriber: &mut TestConnection) -> Publish {
@@ -140,6 +139,33 @@ async fn receive_qos1_and_ack(subscriber: &mut TestConnection) -> Publish {
         .expect("subscriber should still be attached")
         .await
         .expect("PUBACK should be sent");
+    publish
+}
+
+async fn receive_qos2_and_ack(subscriber: &mut TestConnection) -> Publish {
+    let (publish, manual_ack) = subscriber
+        .receiver
+        .recv()
+        .await
+        .expect("subscriber should receive the PUBLISH");
+    let ManualAcknowledgement::QoS2(pubrec_token) = manual_ack else {
+        panic!("QoS 2 PUBLISH should require PUBREC");
+    };
+    let ct = pubrec_token
+        .accept(PubRecProperties::default())
+        .await
+        .expect("subscriber should still be attached");
+    let (pubrel, pubcomp_token) = ct.await.expect("subscriber should receive PUBREL");
+    let ct = pubcomp_token
+        .confirm(PubCompProperties::default())
+        .await
+        .expect("subscriber should still be attached");
+    ct.await.expect("PUBCOMP should be sent");
+
+    let DeliveryQoS::ExactlyOnce(delivery) = &publish.qos else {
+        panic!("server did not deliver at QoS 2");
+    };
+    assert_eq!(pubrel.packet_identifier, delivery.packet_identifier);
     publish
 }
 
@@ -201,6 +227,7 @@ async fn publish_receive_qos1() {
             &publisher,
             topic,
             Bytes::from_static(b"qos1 payload"),
+            false,
             PublishProperties::default(),
         )
         .await;
@@ -223,62 +250,19 @@ async fn publish_receive_qos2() {
         let topic = "ms-mqtt-client/network/qos2";
         subscribe_and_expect_success(&subscriber, topic, QoS::ExactlyOnce).await;
 
-        let publisher_flow = async {
-            let ct = publisher
-                .client
-                .publish_qos2(
-                    TopicName::new(topic).unwrap(),
-                    Bytes::from_static(b"qos2 payload"),
-                    false,
-                    PublishProperties::default(),
-                )
-                .await
-                .expect("publisher should still be attached");
-            let (pubrec, Some(pubrel_token)) = ct
-                .await
-                .expect("QoS 2 PUBLISH should receive PUBREC")
-            else {
-                panic!("server rejected QoS 2 PUBLISH");
-            };
-            assert!(pubrec.is_success(), "server rejected PUBLISH: {pubrec:?}");
-            let ct = pubrel_token
-                .confirm(PubRelProperties::default())
-                .await
-                .expect("publisher should still be attached");
-            let pubcomp = ct.await.expect("QoS 2 PUBLISH should receive PUBCOMP");
-            assert_eq!(pubcomp.packet_identifier, pubrec.packet_identifier);
-        };
-
-        let subscriber_flow = async {
-            let (publish, manual_ack) = subscriber
-                .receiver
-                .recv()
-                .await
-                .expect("subscriber should receive the PUBLISH");
-            let ManualAcknowledgement::QoS2(pubrec_token) = manual_ack else {
-                panic!("QoS 2 PUBLISH should require PUBREC");
-            };
-            let ct = pubrec_token
-                .accept(PubRecProperties::default())
-                .await
-                .expect("subscriber should still be attached");
-            let (pubrel, pubcomp_token) =
-                ct.await.expect("subscriber should receive PUBREL");
-            let ct = pubcomp_token
-                .confirm(PubCompProperties::default())
-                .await
-                .expect("subscriber should still be attached");
-            ct.await.expect("PUBCOMP should be sent");
-
-            assert_eq!(publish.topic_name, TopicName::new(topic).unwrap());
-            assert_eq!(publish.payload, Bytes::from_static(b"qos2 payload"));
-            let DeliveryQoS::ExactlyOnce(delivery) = publish.qos else {
-                panic!("server did not deliver at QoS 2");
-            };
-            assert_eq!(pubrel.packet_identifier, delivery.packet_identifier);
-        };
-
-        tokio::join!(publisher_flow, subscriber_flow);
+        let ((), publish) = tokio::join!(
+            publish_qos2_and_expect_success(
+                &publisher,
+                topic,
+                Bytes::from_static(b"qos2 payload"),
+                false,
+                PublishProperties::default(),
+            ),
+            receive_qos2_and_ack(&mut subscriber),
+        );
+        assert_eq!(publish.topic_name, TopicName::new(topic).unwrap());
+        assert_eq!(publish.payload, Bytes::from_static(b"qos2 payload"));
+        assert!(matches!(publish.qos, DeliveryQoS::ExactlyOnce(_)));
 
         disconnect_pair_and_expect_application_disconnect(subscriber, publisher).await;
     }
@@ -298,6 +282,7 @@ async fn unsubscribe_stops_delivery() {
             &publisher,
             topic,
             Bytes::from_static(b"before unsubscribe"),
+            false,
             PublishProperties::default(),
         )
         .await;
@@ -325,6 +310,7 @@ async fn unsubscribe_stops_delivery() {
             &publisher,
             topic,
             Bytes::from_static(b"after unsubscribe"),
+            false,
             PublishProperties::default(),
         )
         .await;
@@ -365,6 +351,7 @@ async fn publish_properties_round_trip() {
             &publisher,
             topic,
             Bytes::from_static(br#"{"value":42}"#),
+            false,
             properties.clone(),
         )
         .await;
@@ -443,6 +430,7 @@ async fn no_local_suppresses_self_publish() {
             topic,
             QoS::AtLeastOnce,
             true,
+            RetainOptions::default(),
             SubscribeProperties::default(),
         )
         .await;
@@ -451,6 +439,7 @@ async fn no_local_suppresses_self_publish() {
             &publisher,
             topic,
             Bytes::from_static(b"remote"),
+            false,
             PublishProperties::default(),
         )
         .await;
@@ -463,6 +452,7 @@ async fn no_local_suppresses_self_publish() {
             &subscriber,
             topic,
             Bytes::from_static(b"local"),
+            false,
             PublishProperties::default(),
         )
         .await;
@@ -493,6 +483,7 @@ async fn subscribe_with_subscription_identifier() {
             topic,
             QoS::AtLeastOnce,
             false,
+            RetainOptions::default(),
             SubscribeProperties {
                 subscription_identifier: Some(NonZeroU32::new(1).unwrap()),
                 ..Default::default()
@@ -538,6 +529,7 @@ async fn delivery_qos_is_negotiated() {
             &publisher,
             qos0_subscription_topic,
             Bytes::from_static(b"qos 1 publication"),
+            false,
             PublishProperties::default(),
         )
         .await;
@@ -578,7 +570,7 @@ async fn retained_publication_is_delivered_to_late_subscriber() {
         let (mut subscriber, publisher) =
             connect_pair("retained_publication_is_delivered_to_late_subscriber").await;
         let topic = "ms-mqtt-client/network/retained/late-subscriber";
-        publish_qos1_with_retain_and_expect_success(
+        publish_qos1_and_expect_success(
             &publisher,
             topic,
             Bytes::from_static(b"retained payload"),
@@ -596,7 +588,7 @@ async fn retained_publication_is_delivered_to_late_subscriber() {
             subscriber.disconnect().await,
             DisconnectedEvent::ApplicationDisconnect
         ));
-        publish_qos1_with_retain_and_expect_success(
+        publish_qos1_and_expect_success(
             &publisher,
             topic,
             Bytes::new(),
@@ -622,7 +614,7 @@ async fn retain_handling_options_control_delivery() {
         let new_subscription_topic = "ms-mqtt-client/network/retained/new-subscription";
 
         for topic in [do_not_send_topic, new_subscription_topic] {
-            publish_qos1_with_retain_and_expect_success(
+            publish_qos1_and_expect_success(
                 &publisher,
                 topic,
                 Bytes::from_static(b"retained payload"),
@@ -632,7 +624,7 @@ async fn retain_handling_options_control_delivery() {
             .await;
         }
 
-        subscribe_with_retain_options_and_expect_success(
+        subscribe_with_options_and_expect_success(
             &subscriber,
             do_not_send_topic,
             QoS::AtLeastOnce,
@@ -655,7 +647,7 @@ async fn retain_handling_options_control_delivery() {
             retain_as_published: true,
             retain_handling: RetainHandling::SendOnlyIfSubscriptionDoesNotCurrentlyExist,
         };
-        subscribe_with_retain_options_and_expect_success(
+        subscribe_with_options_and_expect_success(
             &subscriber,
             new_subscription_topic,
             QoS::AtLeastOnce,
@@ -669,7 +661,7 @@ async fn retain_handling_options_control_delivery() {
             Bytes::from_static(b"retained payload")
         );
 
-        subscribe_with_retain_options_and_expect_success(
+        subscribe_with_options_and_expect_success(
             &subscriber,
             new_subscription_topic,
             QoS::AtLeastOnce,
@@ -690,7 +682,7 @@ async fn retain_handling_options_control_delivery() {
             DisconnectedEvent::ApplicationDisconnect
         ));
         for topic in [do_not_send_topic, new_subscription_topic] {
-            publish_qos1_with_retain_and_expect_success(
+            publish_qos1_and_expect_success(
                 &publisher,
                 topic,
                 Bytes::new(),
