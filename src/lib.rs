@@ -3,10 +3,6 @@
 
 //! A low-level asynchronous MQTT 5 client library.
 //!
-//! QoS 0, QoS 1, and QoS 2 packet exchanges are supported end to end, including QoS 2 session
-//! recovery. Some MQTT 5 flow-control and capability limits remain deferred; see the repository's
-//! `doc/design/questions.md` for scope.
-//!
 //! # Client components
 //!
 //! [`client::new_client`] creates three components with independent ownership:

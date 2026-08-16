@@ -4,8 +4,6 @@ These runnable examples demonstrate the library's canonical end-to-end patterns:
 single-client lifecycle, reconnect supervision with connection-scoped state, and coordinated
 supervision of multiple clients. Start with the simple-client example, then use the document-update
 example for reconnect supervision or the message-relay example for multiple-client supervision.
-The library supports QoS 0, QoS 1, and QoS 2; these examples intentionally use QoS 0 and QoS 1 so
-their application structure remains the focus.
 
 Run these examples from the repository root. They work with any standards-compliant MQTT 5 server; Mosquitto is a convenient option, not a requirement. The first two examples default to an unauthenticated TCP server on `localhost:1883`. To use another server, update `HOSTNAME`, `PORT`, and any credentials near the top of the example. The relay defaults to separate downstream and upstream servers on `localhost:1883` and `localhost:1884`.
 
