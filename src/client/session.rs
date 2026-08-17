@@ -981,7 +981,7 @@ mod tests {
         let (_sub_tx, sub_rx) = channel(1);
         let (_publish_qos0_tx, publish_qos0_rx) = channel(1);
         let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
-        let (ack_tx, ack_rx) = channel(1);
+        let (ack_tx, ack_rx) = unbounded_channel();
         let (auth_tx, auth_rx) = channel(1);
         let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
         let mut session = Session::new(
@@ -1005,7 +1005,6 @@ mod tests {
 
         ack_tx
             .send(AcknowledgementRequest::PubComp(notifier, pubcomp.clone()))
-            .await
             .unwrap();
 
         let OutgoingPacketRequest::AcknowledgementRequest(AcknowledgementRequest::PubComp(
