@@ -1064,12 +1064,10 @@ impl Connection {
                 let timeout = pingresp_timer.as_ref().map(Timer::remaining_duration);
                 match maybe_timeout(timeout, io_f).await {
                     Ok(future::Either::Left((packet, _))) => {
-                        log::trace!("OUTGOING: {packet:?}");
-                        ConnectionLoopEvent::OutgoingPacket(packet)
+                        ConnectionLoopEvent::OutgoingReady(packet)
                     }
-                    Ok(future::Either::Right((Ok(raw_packet), _))) => {
-                        log::trace!("INCOMING: {raw_packet:?}");
-                        ConnectionLoopEvent::IncomingPacket(raw_packet)
+                    Ok(future::Either::Right((Ok(packet), _))) => {
+                        ConnectionLoopEvent::IncomingPacket(packet)
                     }
                     Ok(future::Either::Right((Err(err), _))) => {
                         ConnectionLoopEvent::ReceiveError(err)
@@ -1084,26 +1082,31 @@ impl Connection {
                     return Ok(InnerDisconnect::PingTimeout);
                 }
 
-                // Outgoing packet from session
-                ConnectionLoopEvent::OutgoingPacket(packet) => {
-                    let mut disconnect = None;
-                    let mut op_packet = Some(packet);
-                    while let Some(packet_) = op_packet {
-                        if let Packet::PingReq(_) = &packet_
+                ConnectionLoopEvent::OutgoingReady(mut packet) => {
+                    // Keep draining immediately ready packets after each write so an evolving
+                    // outgoing burst can be coalesced before the final flush.
+                    loop {
+                        log::trace!("OUTGOING: {packet:?}");
+                        if let Packet::PingReq(_) = &packet
                             && let Some(timeout) = self.cfg_pingresp_timeout
                         {
                             pingresp_timer = Some(Timer::new(timeout));
                         }
-                        if let Err(err) = writer.write(&packet_, ProtocolVersion::V5).await {
+                        if let Err(err) = writer.write(&packet, ProtocolVersion::V5).await {
                             log::error!("client disconnected due to transport error {err}");
                             self.core.transport_disconnected();
                             return Err(err.into());
                         }
-                        if let Packet::Disconnect(disconnect_) = packet_ {
-                            disconnect = Some(disconnect_);
+
+                        if matches!(packet, Packet::Disconnect(_)) {
                             break;
                         }
-                        op_packet = self.core.next_outgoing_packet().now_or_never();
+
+                        let Some(next_packet) = self.core.next_outgoing_packet().now_or_never()
+                        else {
+                            break;
+                        };
+                        packet = next_packet;
                     }
                     if let Err(err) = writer.flush().await {
                         log::error!("client disconnected due to transport error {err}");
@@ -1111,14 +1114,20 @@ impl Connection {
                         return Err(err.into());
                     }
                     // If we wrote a DISCONNECT packet, also close the connection.
-                    if let Some(disconnect) = disconnect {
+                    // The loop above breaks when we write a DISCONNECT, so it will always be the
+                    // last packet written before the flush.
+                    if let Packet::Disconnect(disconnect) = packet {
+                        log::info!(
+                            "client disconnected due to application request (reason: {:?})",
+                            disconnect.reason_code
+                        );
                         self.core.client_disconnected(&disconnect);
                         return Ok(InnerDisconnect::Application);
                     }
                 }
 
-                // Incoming packet from reader
                 ConnectionLoopEvent::IncomingPacket(packet) => {
+                    log::trace!("INCOMING: {packet:?}");
                     let result = match packet {
                         Packet::Auth(auth) => self.core.incoming_auth(auth),
 
@@ -1147,7 +1156,11 @@ impl Connection {
                             .complete_inflight(CompletedOperation::PubRel(pubcomp)),
 
                         Packet::Disconnect(disconnect) => {
-                            self.core.server_disconnected(&disconnect);
+                            log::error!(
+                                "client disconnected due to server (reason: {:?})",
+                                disconnect.reason_code
+                            );
+                            self.core.server_disconnected();
                             return Ok(InnerDisconnect::Server(disconnect.into()));
                         }
 
@@ -1341,7 +1354,7 @@ enum InnerDisconnect {
 }
 
 enum ConnectionLoopEvent {
-    OutgoingPacket(Packet<Bytes>),
+    OutgoingReady(Packet<Bytes>),
     IncomingPacket(Packet<Bytes>),
     ReceiveError(InnerConnectionError),
     PingResponseTimeout,
