@@ -126,7 +126,6 @@ macro_rules! generate_enum_and_enum_ref {
         {
             $(
                 $(#[ $($meta)* ])*
-                #[allow(clippy::enum_variant_names)]
                 $ident ( $($ty),* ),
             )*
         }

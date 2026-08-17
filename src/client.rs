@@ -72,7 +72,6 @@ pub mod token;
 /// re-establishes connections, and the [`Receiver`] yields incoming publishes. After connecting,
 /// the application must continuously drive [`Connection::run_until_disconnect`]; the library does
 /// not start a background connection task.
-#[allow(clippy::needless_pass_by_value)] // TODO: Remove when implemented
 pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let (o_pub_q12_tx, o_pub_q12_rx) =
         tokio::sync::mpsc::channel(options.publish_qos1_qos2_queue_size);

@@ -237,7 +237,6 @@ mod tests {
     #[test_case(b"\xb0\x1b\x12\x34\x17\x1f\x00\x14Topic Filter invalid\x8f", UnsubAckReasonCode::TopicFilterInvalid, "Topic Filter invalid", ProtocolVersion::V5; "Decode Unsuback TopicFilterInvalid")]
     #[test_case(b"\xb0\x1f\x12\x34\x1b\x1f\x00\x18Packet Identifier in use\x91", UnsubAckReasonCode::PacketIdentifierInUse,"Packet Identifier in use", ProtocolVersion::V5; "Decode Unsuback PacketIdentifierInUse")]
     // Lint wants `encoding` to be taken as borrow, but that makes the `test_case()` exprs more complicated.
-    #[allow(clippy::needless_pass_by_value)]
     fn decode_packet_unsuback_v5(
         encoding: &[u8],
         reason: UnsubAckReasonCode,
