@@ -13,7 +13,6 @@ jobs:
     name: Create ADO bug from issue
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
-    if: ${{ !contains(github.event.issue.labels.*.name, 'no-sync') }}
     env:
       # Required repository secrets:
       # - ADO_ORG: Azure DevOps organization name (e.g. "contoso")
@@ -30,6 +29,7 @@ jobs:
       ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
       ISSUE_LABELS_JSON: ${{ toJson(github.event.issue.labels.*.name) }}
       REPOSITORY: ${{ github.repository }}
+      SYNC_LABEL: synced-to-ado
 
     steps:
     - name: Verify required secrets
@@ -39,33 +39,27 @@ jobs:
         [ -n "${ADO_PROJECT}" ] || { echo "Missing secret: ADO_PROJECT"; exit 1; }
         [ -n "${ADO_PAT}" ] || { echo "Missing secret: ADO_PAT"; exit 1; }
 
-    - name: Check for existing sync marker
+    - name: Check for existing sync label
       id: existing
       run: |
         set -euo pipefail
-        marker='<!-- ado-bug-id:'
-        comments="$(gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" --paginate)"
-        existing_id="$(
-          printf '%s' "${comments}" \
-            | jq -r --arg marker "${marker}" '
-              .[]
-              | .body
-              | select(type == "string" and contains($marker))
-              | (capture("<!-- ado-bug-id:(?<id>[0-9]+) -->")?.id // empty)
-            ' \
-            | head -n1
+        labels="$(
+          gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" --paginate --jq '.[].name'
         )"
-        if [ -n "${existing_id}" ]; then
+        if printf '%s\n' "${labels}" | grep -Fxq 'no-sync'; then
+          echo "blocked_no_sync=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "blocked_no_sync=false" >> "$GITHUB_OUTPUT"
+        fi
+        if printf '%s\n' "${labels}" | grep -Fxq "${SYNC_LABEL}"; then
           echo "already_synced=true" >> "$GITHUB_OUTPUT"
-          echo "existing_id=${existing_id}" >> "$GITHUB_OUTPUT"
-          echo "existing_url=https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_workitems/edit/${existing_id}" >> "$GITHUB_OUTPUT"
         else
           echo "already_synced=false" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Create Azure DevOps bug
       id: create
-      if: steps.existing.outputs.already_synced != 'true'
+      if: steps.existing.outputs.blocked_no_sync != 'true' && steps.existing.outputs.already_synced != 'true'
       run: |
         set -euo pipefail
 
@@ -96,29 +90,34 @@ jobs:
               "<li><strong>Labels:</strong> \((if $labels == "" then "(none)" else $labels end))</li>",
               "</ul>",
               "<hr/>",
-              "<pre>\(($body // "") | gsub("<"; "&lt;") | gsub(">"; "&gt;"))</pre>"
+              "<pre>\(($body // "") | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;"))</pre>"
             ] | join("\n")
           '
         )"
 
         patch="$(
           jq -nc \
-            --arg title "[GitHub #${ISSUE_NUMBER}] ${ISSUE_TITLE}" \
+            --arg issue_number "${ISSUE_NUMBER}" \
+            --arg issue_title "${ISSUE_TITLE}" \
             --arg description "${description}" \
             --arg issue_url "${ISSUE_URL}" '
+            ($issue_url | gsub("&"; "&amp;") | gsub("\""; "&quot;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")) as $issue_url_html
+            |
             [
-              {"op":"add","path":"/fields/System.Title","value":$title},
+              {"op":"add","path":"/fields/System.Title","value":"[GitHub #\($issue_number)] \($issue_title)"},
               {"op":"add","path":"/fields/System.Description","value":$description},
               {"op":"add","path":"/fields/System.Tags","value":"github;issue-sync"},
-              {"op":"add","path":"/fields/Microsoft.VSTS.Common.ReproSteps","value":$issue_url}
+              {"op":"add","path":"/fields/System.History","value":"Source GitHub issue: <a href=\"\($issue_url_html)\">\($issue_url_html)</a>"}
             ]
           '
         )"
 
         auth_cfg="$(mktemp)"
-        trap 'rm -f "${auth_cfg}"' EXIT
+        trap 'rm -f "${auth_cfg}"' EXIT INT TERM
         chmod 600 "${auth_cfg}"
-        printf 'header = "Authorization: Basic %s"\n' "$(printf ':%s' "${ADO_PAT}" | base64 -w0)" > "${auth_cfg}"
+        ado_pat_sanitized="$(printf '%s' "${ADO_PAT}" | tr -d '\r\n')"
+        auth_b64="$(printf ':%s' "${ado_pat_sanitized}" | base64 | tr -d '\r\n')"
+        printf 'header = "Authorization: Basic %s"\n' "${auth_b64}" > "${auth_cfg}"
 
         response="$(
           printf '%s' "${patch}" \
@@ -132,41 +131,42 @@ jobs:
 
         bug_id="$(printf '%s' "${response}" | jq -r '.id // empty')"
         if [ -z "${bug_id}" ]; then
-          echo "Failed to parse ADO bug id from response"
-          printf '%s\n' "${response}"
+          error_message="$(
+            printf '%s' "${response}" \
+              | jq -r '.message // .error.message // .typeKey // empty' 2>/dev/null || true
+          )"
+          echo "Failed to parse ADO bug id from API response."
+          [ -n "${error_message}" ] && echo "API error: ${error_message}"
           exit 1
         fi
-
         echo "bug_id=${bug_id}" >> "$GITHUB_OUTPUT"
-        echo "bug_url=https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_workitems/edit/${bug_id}" >> "$GITHUB_OUTPUT"
         {
           echo "### Created Azure DevOps bug"
           echo "- Bug ID: ${bug_id}"
-          echo "- URL: https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_workitems/edit/${bug_id}"
         } >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Comment with Azure DevOps bug link
-      if: steps.existing.outputs.already_synced != 'true'
+    - name: Mark issue as synced
+      if: steps.existing.outputs.blocked_no_sync != 'true' && steps.existing.outputs.already_synced != 'true' && steps.create.outputs.bug_id != ''
       run: |
         set -euo pipefail
-        [ -n "${BUG_ID}" ] || { echo "BUG_ID is empty"; exit 1; }
-        [ -n "${BUG_URL}" ] || { echo "BUG_URL is empty"; exit 1; }
-        comment_file="$(mktemp)"
-        trap 'rm -f "${comment_file}"' EXIT
-        printf 'Created Azure DevOps bug: %s\n\n<!-- ado-bug-id:%s -->\n' "${BUG_URL}" "${BUG_ID}" > "${comment_file}"
-        gh issue comment "${ISSUE_NUMBER}" --repo "${REPOSITORY}" --body-file "${comment_file}"
-      env:
-        BUG_ID: ${{ steps.create.outputs.bug_id }}
-        BUG_URL: ${{ steps.create.outputs.bug_url }}
+        gh api \
+          --method POST \
+          -H "Accept: application/vnd.github+json" \
+          "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
+          -f labels[]="${SYNC_LABEL}"
 
     - name: Report existing sync
       if: steps.existing.outputs.already_synced == 'true'
       run: |
         {
           echo "### Azure DevOps sync already exists"
-          echo "- Existing bug ID: ${EXISTING_ID}"
-          echo "- URL: ${EXISTING_URL}"
+          echo "- GitHub issue is already labeled '${SYNC_LABEL}'; skipping duplicate creation."
         } >> "$GITHUB_STEP_SUMMARY"
-      env:
-        EXISTING_ID: ${{ steps.existing.outputs.existing_id }}
-        EXISTING_URL: ${{ steps.existing.outputs.existing_url }}
+
+    - name: Report no-sync label skip
+      if: steps.existing.outputs.blocked_no_sync == 'true'
+      run: |
+        {
+          echo "### Azure DevOps sync skipped"
+          echo "- GitHub issue has label 'no-sync'; bug creation was skipped."
+        } >> "$GITHUB_STEP_SUMMARY"
