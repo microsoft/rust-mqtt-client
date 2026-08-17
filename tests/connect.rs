@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use matches::assert_matches;
+use ms_mqtt_client::client::token::completion::CompletionError;
 use ms_mqtt_client::client::{
     ClientOptions, ConnectEnhancedAuthResult, ConnectResult, DisconnectedEvent, KeepAliveConfig,
     new_client,
@@ -14,8 +15,11 @@ use ms_mqtt_client::client::{
 use ms_mqtt_client::mqtt_proto::{
     self, AuthenticateReasonCode, Authentication, ConnectReasonCode, Packet, PacketIdentifierDupQoS,
 };
-use ms_mqtt_client::packet::{AuthenticationInfo, ConnectProperties, SessionExpiryInterval};
-use ms_mqtt_client::topic::TopicName;
+use ms_mqtt_client::packet::{
+    AuthenticationInfo, ConnectProperties, QoS, RetainOptions, SessionExpiryInterval,
+    SubscribeProperties,
+};
+use ms_mqtt_client::topic::{TopicFilter, TopicName};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -307,6 +311,22 @@ async fn ping_timeout_preserves_session_for_reconnect() {
         panic!("expected outbound QoS 1 PUBLISH");
     };
 
+    let subscribe_ct = client
+        .subscribe(
+            TopicFilter::new("connect/ping-timeout-subscription").unwrap(),
+            QoS::AtLeastOnce,
+            false,
+            RetainOptions::default(),
+            SubscribeProperties::default(),
+        )
+        .await
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(outgoing_packets_rx.recv().await, Some(Packet::Subscribe(_)));
+
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(5), &mut connection).await,
         Err(_)
@@ -318,6 +338,10 @@ async fn ping_timeout_preserves_session_for_reconnect() {
 
     let (connect_handle, event) = connection.await;
     assert_matches!(event, DisconnectedEvent::PingTimeout);
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), subscribe_ct).await,
+        Ok(Err(CompletionError::Canceled(_)))
+    );
 
     let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
     let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();

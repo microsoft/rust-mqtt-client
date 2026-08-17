@@ -25,7 +25,7 @@ use crate::client::{
         DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0, PublishRequestQoS1QoS2,
         ReauthRequest, SubscriptionRequest,
     },
-    session::{CompletedOperation, Session},
+    core::{ClientCore, CompletedOperation},
     timer::Timer,
     token::{
         acknowledgement::{PubAckToken, PubRecToken},
@@ -51,7 +51,7 @@ use crate::mqtt_proto::{
 use crate::packet::{
     Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
     DisconnectProperties, KeepAlive, PacketIdentifier, Publish, PublishProperties, QoS,
-    RetainOptions, SubscribeProperties, UnsubscribeProperties, Will,
+    RetainOptions, SessionExpiryInterval, SubscribeProperties, UnsubscribeProperties, Will,
 };
 use crate::topic::{TopicFilter, TopicName};
 use crate::transport::{ConnectionTransportConfig, ConnectionTransportType};
@@ -62,7 +62,7 @@ use crate::transport::{ConnectionTransportConfig, ConnectionTransportType};
 // Alternatively, maybe we break up connect/disconnect/auth into a separate fourth component?
 
 mod channel_data;
-mod session;
+mod core;
 mod timer;
 pub mod token;
 
@@ -95,7 +95,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let reader_pool = BytesPool;
     let writer_pool = BytesPool;
     let owned = writer_pool.take_empty_owned();
-    let session = Session::new(
+    let core = ClientCore::new(
         sub_rx,
         o_pub_q0_rx,
         o_pub_q12_rx,
@@ -108,7 +108,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         owned,
     );
     let connect_handle = ConnectHandle {
-        session,
+        core,
         reader_pool,
         writer_pool,
         cfg_client_id: options.client_id,
@@ -402,7 +402,7 @@ impl Receiver {
 
 /// Handle providing MQTT CONNECT functionality.
 pub struct ConnectHandle {
-    session: Session<BytesMut>,
+    core: ClientCore<BytesMut>,
     reader_pool: BytesPool,
     writer_pool: BytesPool,
     cfg_client_id: Option<String>,
@@ -480,6 +480,7 @@ impl ConnectHandle {
         properties: ConnectProperties,
         response_timeout: Option<Duration>,
     ) -> ConnectResult {
+        let requested_session_expiry = properties.session_expiry_interval;
         let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
             Ok(streams) => streams,
             Err(err) => {
@@ -520,11 +521,11 @@ impl ConnectHandle {
             Err(_) => return ConnectResult::Failure(self, ConnectError::ResponseTimeout),
         };
 
-        self.session
-            .incoming_connack(connack.clone(), keep_alive.into());
+        self.core
+            .incoming_connack(&connack, keep_alive.into(), requested_session_expiry);
 
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-        self.session.ch.disconnect_rx = Some(disconnect_rx);
+        self.core.ch.disconnect_rx = Some(disconnect_rx);
         let cfg_pingresp_timeout = match keep_alive {
             KeepAliveConfig::Duration {
                 ping_after,
@@ -534,7 +535,7 @@ impl ConnectHandle {
         };
         ConnectResult::Success(
             Connection {
-                session: self.session,
+                core: self.core,
                 reader_pool: self.reader_pool,
                 writer_pool: self.writer_pool,
                 reader,
@@ -652,6 +653,7 @@ impl ConnectHandle {
         response_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
         let auth_method = authentication_info.method.clone();
+        let requested_session_expiry = properties.session_expiry_interval;
         let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
             Ok(streams) => streams,
             Err(err) => return ConnectEnhancedAuthResult::Failure(self, err.into()),
@@ -682,12 +684,12 @@ impl ConnectHandle {
 
         match packet {
             Packet::ConnAck(connack) => {
-                self.session
-                    .incoming_connack(connack.clone(), keep_alive.into());
+                self.core
+                    .incoming_connack(&connack, keep_alive.into(), requested_session_expiry);
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-                    let auth_tx = self.session.ch.auth_tx.clone();
-                    self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    let auth_tx = self.core.ch.auth_tx.clone();
+                    self.core.ch.disconnect_rx = Some(disconnect_rx);
                     let cfg_pingresp_timeout = match keep_alive {
                         KeepAliveConfig::Duration {
                             ping_after,
@@ -697,7 +699,7 @@ impl ConnectHandle {
                     };
                     ConnectEnhancedAuthResult::Success(
                         Connection {
-                            session: self.session,
+                            core: self.core,
                             reader_pool: self.reader_pool,
                             writer_pool: self.writer_pool,
                             reader,
@@ -719,7 +721,7 @@ impl ConnectHandle {
 
             Packet::Auth(auth) => {
                 let auth_handle = EnhancedAuthHandle {
-                    session: self.session,
+                    core: self.core,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
                     reader,
@@ -727,6 +729,7 @@ impl ConnectHandle {
                     auth_method,
                     cfg_client_id: self.cfg_client_id,
                     cfg_keep_alive: keep_alive,
+                    cfg_session_expiry: requested_session_expiry,
                 };
                 ConnectEnhancedAuthResult::Continue(auth.into(), auth_handle)
             }
@@ -855,7 +858,7 @@ impl std::fmt::Debug for ConnectHandle {
 
 /// Handle for the intermediate step of an MQTT CONNECT with enhanced authentication.
 pub struct EnhancedAuthHandle {
-    session: Session<BytesMut>,
+    core: ClientCore<BytesMut>,
     reader_pool: BytesPool,
     writer_pool: BytesPool,
     reader: Reader<BytesPool>,
@@ -863,6 +866,7 @@ pub struct EnhancedAuthHandle {
     auth_method: String,
     cfg_client_id: Option<String>,
     cfg_keep_alive: KeepAliveConfig,
+    cfg_session_expiry: SessionExpiryInterval,
 }
 
 impl EnhancedAuthHandle {
@@ -889,7 +893,7 @@ impl EnhancedAuthHandle {
         );
         if let Err(err) = self.writer.write(&auth, ProtocolVersion::V5).await {
             let connect_handle = ConnectHandle {
-                session: self.session,
+                core: self.core,
                 reader_pool: self.reader_pool,
                 writer_pool: self.writer_pool,
                 cfg_client_id: self.cfg_client_id,
@@ -898,7 +902,7 @@ impl EnhancedAuthHandle {
         }
         if let Err(err) = self.writer.flush().await {
             let connect_handle = ConnectHandle {
-                session: self.session,
+                core: self.core,
                 reader_pool: self.reader_pool,
                 writer_pool: self.writer_pool,
                 cfg_client_id: self.cfg_client_id,
@@ -911,7 +915,7 @@ impl EnhancedAuthHandle {
             Ok(Ok(packet)) => packet,
             Ok(Err(err)) => {
                 let connect_handle = ConnectHandle {
-                    session: self.session,
+                    core: self.core,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
                     cfg_client_id: self.cfg_client_id,
@@ -920,7 +924,7 @@ impl EnhancedAuthHandle {
             }
             Err(_) => {
                 let connect_handle = ConnectHandle {
-                    session: self.session,
+                    core: self.core,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
                     cfg_client_id: self.cfg_client_id,
@@ -934,13 +938,16 @@ impl EnhancedAuthHandle {
 
         match packet {
             Packet::ConnAck(connack) => {
-                self.session
-                    .incoming_connack(connack.clone(), self.cfg_keep_alive.into());
+                self.core.incoming_connack(
+                    &connack,
+                    self.cfg_keep_alive.into(),
+                    self.cfg_session_expiry,
+                );
 
                 if connack.is_success() {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
-                    let auth_tx = self.session.ch.auth_tx.clone();
-                    self.session.ch.disconnect_rx = Some(disconnect_rx);
+                    let auth_tx = self.core.ch.auth_tx.clone();
+                    self.core.ch.disconnect_rx = Some(disconnect_rx);
                     let cfg_pingresp_timeout = match self.cfg_keep_alive {
                         KeepAliveConfig::Duration {
                             ping_after,
@@ -949,7 +956,7 @@ impl EnhancedAuthHandle {
                         KeepAliveConfig::Infinite => None,
                     };
                     let connection = Connection {
-                        session: self.session,
+                        core: self.core,
                         reader_pool: self.reader_pool,
                         writer_pool: self.writer_pool,
                         reader: self.reader,
@@ -968,7 +975,7 @@ impl EnhancedAuthHandle {
                     )
                 } else {
                     let connect_handle = ConnectHandle {
-                        session: self.session,
+                        core: self.core,
                         reader_pool: self.reader_pool,
                         writer_pool: self.writer_pool,
                         cfg_client_id: self.cfg_client_id,
@@ -984,7 +991,7 @@ impl EnhancedAuthHandle {
 
             _ => {
                 let connect_handle = ConnectHandle {
-                    session: self.session,
+                    core: self.core,
                     reader_pool: self.reader_pool,
                     writer_pool: self.writer_pool,
                     cfg_client_id: self.cfg_client_id,
@@ -1000,7 +1007,7 @@ impl EnhancedAuthHandle {
 
 /// Runs the MQTT client event loop, keeping the client operational.
 pub struct Connection {
-    session: Session<BytesMut>,
+    core: ClientCore<BytesMut>,
     reader_pool: BytesPool,
     writer_pool: BytesPool,
     reader: Reader<BytesPool>,
@@ -1020,11 +1027,7 @@ impl Connection {
     #[doc(alias = "event_loop")]
     #[doc(alias = "connection_driver")]
     pub async fn run_until_disconnect(mut self) -> (ConnectHandle, DisconnectedEvent) {
-        let result = self.run_until_disconnect_inner().await;
-        if let Err(err) = &result {
-            self.session.transport_disconnect(err);
-        }
-        let event = match result {
+        let event = match self.run_until_disconnect_inner().await {
             Ok(InnerDisconnect::Application) => DisconnectedEvent::ApplicationDisconnect,
             Ok(InnerDisconnect::Server(disconnect)) => {
                 DisconnectedEvent::ServerDisconnect(disconnect)
@@ -1034,7 +1037,7 @@ impl Connection {
             Err(InnerConnectionError::Protocol(e)) => DisconnectedEvent::ProtocolError(e),
         };
         let connect_handle = ConnectHandle {
-            session: self.session,
+            core: self.core,
             reader_pool: self.reader_pool,
             writer_pool: self.writer_pool,
             cfg_client_id: self.cfg_client_id,
@@ -1053,7 +1056,7 @@ impl Connection {
         loop {
             // Check for outgoing packets from the session or incoming packets from the reader.
             let next = {
-                let next_outgoing_packet_f = pin!(self.session.next_outgoing_packet());
+                let next_outgoing_packet_f = pin!(self.core.next_outgoing_packet());
                 let read_f = pin!(mqtt_receive(reader));
                 let io_f = future::select(next_outgoing_packet_f, read_f);
 
@@ -1062,91 +1065,117 @@ impl Connection {
                 match maybe_timeout(timeout, io_f).await {
                     Ok(future::Either::Left((packet, _))) => {
                         log::trace!("OUTGOING: {packet:?}");
-                        future::Either::Left(packet)
+                        ConnectionLoopEvent::OutgoingPacket(packet)
                     }
                     Ok(future::Either::Right((Ok(raw_packet), _))) => {
                         log::trace!("INCOMING: {raw_packet:?}");
-                        future::Either::Right(Ok(raw_packet))
+                        ConnectionLoopEvent::IncomingPacket(raw_packet)
                     }
-                    Ok(future::Either::Right((Err(err), _))) => future::Either::Right(Err(err)),
-                    Err(_) => return Ok(InnerDisconnect::PingTimeout),
+                    Ok(future::Either::Right((Err(err), _))) => {
+                        ConnectionLoopEvent::ReceiveError(err)
+                    }
+                    Err(_) => ConnectionLoopEvent::PingResponseTimeout,
                 }
             };
             match next {
+                ConnectionLoopEvent::PingResponseTimeout => {
+                    log::error!("client disconnected due to PINGRESP timeout");
+                    self.core.transport_disconnected();
+                    return Ok(InnerDisconnect::PingTimeout);
+                }
+
                 // Outgoing packet from session
-                future::Either::Left(packet) => {
-                    let mut disconnect = false;
+                ConnectionLoopEvent::OutgoingPacket(packet) => {
+                    let mut disconnect = None;
                     let mut op_packet = Some(packet);
                     while let Some(packet_) = op_packet {
-                        if let Packet::Disconnect(disconnect_) = &packet_ {
-                            disconnect = true;
-                            self.session.client_disconnect(disconnect_);
-                        }
                         if let Packet::PingReq(_) = &packet_
                             && let Some(timeout) = self.cfg_pingresp_timeout
                         {
                             pingresp_timer = Some(Timer::new(timeout));
                         }
-                        writer.write(&packet_, ProtocolVersion::V5).await?;
-                        if disconnect {
+                        if let Err(err) = writer.write(&packet_, ProtocolVersion::V5).await {
+                            log::error!("client disconnected due to transport error {err}");
+                            self.core.transport_disconnected();
+                            return Err(err.into());
+                        }
+                        if let Packet::Disconnect(disconnect_) = packet_ {
+                            disconnect = Some(disconnect_);
                             break;
                         }
-                        op_packet = self.session.next_outgoing_packet().now_or_never();
+                        op_packet = self.core.next_outgoing_packet().now_or_never();
                     }
-                    writer.flush().await?;
+                    if let Err(err) = writer.flush().await {
+                        log::error!("client disconnected due to transport error {err}");
+                        self.core.transport_disconnected();
+                        return Err(err.into());
+                    }
                     // If we wrote a DISCONNECT packet, also close the connection.
-                    if disconnect {
+                    if let Some(disconnect) = disconnect {
+                        self.core.client_disconnected(&disconnect);
                         return Ok(InnerDisconnect::Application);
                     }
                 }
 
                 // Incoming packet from reader
-                future::Either::Right(Ok(packet)) => match packet {
-                    Packet::Auth(auth) => self.session.incoming_auth(auth)?,
+                ConnectionLoopEvent::IncomingPacket(packet) => {
+                    let result = match packet {
+                        Packet::Auth(auth) => self.core.incoming_auth(auth),
 
-                    Packet::SubAck(suback) => self
-                        .session
-                        .complete_inflight(CompletedOperation::Subscribe(suback))?,
+                        Packet::SubAck(suback) => self
+                            .core
+                            .complete_inflight(CompletedOperation::Subscribe(suback)),
 
-                    Packet::UnsubAck(unsuback) => self
-                        .session
-                        .complete_inflight(CompletedOperation::Unsubscribe(unsuback))?,
+                        Packet::UnsubAck(unsuback) => self
+                            .core
+                            .complete_inflight(CompletedOperation::Unsubscribe(unsuback)),
 
-                    Packet::PubAck(puback) => self
-                        .session
-                        .complete_inflight(CompletedOperation::PublishQoS1(puback))?,
+                        Packet::PubAck(puback) => self
+                            .core
+                            .complete_inflight(CompletedOperation::PublishQoS1(puback)),
 
-                    Packet::PubRec(pubrec) => self
-                        .session
-                        .complete_inflight(CompletedOperation::PublishQoS2(pubrec))?,
+                        Packet::PubRec(pubrec) => self
+                            .core
+                            .complete_inflight(CompletedOperation::PublishQoS2(pubrec)),
 
-                    Packet::PubRel(pubrel) => self
-                        .session
-                        .complete_inflight(CompletedOperation::PubRec(pubrel))?,
+                        Packet::PubRel(pubrel) => self
+                            .core
+                            .complete_inflight(CompletedOperation::PubRec(pubrel)),
 
-                    Packet::PubComp(pubcomp) => self
-                        .session
-                        .complete_inflight(CompletedOperation::PubRel(pubcomp))?,
+                        Packet::PubComp(pubcomp) => self
+                            .core
+                            .complete_inflight(CompletedOperation::PubRel(pubcomp)),
 
-                    Packet::Disconnect(disconnect) => {
-                        self.session.server_disconnect(&disconnect);
-                        return Ok(InnerDisconnect::Server(disconnect.into()));
+                        Packet::Disconnect(disconnect) => {
+                            self.core.server_disconnected(&disconnect);
+                            return Ok(InnerDisconnect::Server(disconnect.into()));
+                        }
+
+                        Packet::Publish(publish) => {
+                            self.core.incoming_publish(publish);
+                            Ok(())
+                        }
+
+                        Packet::PingResp(_) => {
+                            // Remove ping response timer as we have successfully received a PINGRESP.
+                            pingresp_timer = None;
+                            Ok(())
+                        }
+
+                        _ => Err(ProtocolErrorRepr::UnexpectedPacket.into()),
+                    };
+                    if let Err(err) = result {
+                        log::error!("client disconnected due to protocol error {err}");
+                        self.core.transport_disconnected();
+                        return Err(err.into());
                     }
+                }
 
-                    Packet::Publish(publish) => self.session.incoming_publish(publish),
-
-                    Packet::PingResp(_) => {
-                        // Remove ping response timer as we have successfully received a PINGRESP.
-                        pingresp_timer = None;
-                    }
-
-                    packet => {
-                        let err = ProtocolError::from(ProtocolErrorRepr::UnexpectedPacket).into();
-                        return Err(err);
-                    }
-                },
-
-                future::Either::Right(Err(err)) => return Err(err),
+                ConnectionLoopEvent::ReceiveError(err) => {
+                    log::error!("client disconnected due to connection error {err}");
+                    self.core.transport_disconnected();
+                    return Err(err);
+                }
             }
         }
     }
@@ -1311,10 +1340,18 @@ enum InnerDisconnect {
     PingTimeout,
 }
 
+enum ConnectionLoopEvent {
+    OutgoingPacket(Packet<Bytes>),
+    IncomingPacket(Packet<Bytes>),
+    ReceiveError(InnerConnectionError),
+    PingResponseTimeout,
+}
+
 /// Acknowledgement control associated with an incoming [`Publish`].
 ///
-/// Dropping this value also drops any contained token. For QoS 1 and QoS 2, that attempts the
-/// successful default acknowledgement transition for the current protocol phase.
+/// Dropping this value also drops any contained token. For QoS 1, this attempts to accept the
+/// PUBLISH with default PUBACK properties. For QoS 2, this attempts to complete the full
+/// acknowledgement flow with default PUBREC and PUBCOMP properties.
 // TODO: Rename to `ManualAcknowledgment` with the next set of breaking changes.
 #[doc(alias = "ManualAcknowledgment")]
 pub enum ManualAcknowledgement {
