@@ -23,8 +23,6 @@ jobs:
       # The federated identity must be authorized in Azure DevOps to create Bug work items.
       ADO_ORG: ${{ secrets.ADO_ORG }}
       ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       GH_TOKEN: ${{ github.token }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -41,8 +39,6 @@ jobs:
         set -euo pipefail
         [ -n "${ADO_ORG}" ] || { echo "Missing secret: ADO_ORG"; exit 1; }
         [ -n "${ADO_PROJECT}" ] || { echo "Missing secret: ADO_PROJECT"; exit 1; }
-        [ -n "${AZURE_CLIENT_ID}" ] || { echo "Missing secret: AZURE_CLIENT_ID"; exit 1; }
-        [ -n "${AZURE_TENANT_ID}" ] || { echo "Missing secret: AZURE_TENANT_ID"; exit 1; }
 
     - name: Check for existing sync label
       id: existing
@@ -66,8 +62,8 @@ jobs:
       if: steps.existing.outputs.blocked_no_sync != 'true' && steps.existing.outputs.already_synced != 'true'
       uses: azure/login@v2
       with:
-        client-id: ${{ env.AZURE_CLIENT_ID }}
-        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         allow-no-subscriptions: true
 
     - name: Create Azure DevOps bug
@@ -125,9 +121,6 @@ jobs:
           '
         )"
 
-        auth_cfg="$(mktemp)"
-        trap 'rm -f "${auth_cfg}"' EXIT INT TERM
-        chmod 600 "${auth_cfg}"
         ado_token="$(
           az account get-access-token \
             --resource 499b84ac-1321-427f-aa17-267ca6975798 \
@@ -136,14 +129,13 @@ jobs:
             | tr -d '\r\n'
         )"
         [ -n "${ado_token}" ] || { echo "Failed to acquire Azure DevOps access token."; exit 1; }
-        printf 'header = "Authorization: Bearer %s"\n' "${ado_token}" > "${auth_cfg}"
 
         response="$(
           printf '%s' "${patch}" \
             | curl --silent --show-error --fail-with-body \
                 -X POST \
                 -H "Content-Type: application/json-patch+json" \
-                --config "${auth_cfg}" \
+                -H "Authorization: Bearer ${ado_token}" \
                 --data-binary @- \
                 "https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/wit/workitems/\$Bug?api-version=7.1"
         )"
