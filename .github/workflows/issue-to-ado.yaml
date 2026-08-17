@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
   issues: write
 
 jobs:
@@ -17,10 +18,13 @@ jobs:
       # Required repository secrets:
       # - ADO_ORG: Azure DevOps organization name (e.g. "contoso")
       # - ADO_PROJECT: Azure DevOps project name
-      # - ADO_PAT: Azure DevOps personal access token with work item write permissions
+      # - AZURE_CLIENT_ID: Entra app/client ID configured for GitHub OIDC
+      # - AZURE_TENANT_ID: Entra tenant ID for the app/client
+      # The federated identity must be authorized in Azure DevOps to create Bug work items.
       ADO_ORG: ${{ secrets.ADO_ORG }}
       ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
-      ADO_PAT: ${{ secrets.ADO_PAT }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       GH_TOKEN: ${{ github.token }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -37,7 +41,8 @@ jobs:
         set -euo pipefail
         [ -n "${ADO_ORG}" ] || { echo "Missing secret: ADO_ORG"; exit 1; }
         [ -n "${ADO_PROJECT}" ] || { echo "Missing secret: ADO_PROJECT"; exit 1; }
-        [ -n "${ADO_PAT}" ] || { echo "Missing secret: ADO_PAT"; exit 1; }
+        [ -n "${AZURE_CLIENT_ID}" ] || { echo "Missing secret: AZURE_CLIENT_ID"; exit 1; }
+        [ -n "${AZURE_TENANT_ID}" ] || { echo "Missing secret: AZURE_TENANT_ID"; exit 1; }
 
     - name: Check for existing sync label
       id: existing
@@ -56,6 +61,14 @@ jobs:
         else
           echo "already_synced=false" >> "$GITHUB_OUTPUT"
         fi
+
+    - name: Sign in to Azure
+      if: steps.existing.outputs.blocked_no_sync != 'true' && steps.existing.outputs.already_synced != 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ env.AZURE_CLIENT_ID }}
+        tenant-id: ${{ env.AZURE_TENANT_ID }}
+        allow-no-subscriptions: true
 
     - name: Create Azure DevOps bug
       id: create
@@ -115,9 +128,15 @@ jobs:
         auth_cfg="$(mktemp)"
         trap 'rm -f "${auth_cfg}"' EXIT INT TERM
         chmod 600 "${auth_cfg}"
-        ado_pat_sanitized="$(printf '%s' "${ADO_PAT}" | tr -d '\r\n')"
-        auth_b64="$(printf ':%s' "${ado_pat_sanitized}" | base64 | tr -d '\r\n')"
-        printf 'header = "Authorization: Basic %s"\n' "${auth_b64}" > "${auth_cfg}"
+        ado_token="$(
+          az account get-access-token \
+            --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+            --query accessToken \
+            --output tsv \
+            | tr -d '\r\n'
+        )"
+        [ -n "${ado_token}" ] || { echo "Failed to acquire Azure DevOps access token."; exit 1; }
+        printf 'header = "Authorization: Bearer %s"\n' "${ado_token}" > "${auth_cfg}"
 
         response="$(
           printf '%s' "${patch}" \
