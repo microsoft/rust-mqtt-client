@@ -115,13 +115,19 @@ jobs:
           '
         )"
 
+        auth_cfg="$(mktemp)"
+        trap 'rm -f "${auth_cfg}"' EXIT
+        chmod 600 "${auth_cfg}"
+        printf 'header = "Authorization: Basic %s"\n' "$(printf ':%s' "${ADO_PAT}" | base64 -w0)" > "${auth_cfg}"
+
         response="$(
-          curl --silent --show-error --fail-with-body \
-            -X POST \
-            -H "Content-Type: application/json-patch+json" \
-            -H "Authorization: Basic $(printf ':%s' "${ADO_PAT}" | base64 -w0)" \
-            --data "${patch}" \
-            "https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/wit/workitems/\$Bug?api-version=7.1-preview.3"
+          printf '%s' "${patch}" \
+            | curl --silent --show-error --fail-with-body \
+                -X POST \
+                -H "Content-Type: application/json-patch+json" \
+                --config "${auth_cfg}" \
+                --data-binary @- \
+                "https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/wit/workitems/\$Bug?api-version=7.1"
         )"
 
         bug_id="$(printf '%s' "${response}" | jq -r '.id // empty')"
@@ -143,10 +149,12 @@ jobs:
       if: steps.existing.outputs.already_synced != 'true'
       run: |
         set -euo pipefail
-        comment_body="Created Azure DevOps bug: ${BUG_URL}
-
-        <!-- ado-bug-id:${BUG_ID} -->"
-        gh issue comment "${ISSUE_NUMBER}" --repo "${REPOSITORY}" --body "${comment_body}"
+        [ -n "${BUG_ID}" ] || { echo "BUG_ID is empty"; exit 1; }
+        [ -n "${BUG_URL}" ] || { echo "BUG_URL is empty"; exit 1; }
+        comment_file="$(mktemp)"
+        trap 'rm -f "${comment_file}"' EXIT
+        printf 'Created Azure DevOps bug: %s\n\n<!-- ado-bug-id:%s -->\n' "${BUG_URL}" "${BUG_ID}" > "${comment_file}"
+        gh issue comment "${ISSUE_NUMBER}" --repo "${REPOSITORY}" --body-file "${comment_file}"
       env:
         BUG_ID: ${{ steps.create.outputs.bug_id }}
         BUG_URL: ${{ steps.create.outputs.bug_url }}
@@ -156,6 +164,9 @@ jobs:
       run: |
         {
           echo "### Azure DevOps sync already exists"
-          echo "- Existing bug ID: ${{ steps.existing.outputs.existing_id }}"
-          echo "- URL: ${{ steps.existing.outputs.existing_url }}"
+          echo "- Existing bug ID: ${EXISTING_ID}"
+          echo "- URL: ${EXISTING_URL}"
         } >> "$GITHUB_STEP_SUMMARY"
+      env:
+        EXISTING_ID: ${{ steps.existing.outputs.existing_id }}
+        EXISTING_URL: ${{ steps.existing.outputs.existing_url }}
