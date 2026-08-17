@@ -1,0 +1,161 @@
+name: 'Issue to ADO Bug'
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  create-ado-bug:
+    name: Create ADO bug from issue
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+    if: ${{ !contains(github.event.issue.labels.*.name, 'no-sync') }}
+    env:
+      # Required repository secrets:
+      # - ADO_ORG: Azure DevOps organization name (e.g. "contoso")
+      # - ADO_PROJECT: Azure DevOps project name
+      # - ADO_PAT: Azure DevOps personal access token with work item write permissions
+      ADO_ORG: ${{ secrets.ADO_ORG }}
+      ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
+      ADO_PAT: ${{ secrets.ADO_PAT }}
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      ISSUE_URL: ${{ github.event.issue.html_url }}
+      ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+      ISSUE_LABELS_JSON: ${{ toJson(github.event.issue.labels.*.name) }}
+      REPOSITORY: ${{ github.repository }}
+
+    steps:
+    - name: Verify required secrets
+      run: |
+        set -euo pipefail
+        [ -n "${ADO_ORG}" ] || { echo "Missing secret: ADO_ORG"; exit 1; }
+        [ -n "${ADO_PROJECT}" ] || { echo "Missing secret: ADO_PROJECT"; exit 1; }
+        [ -n "${ADO_PAT}" ] || { echo "Missing secret: ADO_PAT"; exit 1; }
+
+    - name: Check for existing sync marker
+      id: existing
+      run: |
+        set -euo pipefail
+        marker='<!-- ado-bug-id:'
+        comments="$(gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" --paginate)"
+        existing_id="$(
+          printf '%s' "${comments}" \
+            | jq -r --arg marker "${marker}" '
+              .[]
+              | .body
+              | select(type == "string" and contains($marker))
+              | (capture("<!-- ado-bug-id:(?<id>[0-9]+) -->")?.id // empty)
+            ' \
+            | head -n1
+        )"
+        if [ -n "${existing_id}" ]; then
+          echo "already_synced=true" >> "$GITHUB_OUTPUT"
+          echo "existing_id=${existing_id}" >> "$GITHUB_OUTPUT"
+          echo "existing_url=https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_workitems/edit/${existing_id}" >> "$GITHUB_OUTPUT"
+        else
+          echo "already_synced=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Create Azure DevOps bug
+      id: create
+      if: steps.existing.outputs.already_synced != 'true'
+      run: |
+        set -euo pipefail
+
+        labels="$(
+          printf '%s' "${ISSUE_LABELS_JSON}" | jq -r '
+            if type == "array" then
+              map(select(type == "string" and length > 0)) | join(", ")
+            else
+              ""
+            end
+          '
+        )"
+
+        description="$(
+          jq -rn \
+            --arg repo "${REPOSITORY}" \
+            --arg issue_number "${ISSUE_NUMBER}" \
+            --arg issue_url "${ISSUE_URL}" \
+            --arg author "${ISSUE_AUTHOR}" \
+            --arg labels "${labels}" \
+            --arg body "${ISSUE_BODY}" '
+            [
+              "<p>Synced from GitHub issue.</p>",
+              "<ul>",
+              "<li><strong>Repository:</strong> \($repo)</li>",
+              "<li><strong>Issue:</strong> <a href=\"\($issue_url)\">#\($issue_number)</a></li>",
+              "<li><strong>Author:</strong> \($author)</li>",
+              "<li><strong>Labels:</strong> \((if $labels == "" then "(none)" else $labels end))</li>",
+              "</ul>",
+              "<hr/>",
+              "<pre>\(($body // "") | gsub("<"; "&lt;") | gsub(">"; "&gt;"))</pre>"
+            ] | join("\n")
+          '
+        )"
+
+        patch="$(
+          jq -nc \
+            --arg title "[GitHub #${ISSUE_NUMBER}] ${ISSUE_TITLE}" \
+            --arg description "${description}" \
+            --arg issue_url "${ISSUE_URL}" '
+            [
+              {"op":"add","path":"/fields/System.Title","value":$title},
+              {"op":"add","path":"/fields/System.Description","value":$description},
+              {"op":"add","path":"/fields/System.Tags","value":"github;issue-sync"},
+              {"op":"add","path":"/fields/Microsoft.VSTS.Common.ReproSteps","value":$issue_url}
+            ]
+          '
+        )"
+
+        response="$(
+          curl --silent --show-error --fail-with-body \
+            -X POST \
+            -H "Content-Type: application/json-patch+json" \
+            -H "Authorization: Basic $(printf ':%s' "${ADO_PAT}" | base64 -w0)" \
+            --data "${patch}" \
+            "https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/wit/workitems/\$Bug?api-version=7.1-preview.3"
+        )"
+
+        bug_id="$(printf '%s' "${response}" | jq -r '.id // empty')"
+        if [ -z "${bug_id}" ]; then
+          echo "Failed to parse ADO bug id from response"
+          printf '%s\n' "${response}"
+          exit 1
+        fi
+
+        echo "bug_id=${bug_id}" >> "$GITHUB_OUTPUT"
+        echo "bug_url=https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_workitems/edit/${bug_id}" >> "$GITHUB_OUTPUT"
+        {
+          echo "### Created Azure DevOps bug"
+          echo "- Bug ID: ${bug_id}"
+          echo "- URL: https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_workitems/edit/${bug_id}"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comment with Azure DevOps bug link
+      if: steps.existing.outputs.already_synced != 'true'
+      run: |
+        set -euo pipefail
+        comment_body="Created Azure DevOps bug: ${BUG_URL}
+
+        <!-- ado-bug-id:${BUG_ID} -->"
+        gh issue comment "${ISSUE_NUMBER}" --repo "${REPOSITORY}" --body "${comment_body}"
+      env:
+        BUG_ID: ${{ steps.create.outputs.bug_id }}
+        BUG_URL: ${{ steps.create.outputs.bug_url }}
+
+    - name: Report existing sync
+      if: steps.existing.outputs.already_synced == 'true'
+      run: |
+        {
+          echo "### Azure DevOps sync already exists"
+          echo "- Existing bug ID: ${{ steps.existing.outputs.existing_id }}"
+          echo "- URL: ${{ steps.existing.outputs.existing_url }}"
+        } >> "$GITHUB_STEP_SUMMARY"
