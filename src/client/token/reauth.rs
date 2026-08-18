@@ -9,6 +9,7 @@ use crate::client::token::completion::ReauthCompletionToken;
 use crate::error::DetachedError;
 use crate::packet::AuthProperties;
 
+/// Used to respond to the next challenge in an ongoing re-authentication exchange.
 #[derive(Debug)]
 pub struct ReauthToken(pub(crate) buffered::ReauthToken<Bytes>);
 

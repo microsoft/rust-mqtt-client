@@ -1,7 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Structs and types that together provide the MQTT client functionality.
+//! MQTT client construction, outgoing operations, incoming publishes, and connection lifecycle.
+//!
+//! Start with [`new_client`], then use [`ConnectHandle::connect`] to establish a connection and
+//! continuously drive [`Connection::run_until_disconnect`] while sending through [`Client`] or
+//! receiving through [`Receiver`]. The crate-level documentation contains a complete lifecycle
+//! example and explains operation completion.
 
 // TODO: Remove when possible.
 #![allow(unused_variables)]
@@ -61,7 +66,12 @@ mod session;
 mod timer;
 pub mod token;
 
-/// Creates the three components needed to run the MQTT client
+/// Creates the three independently owned components needed to run the MQTT client.
+///
+/// The returned [`Client`] submits outgoing operations, the [`ConnectHandle`] establishes and
+/// re-establishes connections, and the [`Receiver`] yields incoming publishes. After connecting,
+/// the application must continuously drive [`Connection::run_until_disconnect`]; the library does
+/// not start a background connection task.
 pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     let (o_pub_q12_tx, o_pub_q12_rx) =
         tokio::sync::mpsc::channel(options.publish_qos1_qos2_queue_size);
@@ -128,11 +138,17 @@ impl Default for ClientOptions {
     }
 }
 
+/// Configures whether and how a connection uses MQTT keep alive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KeepAliveConfig {
+    /// Requests no client keep alive. The server can still provide a keep-alive interval in
+    /// CONNACK.
     Infinite,
+    /// Requests a keep-alive interval. The server can replace this interval in CONNACK.
     Duration {
+        /// Keep-alive interval in seconds, as encoded in the MQTT CONNECT packet.
         ping_after: NonZeroU16,
+        /// Maximum time to wait for PINGRESP before ending the connection.
         response_timeout: Duration,
     },
 }
@@ -152,7 +168,12 @@ impl From<KeepAliveConfig> for KeepAlive {
 // TODO: I don't like the naming of this as Client.
 // MQTTHandle? Sender? OperationsInterface? Outgoing?
 
-/// Sends outgoing data.
+/// Sends outgoing operations.
+///
+/// On success, an operation has been submitted to the client and a completion token is returned.
+/// Awaiting the completion token observes the operation-specific completion event and may return
+/// [`crate::error::CompletionError`] if the accepted operation cannot complete. Dropping the token
+/// does not cancel the accepted operation.
 #[derive(Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct Client {
@@ -167,9 +188,11 @@ pub struct Client {
 }
 
 impl Client {
-    /// Sends a PUBLISH packet to the broker at QoS 0.
+    /// Sends a PUBLISH packet to the server at QoS 0.
     ///
-    /// Returns a token that can be awaited for confirmation of the PUBLISH being sent.
+    /// On success, the operation has been submitted to the client and a completion token is
+    /// returned. Awaiting the token reports when the session releases the PUBLISH for
+    /// transmission. QoS 0 has no server acknowledgement or MQTT reason code to validate.
     pub async fn publish_qos0(
         &self,
         topic_name: TopicName,
@@ -191,9 +214,11 @@ impl Client {
         Ok(PublishQoS0CompletionToken(token))
     }
 
-    /// Sends a PUBLISH packet to the broker at QoS 1
+    /// Sends a PUBLISH packet to the server at QoS 1.
     ///
-    /// Returns a token that can be awaited to receive the PUBACK response packet.
+    /// On success, the operation has been submitted to the client and a completion token is
+    /// returned. Awaiting the token returns the server's [`crate::packet::PubAck`]. Use
+    /// [`crate::packet::PubAck::as_result`] to check its MQTT reason code.
     pub async fn publish_qos1(
         &self,
         topic_name: TopicName,
@@ -215,10 +240,14 @@ impl Client {
         Ok(PublishQoS1CompletionToken(token))
     }
 
-    /// Sends a PUBLISH packet to the broker at QoS 2
+    /// Reserves the API for sending a PUBLISH packet at QoS 2.
     ///
-    /// Returns a token that can be awaited to receive the PUBREC response packet and optionally a
-    /// `PubRelToken` for sending a PUBREL packet if the PUBREC response indicates a success.
+    /// QoS 2 publishing is not yet implemented. Use [`Self::publish_qos0`] or
+    /// [`Self::publish_qos1`] in applications.
+    ///
+    /// # Panics
+    ///
+    /// The future returned by this method always panics without submitting a PUBLISH.
     pub async fn publish_qos2(
         &self,
         topic_name: TopicName,
@@ -226,23 +255,32 @@ impl Client {
         retain: bool,
         properties: PublishProperties,
     ) -> Result<PublishQoS2CompletionToken, DetachedError> {
-        let (notifier, token) = completion_pair();
-        self.pub_qos12_tx
-            .send(PublishRequestQoS1QoS2::PublishQoS2(
-                notifier,
-                topic_name.into_inner().into(),
-                payload,
-                retain,
-                properties.into(),
-            ))
-            .await
-            .map_err(|_| DetachedError {})?;
-        Ok(PublishQoS2CompletionToken(token))
+        // let (notifier, token) = completion_pair();
+        // self.pub_qos12_tx
+        //     .send(PublishRequestQoS1QoS2::PublishQoS2(
+        //         notifier,
+        //         topic_name.into_inner().into(),
+        //         payload,
+        //         retain,
+        //         properties.into(),
+        //     ))
+        //     .await
+        //     .map_err(|_| DetachedError {})?;
+        // Ok(PublishQoS2CompletionToken(token))
+        unimplemented!()
     }
 
-    /// Send a SUBSCRIBE packet to the broker.
+    /// Send a SUBSCRIBE packet to the server.
     ///
-    /// Returns a token that can be awaited to receive the SUBACK response packet.
+    /// On success, the operation has been submitted to the client and a completion token is
+    /// returned. Awaiting the token returns the server's [`crate::packet::SubAck`]. Use
+    /// [`crate::packet::SubAck::as_result`] to check its MQTT reason code. This API submits one
+    /// topic filter per operation.
+    ///
+    /// # Panics
+    ///
+    /// The future returned by this method panics without submitting a SUBSCRIBE if `max_qos` is
+    /// [`QoS::ExactlyOnce`], because QoS 2 receiving is not yet supported.
     pub async fn subscribe(
         &self,
         topic_filter: TopicFilter,
@@ -251,6 +289,10 @@ impl Client {
         retain_options: RetainOptions,
         properties: SubscribeProperties,
     ) -> Result<SubscribeCompletionToken, DetachedError> {
+        if max_qos == QoS::ExactlyOnce {
+            unimplemented!("QoS 2 subscriptions are not yet supported");
+        }
+
         let (notifier, token) = completion_pair();
 
         let options = mqtt_proto::SubscribeOptions {
@@ -274,9 +316,11 @@ impl Client {
         Ok(SubscribeCompletionToken(token))
     }
 
-    /// Send an UNSUBSCRIBE packet to the broker.
+    /// Send an UNSUBSCRIBE packet to the server.
     ///
-    /// Returns a token that can be awaited to receive the UNSUBACK response packet.
+    /// On success, the operation has been submitted to the client and a completion token is
+    /// returned. Awaiting the token returns the server's [`crate::packet::UnsubAck`]. Use
+    /// [`crate::packet::UnsubAck::as_result`] to check its MQTT reason code.
     pub async fn unsubscribe(
         &self,
         topic_filter: TopicFilter,
@@ -302,11 +346,58 @@ pub struct Receiver {
 }
 
 impl Receiver {
-    /// Receive an incoming `Publish`, and any `AckToken` that may be associated with it.
+    /// Receives an incoming [`Publish`] and its [`ManualAcknowledgement`] control.
     ///
-    /// `AckToken` will only be present if the Publish has a QoS of 1 or 2.
+    /// Ignoring the acknowledgement drops its control value. For QoS 1, this attempts to accept
+    /// the publish with default PUBACK properties. Bind it instead to control acknowledgement
+    /// timing, properties, or outcome.
     ///
-    /// Receiving None indicates that the client has been dropped, and no more messages will be received.
+    /// Returning `None` indicates that the corresponding [`ConnectHandle`],
+    /// [`EnhancedAuthHandle`], or [`Connection`] has been dropped and no more messages will be
+    /// received.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use ms_mqtt_client::client::Receiver;
+    ///
+    /// async fn receive(mut receiver: Receiver) {
+    ///     while let Some((publish, _)) = receiver.recv().await {
+    ///         println!("{}", String::from_utf8_lossy(&publish.payload));
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// To control acknowledgements explicitly, match on [`ManualAcknowledgement`]. QoS 0 requires
+    /// no acknowledgement, while QoS 1 provides a token for accepting or rejecting the publish.
+    /// Receiving at QoS 2 is not yet supported.
+    ///
+    /// ```no_run
+    /// use std::error::Error;
+    ///
+    /// use ms_mqtt_client::client::{ManualAcknowledgement, Receiver};
+    /// use ms_mqtt_client::packet::PubAckProperties;
+    ///
+    /// async fn receive(mut receiver: Receiver) -> Result<(), Box<dyn Error>> {
+    ///     while let Some((publish, manual_ack)) = receiver.recv().await {
+    ///         println!("{}", String::from_utf8_lossy(&publish.payload));
+    ///
+    ///         match manual_ack {
+    ///             ManualAcknowledgement::QoS0 => {}
+    ///             ManualAcknowledgement::QoS1(token) => {
+    ///                 let completion = token.accept(PubAckProperties::default()).await?;
+    ///                 completion.await?; // Observe release for transmission.
+    ///             }
+    ///             ManualAcknowledgement::QoS2(_) => {
+    ///                 // Receiving at QoS 2 is not yet supported.
+    ///             }
+    ///         }
+    ///     }
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    #[doc(alias = "receive")]
     pub async fn recv(&mut self) -> Option<(Publish, ManualAcknowledgement)> {
         self.rx.recv().await.map(Into::into)
     }
@@ -328,13 +419,58 @@ impl ConnectHandle {
     ///
     /// # Arguments
     /// - `connection_transport`: Configuration for the transport to use for the connection.
-    /// - `clean_start`: Whether to request a new MQTT session from the broker
+    /// - `clean_start`: Whether to request a new MQTT session from the server
     /// - `keep_alive`: Keep-alive configuration for the connection.
     /// - `will`: Optional Last Will and Testament to be sent on unexpected disconnect.
     /// - `username`: Optional username for authentication.
     /// - `password`: Optional password for authentication.
     /// - `properties`: Properties to include in the CONNECT packet.
     /// - `response_timeout`: Optional timeout for the MQTT CONNECT operation.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use ms_mqtt_client::client::{
+    ///     ClientOptions, ConnectResult, KeepAliveConfig, new_client,
+    /// };
+    /// use ms_mqtt_client::packet::ConnectProperties;
+    /// use ms_mqtt_client::transport::{
+    ///     ConnectionTransportConfig, ConnectionTransportType,
+    /// };
+    ///
+    /// # async fn run() {
+    /// let (client, connect_handle, receiver) = new_client(ClientOptions::default());
+    ///
+    /// let result = connect_handle.connect(
+    ///     ConnectionTransportConfig {
+    ///         transport_type: ConnectionTransportType::Tcp {
+    ///             hostname: "localhost".into(),
+    ///             port: 1883,
+    ///         },
+    ///         timeout: None,
+    ///         proxy: None,
+    ///         tcp_nodelay: false,
+    ///     },
+    ///     true,
+    ///     KeepAliveConfig::Infinite,
+    ///     None,
+    ///     None,
+    ///     None,
+    ///     ConnectProperties::default(),
+    ///     None,
+    /// ).await;
+    ///
+    /// match result {
+    ///     ConnectResult::Success(connection, connack, disconnect_handle) => {
+    ///         let (connect_handle, event) = connection.run_until_disconnect().await;
+    ///     }
+    ///     ConnectResult::Failure(connect_handle, error) => {
+    ///         eprintln!("connection failed: {error}");
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    #[doc(alias = "broker")]
     #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect(
         mut self,
@@ -422,7 +558,7 @@ impl ConnectHandle {
     ///
     /// # Arguments
     /// - `connection_transport`: Configuration for the transport to use for the connection.
-    /// - `clean_start`: Whether to request a new MQTT session from the broker
+    /// - `clean_start`: Whether to request a new MQTT session from the server
     /// - `keep_alive`: Keep-alive configuration for the connection.
     /// - `will`: Optional Last Will and Testament to be sent on unexpected disconnect.
     /// - `username`: Optional username for authentication.
@@ -430,6 +566,81 @@ impl ConnectHandle {
     /// - `properties`: Properties to include in the CONNECT packet.
     /// - `authentication_info`: Initial authentication information for enhanced authentication.
     /// - `response_timeout`: Optional timeout for the MQTT CONNECT operation.
+    ///
+    /// # Example
+    ///
+    /// The authentication method determines how the application generates initial data and
+    /// responds to each server challenge.
+    ///
+    /// ```no_run
+    /// use bytes::Bytes;
+    /// use ms_mqtt_client::client::{
+    ///     ClientOptions, ConnectEnhancedAuthResult, KeepAliveConfig, new_client,
+    /// };
+    /// use ms_mqtt_client::packet::{
+    ///     Auth, AuthProperties, AuthenticationInfo, ConnectProperties,
+    /// };
+    /// use ms_mqtt_client::transport::{
+    ///     ConnectionTransportConfig, ConnectionTransportType,
+    /// };
+    ///
+    /// fn respond_to_challenge(challenge: &Auth) -> Option<Bytes> {
+    ///     // Generate data according to the negotiated authentication method.
+    ///     todo!()
+    /// }
+    ///
+    /// # async fn run() {
+    /// let (client, connect_handle, receiver) = new_client(ClientOptions::default());
+    /// let authentication = AuthenticationInfo {
+    ///     method: "example-method".into(),
+    ///     data: None,
+    /// };
+    ///
+    /// let mut result = connect_handle.connect_enhanced_auth(
+    ///     ConnectionTransportConfig {
+    ///         transport_type: ConnectionTransportType::Tcp {
+    ///             hostname: "localhost".into(),
+    ///             port: 1883,
+    ///         },
+    ///         timeout: None,
+    ///         proxy: None,
+    ///         tcp_nodelay: false,
+    ///     },
+    ///     true,
+    ///     KeepAliveConfig::Infinite,
+    ///     None,
+    ///     None,
+    ///     None,
+    ///     ConnectProperties::default(),
+    ///     authentication,
+    ///     None,
+    /// ).await;
+    ///
+    /// let (connection, connack, disconnect_handle, reauth_handle) = loop {
+    ///     match result {
+    ///         ConnectEnhancedAuthResult::Continue(challenge, handle) => {
+    ///             result = handle.continue_auth(
+    ///                 respond_to_challenge(&challenge),
+    ///                 AuthProperties::default(),
+    ///                 None,
+    ///             ).await;
+    ///         }
+    ///         ConnectEnhancedAuthResult::Success(
+    ///             connection,
+    ///             connack,
+    ///             disconnect_handle,
+    ///             reauth_handle,
+    ///         ) => break (connection, connack, disconnect_handle, reauth_handle),
+    ///         ConnectEnhancedAuthResult::Failure(connect_handle, error) => {
+    ///             eprintln!("connection failed: {error}");
+    ///             return;
+    ///         }
+    ///     }
+    /// };
+    ///
+    /// let (connect_handle, event) = connection.run_until_disconnect().await;
+    /// # }
+    /// ```
     #[allow(clippy::too_many_arguments)] // Reducing the number of arguments creates semantic confusion
     pub async fn connect_enhanced_auth(
         mut self,
@@ -658,6 +869,9 @@ pub struct EnhancedAuthHandle {
 }
 
 impl EnhancedAuthHandle {
+    /// Responds to an MQTT 5 enhanced-authentication challenge.
+    ///
+    /// Consumes this handle and returns the next state of the connection attempt.
     pub async fn continue_auth(
         mut self,
         authentication_data: Option<Bytes>,
@@ -800,7 +1014,14 @@ pub struct Connection {
 
 impl Connection {
     /// Drives this connection until it is disconnected.
+    ///
     /// Packets will only be sent and received while this future is running.
+    /// The returned [`ConnectHandle`] can establish a later connection; reconnection is not
+    /// automatic. Subscriptions generally need to be restored when the server does not resume the
+    /// previous MQTT session, as indicated by [`ConnAck::session_present`].
+    #[doc(alias = "reconnect")]
+    #[doc(alias = "event_loop")]
+    #[doc(alias = "connection_driver")]
     pub async fn run_until_disconnect(mut self) -> (ConnectHandle, DisconnectedEvent) {
         let event = match self.run_until_disconnect_inner().await {
             Ok(InnerDisconnect::Application) => DisconnectedEvent::ApplicationDisconnect,
@@ -926,9 +1147,21 @@ impl Connection {
     }
 }
 
+/// One-shot handle for requesting an orderly application disconnect.
+///
+/// Dropping this handle does not request a disconnect.
+///
+/// After requesting disconnect, continue driving the associated [`Connection`] until
+/// [`Connection::run_until_disconnect`] returns.
 pub struct DisconnectHandle(tokio::sync::oneshot::Sender<DisconnectRequest<Bytes>>);
 
 impl DisconnectHandle {
+    /// Requests an orderly MQTT disconnect with the supplied properties.
+    ///
+    /// This submits the request synchronously; continue driving the associated [`Connection`]
+    /// until [`Connection::run_until_disconnect`] returns
+    /// [`DisconnectedEvent::ApplicationDisconnect`].
+    #[doc(alias = "shutdown")]
     pub fn disconnect(self, properties: &DisconnectProperties) -> Result<(), DetachedError> {
         let DisconnectProperties {
             session_expiry_interval,
@@ -955,12 +1188,20 @@ impl DisconnectHandle {
 
 // TODO: Determine where some of these auth structures should live, and what a token vs. handle is semantically.
 
+/// Handle for initiating MQTT 5 re-authentication on an established connection.
+///
+/// This handle is returned only for connections established with
+/// [`ConnectHandle::connect_enhanced_auth`].
 pub struct ReauthHandle {
     method: String,
     tx: tokio::sync::mpsc::Sender<ReauthRequest<Bytes>>,
 }
 
 impl ReauthHandle {
+    /// Initiates MQTT 5 re-authentication on the established connection.
+    ///
+    /// On success, the operation has been submitted to the client and a completion token is
+    /// returned. Awaiting the token returns a [`ReauthResult`].
     pub async fn reauth(
         &self,
         authentication_data: Option<Bytes>,
@@ -985,22 +1226,32 @@ impl ReauthHandle {
 
 /// Indicates the result of an MQTT CONNECT.
 pub enum ConnectResult {
+    /// The connection succeeded, yielding the connection driver, server response, and orderly
+    /// disconnect handle.
     Success(Connection, ConnAck, DisconnectHandle),
+    /// The connection failed, yielding a reusable connection handle and the error.
     Failure(ConnectHandle, ConnectError),
 }
 
 /// Indicates the result of an MQTT CONNECT with enhanced authentication.
 pub enum ConnectEnhancedAuthResult {
+    /// The server sent another authentication challenge and a handle for responding to it.
     Continue(Auth, EnhancedAuthHandle),
+    /// The connection succeeded, yielding the connection driver, server response, orderly
+    /// disconnect handle, and reauthentication handle.
     Success(Connection, ConnAck, DisconnectHandle, ReauthHandle),
+    /// The connection failed, yielding a reusable connection handle and the error.
     Failure(ConnectHandle, ConnectError),
 }
 
 /// Indicates the result of an MQTT AUTH operation on an existing connection.
 #[derive(Debug)]
 pub enum ReauthResult {
+    /// The server sent another authentication challenge and a token for responding to it.
     Continue(Auth, ReauthToken),
+    /// Reauthentication succeeded with the server's final AUTH packet.
     Success(Auth),
+    /// Reauthentication failed without a server DISCONNECT packet.
     Failure, // Cannot provide Disconnect packet here because it is not guaranteed to be sent by server
 }
 
@@ -1019,10 +1270,15 @@ impl From<buffered::ReauthResult<Bytes>> for ReauthResult {
 /// Details about a client disconnect
 #[derive(Debug)]
 pub enum DisconnectedEvent {
+    /// The application requested an orderly disconnect through [`DisconnectHandle`].
     ApplicationDisconnect,
+    /// The server sent an MQTT DISCONNECT packet.
     ServerDisconnect(Disconnect),
+    /// Transport I/O failed.
     IoError(io::Error),
+    /// The server violated the MQTT protocol.
     ProtocolError(ProtocolError),
+    /// The server did not respond to PINGREQ before the configured response timeout.
     PingTimeout,
 }
 
@@ -1050,9 +1306,18 @@ enum InnerDisconnect {
     PingTimeout,
 }
 
+/// Acknowledgement control associated with an incoming [`Publish`].
+///
+/// Dropping this value also drops any contained token. For QoS 1, that attempts to accept the
+/// publish with default PUBACK properties.
+// TODO: Rename to `ManualAcknowledgment` with the next set of breaking changes.
+#[doc(alias = "ManualAcknowledgment")]
 pub enum ManualAcknowledgement {
+    /// The PUBLISH was delivered at QoS 0 and requires no acknowledgement.
     QoS0,
+    /// Controls accepting or rejecting an incoming QoS 1 PUBLISH.
     QoS1(PubAckToken),
+    /// Reserved acknowledgement control for QoS 2, which is not yet supported.
     QoS2(PubRecToken),
 }
 

@@ -42,7 +42,7 @@ where
     /// This function decodes a `ByteStr` out from the given `Shared`. It is meant to be used from a streaming decoder,
     /// and thus handles the cases where the `Shared` has too little data or too much data.
     ///
-    /// See also [`from_utf8_shared`].
+    /// See also [`Self::from_utf8_shared`].
     ///
     /// # Returns
     ///
@@ -98,7 +98,7 @@ where
     /// the bytes of a valid UTF-8 string with a length prefix. It is meant to be used for decoding payloads that are known to consist
     /// entirely of a single string.
     ///
-    /// See also [`decode`].
+    /// See also [`Self::decode`].
     ///
     /// # Returns
     ///
@@ -120,7 +120,7 @@ where
         self.0.encode(dst)
     }
 
-    /// Creates a copy of this `ByteStr` with another [`Shared`] type as the backing buffer.
+    /// Creates a copy of this `ByteStr` with another `Shared` type as the backing buffer.
     ///
     /// This is better than having the owner of `ByteStr<S1>` create `ByteStr<S2>` via `ByteStr::new(owned, byte_str.as_str())`
     /// because this does not need to recompute the length.

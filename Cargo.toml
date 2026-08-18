@@ -6,10 +6,18 @@ name = "ms-mqtt-client"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT"
 description = "A correctness-first, control-first async MQTT 5 client library."
+documentation = "https://docs.rs/ms-mqtt-client"
 readme = "README.md"
+homepage = "https://github.com/microsoft/rust-mqtt-client"
+repository = "https://github.com/microsoft/rust-mqtt-client"
+license = "MIT"
+keywords = ["mqtt", "mqtt5", "async", "tokio", "iot"]
+categories = ["asynchronous", "network-programming"]
 publish = true
+
+[package.metadata.docs.rs]
+features = ["websockets"]
 
 [dependencies]
 async-tungstenite = { version = "0.29", optional = true, default-features = false, features = [
@@ -49,6 +57,7 @@ tokio = { version = "1.38.2", default-features = false, features = [
     "macros",
     "rt",
     "rt-multi-thread",
+    "signal",
     "test-util",
 ] }
 
@@ -61,7 +70,7 @@ __integration = []
 # NOT part of the public, semver-stable API; do not enable as a consumer.
 __fuzzing = []
 # Internal feature: enables the live network test suites (tests/network/), which
-# require a running broker.
+# require a running server.
 # NOT part of the public, semver-stable API; do not enable as a consumer.
 __network = []
 

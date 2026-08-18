@@ -65,7 +65,7 @@ Result reporting uses a tiered approach that looks like this:
 ### QoS1
 ```rust
 let client_result: Result<PublishQoS1CompletionToken, DetachedError> = client.publish_qos1(
-    TopicName::new("test/topic").unwrap(), // Topic
+    TopicName::new("test/topic").unwrap(),  // Topic
     "Hello, MQTT!".into(),                  // Payload (bytes)
     false,                                  // Retain
     PublishProperties::default()            // Properties
@@ -74,24 +74,24 @@ let completion_token = client_result.unwrap();
 let completion_result: Result<PubAck, CompletionError> = completion_token.await;
 let pub_ack = completion_result.unwrap();
 
-// PubAck (or any packet) can then inspected for details about the operation
+// Inspect the PUBACK for details about the operation.
 if pub_ack.is_success() {
     println!("Publish succeeded!");
 } else {
-    println!("Publish failed: {}", pub_ack.reason);
+    println!("Publish failed: {:?}", pub_ack.reason);
 }
 
-// Alternatively, can convert into a Result for better ergonomics (especially with the ? operator)
+// Alternatively, convert into a Result for better ergonomics (especially with the ? operator).
 match pub_ack.as_result() {
-    Ok(_) => println!("Publish succeeded!")
-    Err(e) => println!("Publish failed: {e}")
+    Ok(_) => println!("Publish succeeded!"),
+    Err(e) => println!("Publish failed: {e}"),
 }
 ```
 
 ### QoS2
 ```rust
 let client_result: Result<PublishQoS2CompletionToken, DetachedError> = client.publish_qos2(
-    TopicName::new("test/topic").unwrap(), // Topic
+    TopicName::new("test/topic").unwrap(),  // Topic
     "Hello, MQTT!".into(),                  // Payload (bytes)
     false,                                  // Retain
     PublishProperties::default()            // Properties
@@ -100,25 +100,25 @@ let completion_token = client_result.unwrap();
 let completion_result: Result<(PubRec, Option<PubRelToken>), CompletionError> = completion_token.await;
 let (pub_rec, pubrel_token) = completion_result.unwrap();
 
-// PubRec (or any packet) can then inspected for details about the operation
+// PUBREC (or any packet) can then be inspected for details about the operation
 if pub_rec.is_success() {
     println!("Publish succeeded!");
-    
+
     // Manually acknowledge the PUBREC, or could simply drop the pubrel_token
     if let Some(pubrel_token) = pubrel_token {
         let completion_token = pubrel_token.confirm(PubRelProperties::default()).await.unwrap();
         let pubcomp = completion_token.await.unwrap();
     }
 } else {
-    println!("Publish failed: {}", pub_rec.reason);
+    println!("Publish failed: {:?}", pub_rec.reason);
     // pubrel_token will be None, there is no need to use it
 }
 ```
 
 Broadly, the idea is that there are distinct failure types that are able to be reported at different times:
-1) Failure of the client to accept the message (i.e. the connection struct was dropped and not running)
-2) Failure of the message to be delivered once accepted into the client (e.g. in-flight subscribe cancelled due to connection loss)
-3) Failure reported to the client by the broker (i.e. MQTT error codes)
+1. Failure of the client to accept the operation because its `ConnectHandle` or `Connection` was dropped (`DetachedError`).
+2. Failure of an accepted operation to complete, such as an in-flight SUBSCRIBE canceled by connection loss (`CompletionError`).
+3. Failure reported by the server, such as a rejection reason in a PUBACK (`OperationFailure`).
 
 ## Receiver
 Incoming channel/stream that receives incoming Publishes, along with an optional acknowledgement mechanism. The receiver receives **all** messages, and it is up to the application to send them where they need to go (see "dispatching" section)
@@ -157,11 +157,11 @@ while let Some((publish, ack_handle)) = receiver.recv().await {
 
 If dropped without explicit acknowledgement by the user, the `ManualAcknowledgement` will trigger the acknowledgement process on drop in order to not break ordering rules and respect the MQTT specification requirement of acknowledging all received messages.
 
-### Redelivery / connection epoch
+### Redelivery / Connection epoch
 
-In order to be maximally compatible with generic brokers (and in partiular, our MQ broker), a `PubAckToken` (used with QoS1) is only valid for a given connection epoch - that is to say that if the connection is lost, any `CompletionToken` returned by the acknowledgement of an `PubAckToken` will return an error indicating cancellation. The associated publish will be redelivered upon next connect (assuming it was not expired by the broker in the meantime).
+In order to be maximally compatible with MQTT servers (and in particular, the AIO MQ broker), a `PubAckToken` (used with QoS1) is valid only for the connection epoch in which it was received. Once the connection epoch changes, the token can no longer acknowledge its PUBLISH: a PUBACK from the old epoch is not transmitted on the new connection, and any still-pending completion token resolves with an error. Completion tokens that resolved before the epoch changed are unaffected.
 
-If using QoS2, `PubRecToken` and `PubCompToken` are not subject to this limitation as all brokers are required to redeliver.
+If using QoS2, `PubRecToken` and `PubCompToken` are not subject to this limitation as all MQTT servers are required to redeliver.
 
 ### Dispatching
 

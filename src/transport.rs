@@ -1,7 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Structs and types related to transport configuration
+//! TCP, TLS, proxy, and optional WebSocket transport configuration.
+//!
+//! Pass a [`ConnectionTransportConfig`] to [`crate::client::ConnectHandle::connect`] or
+//! [`crate::client::ConnectHandle::connect_enhanced_auth`]. Transport establishment and the MQTT
+//! CONNECT exchange have separate timeout settings.
 
 use std::{io, time::Duration};
 
@@ -27,8 +31,14 @@ pub use async_tungstenite::tungstenite::{
 
 /// Parameters for establishing a new MQTT connection at transport layer.
 pub struct ConnectionTransportConfig {
+    /// Transport protocol and destination.
     pub transport_type: ConnectionTransportType,
+    /// Optional timeout for transport establishment, including proxy, TLS, and WebSocket setup.
+    ///
+    /// This does not time out the MQTT CONNECT response; use the `response_timeout` argument on
+    /// [`crate::client::ConnectHandle::connect`] for that phase.
     pub timeout: Option<Duration>,
+    /// Optional HTTP or HTTPS CONNECT proxy.
     pub proxy: Option<Proxy>,
     /// Whether to disable Nagle's algorithm (`TCP_NODELAY`) on the underlying TCP socket.
     /// Setting this to `true` reduces latency for small, frequent packets at the cost of slightly
@@ -37,20 +47,68 @@ pub struct ConnectionTransportConfig {
 }
 
 /// The type of transport to use for the new MQTT connection.
+///
+/// # Examples
+///
+/// Plain TCP:
+///
+/// ```
+/// use ms_mqtt_client::transport::ConnectionTransportType;
+///
+/// let transport = ConnectionTransportType::Tcp {
+///     hostname: "localhost".into(),
+///     port: 1883,
+/// };
+/// ```
+///
+/// TLS with a PEM-encoded CA trust bundle:
+///
+/// ```no_run
+/// use std::io;
+///
+/// use ms_mqtt_client::transport::{ConnectionTransportType, TlsConfig};
+///
+/// fn tls_transport(ca_trust_bundle: &[u8]) -> io::Result<ConnectionTransportType> {
+///     Ok(ConnectionTransportType::Tls {
+///         hostname: "mqtt.example.com".into(),
+///         port: 8883,
+///         tls_config: TlsConfig::from_pem(None, ca_trust_bundle)?,
+///     })
+/// }
+/// ```
+///
+/// `WebSockets` require the `websockets` crate feature. Use a `ws` URI with no TLS configuration,
+/// or a `wss` URI with a [`TlsConfig`]:
+///
+/// ```no_run
+/// # #[cfg(feature = "websockets")]
+/// # fn websocket_transport(ca_trust_bundle: &[u8]) -> Result<ms_mqtt_client::transport::ConnectionTransportType, Box<dyn std::error::Error>> {
+/// use ms_mqtt_client::transport::{
+///     ConnectionTransportType, IntoWsRequest as _, TlsConfig,
+/// };
+///
+/// Ok(ConnectionTransportType::Ws {
+///     request: "wss://mqtt.example.com:443/mqtt".into_client_request()?,
+///     tls_config: Some(TlsConfig::from_pem(None, ca_trust_bundle)?),
+/// })
+/// # }
+/// ```
 // The `Ws` variant is large (it holds a full HTTP request), but it is feature-gated and
 // constructed at most once per connection, so the size difference is not worth boxing.
 #[allow(clippy::large_enum_variant)]
 pub enum ConnectionTransportType {
-    Tcp {
-        hostname: String,
-        port: u16,
-    },
+    /// Unencrypted MQTT over TCP.
+    Tcp { hostname: String, port: u16 },
+    /// MQTT over TLS.
     Tls {
         hostname: String,
         port: u16,
         tls_config: TlsConfig,
     },
+    /// MQTT over `WebSockets`. Available with the `websockets` crate feature.
     #[cfg(feature = "websockets")]
+    #[doc(alias = "websocket")]
+    #[doc(alias = "wss")]
     Ws {
         request: WsRequest,
         tls_config: Option<TlsConfig>,

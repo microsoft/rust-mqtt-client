@@ -1,7 +1,25 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Portable triggering of acknowledgement flows
+//! Controls for acknowledging incoming MQTT packet flows.
+//!
+//! Acknowledgement tokens are protocol controls, not passive completion observers. For the
+//! supported QoS 1 flow, dropping an unused [`PubAckToken`] attempts to submit a successful PUBACK
+//! with default properties so acknowledgement ordering can continue. Retain the token to choose
+//! when to acknowledge, reject the publish, or supply acknowledgement properties.
+//!
+//! On success, [`PubAckToken::accept`] and [`PubAckToken::reject`] have submitted the selected
+//! PUBACK to the MQTT session and return a completion token. These methods take ownership of the
+//! acknowledgement token. Canceling an in-progress call drops that token, so its default behavior
+//! applies; the selected reason code and properties are not submitted.
+//!
+//! Awaiting the returned completion token reports when the session releases the PUBACK for
+//! transmission after any required ordering. Dropping the completion token does not undo the
+//! submitted acknowledgement.
+//!
+//! QoS 2 acknowledgement token types reserve the intended APIs, but their methods and drop
+//! behavior are not implemented because end-to-end QoS 2 publishing and receiving are not yet
+//! supported.
 
 use bytes::Bytes;
 
@@ -14,18 +32,34 @@ use crate::packet::{
     PubAckProperties, PubCompProperties, PubRecProperties, PubRejectReason, PubRelProperties,
 };
 
+/// Used to accept or reject an incoming QoS 1 PUBLISH with PUBACK.
+///
+/// Dropping an unused token attempts to accept the publish with default PUBACK properties. To
+/// submit different properties or reject the publish, use [`Self::accept`] or [`Self::reject`].
+/// These methods take ownership of the token. Canceling an in-progress call drops the token, so
+/// the same default behavior applies.
+///
+/// The token is valid only during the connection epoch in which it was received. A PUBACK from an
+/// earlier epoch is never transmitted on a later connection.
 #[derive(Debug)]
 pub struct PubAckToken(pub(crate) buffered::PubAckToken<Bytes>);
 
 impl PubAckToken {
     /// Accept the received PUBLISH by issuing a PUBACK indicating success.
     ///
-    /// Consumes itself on call, so it cannot be used again.
+    /// Consumes the token, so it cannot be used again.
     ///
-    /// Returns once the PUBACK has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
+    /// On success, the PUBACK has been submitted to the MQTT session and a completion token is
+    /// returned; this does not mean the packet has been written to the transport. Awaiting the
+    /// completion token reports when the session releases the PUBACK for transmission after any
+    /// required ordering.
     ///
     /// Can only be successfully used during the same connection epoch on which it was received.
+    ///
+    /// # Cancellation
+    ///
+    /// Canceling this operation before it returns drops the token. The requested properties are
+    /// not submitted, and the token's default acknowledgement behavior applies.
     pub async fn accept(
         self,
         properties: PubAckProperties,
@@ -35,10 +69,17 @@ impl PubAckToken {
 
     /// Reject the received PUBLISH by issuing a PUBACK with an error reason code.
     ///
-    /// Consumes itself on call so it cannot be used again.
+    /// Consumes the token, so it cannot be used again.
     ///
-    /// Returns once the PUBACK has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
+    /// On success, the PUBACK has been submitted to the MQTT session and a completion token is
+    /// returned; this does not mean the packet has been written to the transport. Awaiting the
+    /// completion token reports when the session releases the PUBACK for transmission after any
+    /// required ordering.
+    ///
+    /// # Cancellation
+    ///
+    /// Canceling this operation before it returns drops the token. The requested rejection and
+    /// properties are not submitted, and the token's default acknowledgement behavior applies.
     pub async fn reject(
         self,
         reason: PubRejectReason,
@@ -48,18 +89,32 @@ impl PubAckToken {
     }
 }
 
+/// Used to accept or reject an incoming QoS 2 PUBLISH with PUBREC.
+///
+/// Dropping an unused token attempts to accept the publish with default PUBREC properties. To
+/// submit different properties or reject the publish, use [`Self::accept`] or [`Self::reject`].
+/// These methods take ownership of the token. Canceling an in-progress call drops the token, so
+/// the same default behavior applies.
+///
+/// Receiving at QoS 2 is not yet supported.
 #[derive(Debug)]
 pub struct PubRecToken(pub(crate) buffered::PubRecToken<Bytes>);
 
 impl PubRecToken {
     /// Accept the received PUBLISH by issuing a PUBREC indicating success.
     ///
-    /// Consumes itself on call, so it cannot be used again.
+    /// Takes ownership of the token, so it cannot be used again.
     ///
-    /// Returns once the PUBREC has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
+    /// On success, the PUBREC has been submitted to the MQTT session and a completion token is
+    /// returned; this does not mean the packet has been written to the transport. Awaiting the
+    /// completion token returns the server's [`crate::packet::PubRel`] and its [`PubCompToken`].
     ///
     /// Can only be successfully used during the same session epoch on which it was received.
+    ///
+    /// # Cancellation
+    ///
+    /// Canceling this operation before it returns drops the token. The requested properties are
+    /// not submitted, and the token's default acknowledgement behavior applies.
     pub async fn accept(
         self,
         properties: PubRecProperties,
@@ -72,12 +127,19 @@ impl PubRecToken {
 
     /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
     ///
-    /// Consumes itself on call so it cannot be used again.
+    /// Takes ownership of the token, so it cannot be used again.
     ///
-    /// Returns once the PUBREC has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
+    /// On success, the PUBREC has been submitted to the MQTT session and a completion token is
+    /// returned; this does not mean the packet has been written to the transport. Awaiting the
+    /// completion token reports when the session releases the PUBREC for transmission after any
+    /// required ordering.
     ///
     /// Can only be successfully used during the same session epoch on which it was received.
+    ///
+    /// # Cancellation
+    ///
+    /// Canceling this operation before it returns drops the token. The requested rejection and
+    /// properties are not submitted, and the token's default acknowledgement behavior applies.
     pub async fn reject(
         self,
         reason: PubRejectReason,
@@ -87,19 +149,31 @@ impl PubRecToken {
     }
 }
 
-/// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
+/// Used to confirm a received PUBREC with PUBREL.
+///
+/// Dropping an unused token attempts confirmation with default PUBREL properties. To supply
+/// different properties, use [`Self::confirm`]. This method takes ownership of the token.
+/// Canceling an in-progress call drops the token, so the same default behavior applies.
+///
+/// QoS 2 publishing is not yet supported end to end.
 #[derive(Debug)]
 pub struct PubRelToken(pub(crate) buffered::PubRelToken<Bytes>);
 
 impl PubRelToken {
     /// Confirm the PUBREC was received by issuing a PUBREL.
     ///
-    /// Consumes itself on call so it cannot be used again.
+    /// Takes ownership of the token, so it cannot be used again.
     ///
-    /// Returns once the PUBREL has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBREL is sent (*after* any ordering necessary).
+    /// On success, the PUBREL has been submitted to the MQTT session and a completion token is
+    /// returned; this does not mean the packet has been written to the transport. Awaiting the
+    /// completion token returns the server's [`crate::packet::PubComp`].
     ///
     /// Can only be successfully used during the same session epoch on which it was received.
+    ///
+    /// # Cancellation
+    ///
+    /// Canceling this operation before it returns drops the token. The requested properties are
+    /// not submitted, and the token's default confirmation behavior applies.
     pub async fn confirm(
         self,
         properties: PubRelProperties,
@@ -111,19 +185,31 @@ impl PubRelToken {
     }
 }
 
-/// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
+/// Used to confirm a received PUBREL with PUBCOMP.
+///
+/// Dropping an unused token attempts confirmation with default PUBCOMP properties. To supply
+/// different properties, use [`Self::confirm`]. This method takes ownership of the token.
+/// Canceling an in-progress call drops the token, so the same default behavior applies.
+///
+/// Receiving at QoS 2 is not yet supported.
 #[derive(Debug)]
 pub struct PubCompToken(pub(crate) buffered::PubCompToken<Bytes>);
 
 impl PubCompToken {
     /// Confirm the PUBREL was received by issuing a PUBCOMP.
     ///
-    /// Consumes itself on call so it cannot be used again.
+    /// Takes ownership of the token, so it cannot be used again.
     ///
-    /// Returns once the PUBCOMP has been accepted into the MQTT session.
-    /// The returned `CompletionToken` resolves once the PUBCOMP is sent (*after* any ordering necessary).
+    /// On success, the PUBCOMP has been submitted to the MQTT session and a completion token is
+    /// returned; this does not mean the packet has been written to the transport. Awaiting the
+    /// completion token reports when the session releases the PUBCOMP for transmission.
     ///
     /// Can only be successfully used during the same session epoch on which it was received.
+    ///
+    /// # Cancellation
+    ///
+    /// Canceling this operation before it returns drops the token. The requested properties are
+    /// not submitted, and the token's default confirmation behavior applies.
     pub async fn confirm(
         self,
         properties: PubCompProperties,
@@ -149,7 +235,9 @@ pub(crate) mod buffered {
         PubRecOtherProperties, PubRecReasonCode, PubRelOtherProperties,
     };
 
-    /// Token that allows the user to acknowledge a received PUBLISH on QoS 1 with a PUBACK.
+    /// Used to accept or reject an incoming QoS 1 PUBLISH with PUBACK.
+    ///
+    /// Dropping an unused token attempts acceptance with default PUBACK properties.
     #[derive(Debug)]
     pub struct PubAckToken<S>
     where
@@ -185,12 +273,19 @@ pub(crate) mod buffered {
 
         /// Accept the received PUBLISH by issuing a PUBACK indicating success.
         ///
-        /// Consumes itself on call, so it cannot be used again.
+        /// Takes ownership of the token, so it cannot be used again.
         ///
-        /// Returns once the PUBACK has been accepted into the MQTT session.
-        /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
+        /// On success, the PUBACK has been submitted to the MQTT session and a completion token is
+        /// returned; this does not mean the packet has been written to the transport. Awaiting the
+        /// completion token reports when the session releases the PUBACK for transmission after
+        /// any required ordering.
         ///
         /// Can only be successfully used during the same connection epoch on which it was received.
+        ///
+        /// # Cancellation
+        ///
+        /// Canceling this operation before it returns drops the token, so its default
+        /// acknowledgement behavior applies.
         pub async fn accept(
             self,
             properties: PubAckOtherProperties<S>,
@@ -200,10 +295,17 @@ pub(crate) mod buffered {
 
         /// Reject the received PUBLISH by issuing a PUBACK with an error reason code.
         ///
-        /// Consumes itself on call so it cannot be used again.
+        /// Takes ownership of the token, so it cannot be used again.
         ///
-        /// Returns once the PUBACK has been accepted into the MQTT session.
-        /// The returned `CompletionToken` resolves once the PUBACK is sent (*after* any ordering necessary).
+        /// On success, the PUBACK has been submitted to the MQTT session and a completion token is
+        /// returned; this does not mean the packet has been written to the transport. Awaiting the
+        /// completion token reports when the session releases the PUBACK for transmission after
+        /// any required ordering.
+        ///
+        /// # Cancellation
+        ///
+        /// Canceling this operation before it returns drops the token, so its default
+        /// acknowledgement behavior applies.
         pub async fn reject(
             self,
             reason: PubAckReasonCode,
@@ -275,7 +377,9 @@ pub(crate) mod buffered {
         }
     }
 
-    /// Token that allows the user to acknowledge a received PUBLISH on QoS 2 with a PUBREC.
+    /// Used to accept or reject an incoming QoS 2 PUBLISH with PUBREC.
+    ///
+    /// The intended drop behavior accepts an unused token with default PUBREC properties.
     #[derive(Debug)]
     pub struct PubRecToken<S>
     where
@@ -300,12 +404,18 @@ pub(crate) mod buffered {
 
         /// Accept the received PUBLISH by issuing a PUBREC indicating success.
         ///
-        /// Consumes itself on call, so it cannot be used again.
+        /// Takes ownership of the token, so it cannot be used again.
         ///
-        /// Returns once the PUBREC has been accepted into the MQTT session.
-        /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
+        /// On success, the PUBREC has been submitted to the MQTT session and a completion token is
+        /// returned; this does not mean the packet has been written to the transport. Awaiting the
+        /// completion token returns the server's PUBREL and its [`PubCompToken`].
         ///
         /// Can only be successfully used during the same session epoch on which it was received.
+        ///
+        /// # Cancellation
+        ///
+        /// Canceling this operation before it returns drops the token, so its intended default
+        /// acknowledgement behavior applies.
         pub async fn accept(
             self,
             properties: PubRecOtherProperties<S>,
@@ -315,12 +425,19 @@ pub(crate) mod buffered {
 
         /// Reject the received PUBLISH by issuing a PUBREC with an error reason code.
         ///
-        /// Consumes itself on call so it cannot be used again.
+        /// Takes ownership of the token, so it cannot be used again.
         ///
-        /// Returns once the PUBREC has been accepted into the MQTT session.
-        /// The returned `CompletionToken` resolves once the PUBREC is sent (*after* any ordering necessary).
+        /// On success, the PUBREC has been submitted to the MQTT session and a completion token is
+        /// returned; this does not mean the packet has been written to the transport. Awaiting the
+        /// completion token reports when the session releases the PUBREC for transmission after
+        /// any required ordering.
         ///
         /// Can only be successfully used during the same session epoch on which it was received.
+        ///
+        /// # Cancellation
+        ///
+        /// Canceling this operation before it returns drops the token, so its intended default
+        /// acknowledgement behavior applies.
         pub async fn reject(
             self,
             reason: PubRecReasonCode,
@@ -340,7 +457,9 @@ pub(crate) mod buffered {
         }
     }
 
-    /// Token that allows the user to acknowledge a received PUBREC with a PUBREL (QoS 2).
+    /// Used to confirm a received PUBREC with PUBREL.
+    ///
+    /// The intended drop behavior confirms an unused token with default PUBREL properties.
     #[derive(Debug)]
     pub struct PubRelToken<S>
     where
@@ -365,12 +484,18 @@ pub(crate) mod buffered {
 
         /// Confirm the PUBREC was received by issuing a PUBREL.
         ///
-        /// Consumes itself on call so it cannot be used again.
+        /// Takes ownership of the token, so it cannot be used again.
         ///
-        /// Returns once the PUBREL has been accepted into the MQTT session.
-        /// The returned `CompletionToken` resolves once the PUBREL is sent (*after* any ordering necessary).
+        /// On success, the PUBREL has been submitted to the MQTT session and a completion token is
+        /// returned; this does not mean the packet has been written to the transport. Awaiting the
+        /// completion token returns the server's PUBCOMP.
         ///
         /// Can only be successfully used during the same session epoch on which it was received.
+        ///
+        /// # Cancellation
+        ///
+        /// Canceling this operation before it returns drops the token, so its intended default
+        /// confirmation behavior applies.
         pub async fn confirm(
             self,
             properties: PubRelOtherProperties<S>,
@@ -389,7 +514,9 @@ pub(crate) mod buffered {
         }
     }
 
-    /// Token that allows the user to acknowledge a received PUBREL with a PUBCOMP (QoS 2).
+    /// Used to confirm a received PUBREL with PUBCOMP.
+    ///
+    /// The intended drop behavior confirms an unused token with default PUBCOMP properties.
     #[derive(Debug)]
     pub struct PubCompToken<S>
     where
@@ -414,12 +541,18 @@ pub(crate) mod buffered {
 
         /// Confirm the PUBREL was received by issuing a PUBCOMP.
         ///
-        /// Consumes itself on call so it cannot be used again.
+        /// Takes ownership of the token, so it cannot be used again.
         ///
-        /// Returns once the PUBCOMP has been accepted into the MQTT session.
-        /// The returned `CompletionToken` resolves once the PUBCOMP is sent (*after* any ordering necessary).
+        /// On success, the PUBCOMP has been submitted to the MQTT session and a completion token
+        /// is returned; this does not mean the packet has been written to the transport. Awaiting
+        /// the completion token reports when the session releases the PUBCOMP for transmission.
         ///
         /// Can only be successfully used during the same session epoch on which it was received.
+        ///
+        /// # Cancellation
+        ///
+        /// Canceling this operation before it returns drops the token, so its intended default
+        /// confirmation behavior applies.
         pub async fn confirm(
             self,
             properties: PubCompOtherProperties<S>,

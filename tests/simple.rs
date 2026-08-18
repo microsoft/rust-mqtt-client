@@ -2,17 +2,51 @@
 // Licensed under the MIT License.
 
 use std::num::NonZeroU16;
+use std::panic::AssertUnwindSafe;
 use std::pin::pin;
 use std::time::Duration;
 
+use futures_util::FutureExt as _;
 use matches::assert_matches;
 use ms_mqtt_client::client::{
     ClientOptions, ConnectResult, DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use ms_mqtt_client::mqtt_proto::{self, ConnectReasonCode, Packet};
-use ms_mqtt_client::packet::{ConnAck, ConnectProperties};
+use ms_mqtt_client::packet::{ConnAck, ConnectProperties, QoS, RetainOptions, SubscribeProperties};
+use ms_mqtt_client::topic::TopicFilter;
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::unbounded_channel;
+
+#[tokio::test(start_paused = true)]
+async fn subscribe_qos2_panics_without_submission() {
+    let (client, _connect_handle, _receiver) = new_client(ClientOptions::default());
+
+    let qos2_result = AssertUnwindSafe(client.subscribe(
+        TopicFilter::new("test/topic").unwrap(),
+        QoS::ExactlyOnce,
+        false,
+        RetainOptions::default(),
+        SubscribeProperties::default(),
+    ))
+    .catch_unwind()
+    .await;
+    assert!(qos2_result.is_err());
+
+    // The subscription queue has capacity one, so this completes only if QoS 2 submitted nothing.
+    let _ct = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.subscribe(
+            TopicFilter::new("test/topic").unwrap(),
+            QoS::AtLeastOnce,
+            false,
+            RetainOptions::default(),
+            SubscribeProperties::default(),
+        ),
+    )
+    .await
+    .expect("QoS 2 should not consume subscription queue capacity")
+    .expect("client should remain attached");
+}
 
 #[tokio::test(start_paused = true)]
 async fn connect_connack_success() {

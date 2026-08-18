@@ -8,7 +8,7 @@ use crate::io::ReadableStream;
 use crate::mqtt_proto;
 
 /// This type wraps a readable network stream and provides API to read from it
-/// into a given [`Owned`](buffer_pool::Owned).
+/// into a given [`Owned`].
 pub struct Reader<BP>
 where
     BP: BufferPool,

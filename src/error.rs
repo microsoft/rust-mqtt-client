@@ -7,8 +7,9 @@ use thiserror::Error;
 
 pub use crate::client::token::completion::CompletionError; // Re-export to have all errors in one place
 
-/// Indicates a failure in the MQTT client before any operation takes place
-/// or the state is affected.
+/// Indicates that a handle is detached from the client session that would process its request.
+///
+/// The request is not accepted and does not affect client state.
 #[derive(Debug, Clone, Error)]
 #[error("Communication channels have been closed")]
 pub struct DetachedError {}
