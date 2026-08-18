@@ -140,8 +140,9 @@ async fn puback() {
     );
     assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
 
-    // Ack the first PUBLISH. Both PUBACKs must appear in order.
-    accept_publish(&mut connection, ack_token1, Default::default()).await;
+    // Drop the first token to select its default PUBACK. The automatic and explicit PUBACKs
+    // must both appear in incoming PUBLISH order.
+    drop(ack_token1);
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
@@ -169,6 +170,10 @@ async fn puback() {
 
     let (connect_handle, disconnected_event) = connection.await;
     assert_matches!(disconnected_event, DisconnectedEvent::IoError(_));
+
+    // Discard the queued PUBLISH while no connection driver is running. Its automatic PUBACK is
+    // submitted synchronously, but its old epoch prevents transmission after reconnect.
+    drop(ack_token3);
 
     // Reconnect.
     let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
@@ -237,10 +242,7 @@ async fn puback() {
     assert_eq!(received_publish4.payload, Bytes::from_static(b"payload4"));
     accept_publish(&mut connection, ack_token4, Default::default()).await;
 
-    // Ack the third PUBLISH. The PUBACK for this must not be sent because
-    // it belongs to the previous connection epoch. Expect to receive the PUBACK for
-    // the fourth PUBLISH.
-    accept_publish(&mut connection, ack_token3, Default::default()).await;
+    // The stale automatic PUBACK must not be sent. Expect only the PUBACK for the fourth PUBLISH.
     assert_matches!(
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
