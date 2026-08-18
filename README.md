@@ -18,6 +18,13 @@ It is built to facilitate demanding, long-lived applications such as edge and Io
 
 The client is designed for use with any standards-compliant MQTT 5 servers, such as Mosquitto.
 
+## Implementation status
+
+QoS 0 and QoS 1 are supported. The QoS 2 types and methods reserve the intended public API, but end-to-end QoS 2 publishing and receiving are not yet implemented.
+
+See [MQTT 5 feature support](doc/mqtt-support.md) for the detailed protocol and client feature matrix.
+
+
 ## Design
 
 - **Three independent components.** `new_client()` returns a `Client` (outgoing operations), a `ConnectHandle`/`Connection` (connection lifecycle and I/O), and a `Receiver` (incoming publishes). Each can be owned by a different task, so concerns stay cleanly separated.
@@ -138,10 +145,6 @@ Code built from these patterns must preserve four invariants:
 2. Distinguish three phases: successful completion of a `Client` operation future means submission, awaiting its completion token reports operation-specific completion, and `as_result()` on an acknowledgement reports the MQTT server's verdict.
 3. For an orderly shutdown, call `DisconnectHandle::disconnect()` and keep driving the connection until it returns.
 4. Use QoS 0 or QoS 1 only. QoS 2 types and methods reserve a future API and are not implemented end to end.
-
-## Implementation status
-
-QoS 0 and QoS 1 are supported. The QoS 2 types and methods reserve the intended public API, but end-to-end QoS 2 publishing and receiving are not yet implemented.
 
 ## Contributing and support
 
