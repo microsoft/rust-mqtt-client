@@ -3,8 +3,7 @@
 
 //! MQTT packet types and associated properties and reason codes.
 //!
-//! QoS 0 and QoS 1 are supported end to end. QoS 2 packet and token types reserve the intended
-//! API, but QoS 2 publishing and receiving are not yet implemented.
+//! QoS 0, QoS 1, and QoS 2 packet exchanges are supported end to end.
 
 use std::fmt::Write as _;
 use std::num::{NonZeroU16, NonZeroU32};
@@ -29,7 +28,7 @@ pub enum QoS {
     AtMostOnce = 0,
     /// QoS 1: at least once delivery.
     AtLeastOnce = 1,
-    /// QoS 2: exactly once delivery. Not yet supported end to end by this client.
+    /// QoS 2: exactly once delivery.
     ExactlyOnce = 2,
 }
 
@@ -61,7 +60,7 @@ pub enum DeliveryQoS {
     AtMostOnce,
     /// The PUBLISH was delivered at QoS 1.
     AtLeastOnce(DeliveryInfo),
-    /// Reserved for QoS 2 receiving, which is not yet supported.
+    /// The PUBLISH was delivered at QoS 2.
     ExactlyOnce(DeliveryInfo),
 }
 
@@ -363,7 +362,6 @@ pub struct PubRec {
 impl PubRec {
     /// Returns whether the server accepted the initial QoS 2 PUBLISH exchange.
     ///
-    /// QoS 2 publishing is not yet supported end to end by this client.
     pub fn is_success(&self) -> bool {
         matches!(
             self.reason,
@@ -373,7 +371,6 @@ impl PubRec {
 
     /// Converts the server's MQTT reason code into a result.
     ///
-    /// QoS 2 publishing is not yet supported end to end by this client.
     pub fn as_result(&self) -> Result<(), OperationFailure> {
         if self.is_success() {
             Ok(())

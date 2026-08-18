@@ -57,20 +57,21 @@ async fn disconnect_for_reconnect_with_properties(
     }
 }
 
-async fn reconnect(
+fn reconnect(
     endpoint: &Endpoint,
     disconnected: DisconnectedClient,
     clean_start: bool,
     expiry_seconds: u32,
-) -> TestConnection {
-    reconnect_tcp_with_session(
+) -> impl std::future::Future<Output = TestConnection> + '_ {
+    // Boxing here prevents the QoS 2 session state from triggering Clippy's
+    // `large_futures` lint at every reconnect call site.
+    Box::pin(reconnect_tcp_with_session(
         disconnected.client,
         disconnected.connect_handle,
         disconnected.receiver,
         endpoint,
         session_options(clean_start, expiry_seconds),
-    )
-    .await
+    ))
 }
 
 /// Cleanly disconnects and requests immediate expiry of the server-held session.

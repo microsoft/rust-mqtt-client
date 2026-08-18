@@ -32,7 +32,6 @@ See [MQTT 5 feature support](doc/mqtt-support.md) for the detailed protocol and 
 - **Lifecycle enforced by the type system.** Connect, run, and reconnect are expressed through ownership (`ConnectHandle` → `Connection` → `ConnectHandle`), so illegal states such as connecting twice or running a disconnected connection are compile errors rather than runtime faults.
 - **Tiered result reporting.** The API separately reports the stages applicable to each operation: acceptance by the client, operation-specific completion, and, when provided by the protocol, the server's verdict through an MQTT reason code.
 - **Explicit QoS and acknowledgement.** Publishing uses QoS-specific methods, and incoming PUBLISHes expose the acknowledgement control appropriate to their QoS. Applications can handle acknowledgement flows explicitly, while dropping an unused control attempts the default successful response where one is required.
-  - **QoS 2 is not yet implemented**
 - **You drive the connection.** The library does not drive the MQTT connection in the background; the application chooses its own task topology, reconnect policy, and message dispatch.
 
 ## Getting started
@@ -144,7 +143,10 @@ Code built from these patterns must preserve four invariants:
 1. Continuously poll `Connection::run_until_disconnect()` while using the client or receiver; no background task drives MQTT I/O.
 2. Distinguish three phases: successful completion of a `Client` operation future means submission, awaiting its completion token reports operation-specific completion, and `as_result()` on an acknowledgement reports the MQTT server's verdict.
 3. For an orderly shutdown, call `DisconnectHandle::disconnect()` and keep driving the connection until it returns.
-4. Use QoS 0 or QoS 1 only. QoS 2 types and methods reserve a future API and are not implemented end to end.
+
+## Implementation status
+
+Three MQTT 5 connection controls remain deliberately deferred: outbound Receive Maximum quota, server Maximum QoS enforcement, and inbound Receive Maximum enforcement. See [the open design questions](doc/design/questions.md#mqtt-5-flow-control-and-capability-limits).
 
 ## Contributing and support
 

@@ -87,10 +87,10 @@ where
     // NOTE: Use the user facing packet here because why bother with the composite parts when we
     // have an appropriate structure?
     PubAck(PubAckCompletionNotifier, PubAck<S>, u64),
-    PubRecAccept(PubRecAcceptCompletionNotifier<S>, PubRec<S>),
-    PubRecReject(PubRecRejectCompletionNotifier, PubRec<S>),
-    PubRel(PubRelCompletionNotifier<S>, PubRel<S>),
-    PubComp(PubCompCompletionNotifier, PubComp<S>),
+    PubRecAccept(PubRecAcceptCompletionNotifier<S>, PubRec<S>, u64),
+    PubRecReject(PubRecRejectCompletionNotifier, PubRec<S>, u64),
+    PubRel(PubRelCompletionNotifier<S>, PubRel<S>, u64),
+    PubComp(PubCompCompletionNotifier, PubComp<S>, u64),
 }
 
 /// Request to send an AUTH packet (reauth flow)

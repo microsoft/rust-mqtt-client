@@ -176,9 +176,9 @@ async fn receive(mut receiver: Receiver) -> ExampleResult {
                     println!("Publish acknowledged! (QoS 1)");
                 }
             }
-            ManualAcknowledgement::QoS2(_) => unreachable!(
-                "the subscription requests a maximum of QoS 1, and QoS 2 is not supported"
-            ),
+            ManualAcknowledgement::QoS2(_) => {
+                unreachable!("the subscription requests a maximum of QoS 1")
+            }
         }
     }
 

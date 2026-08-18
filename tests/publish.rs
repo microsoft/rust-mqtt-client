@@ -13,10 +13,17 @@ use ms_mqtt_client::client::{
 use ms_mqtt_client::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
 };
-use ms_mqtt_client::packet::{ConnAck, ConnectProperties};
+use ms_mqtt_client::packet::{ConnAck, ConnectProperties, SessionExpiryInterval};
 use ms_mqtt_client::topic::TopicName;
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::unbounded_channel;
+
+fn persistent_connect_properties() -> ConnectProperties {
+    ConnectProperties {
+        session_expiry_interval: SessionExpiryInterval::Duration(60),
+        ..Default::default()
+    }
+}
 
 #[tokio::test(start_paused = true)]
 async fn publish() {
@@ -54,7 +61,7 @@ async fn publish() {
             None,
             None,
             None,
-            ConnectProperties::default(),
+            persistent_connect_properties(),
             None,
         )
         .await
@@ -173,7 +180,7 @@ async fn publish() {
             None,
             None,
             None,
-            ConnectProperties::default(),
+            persistent_connect_properties(),
             None,
         )
         .await
@@ -258,7 +265,7 @@ async fn publish() {
             None,
             None,
             None,
-            ConnectProperties::default(),
+            persistent_connect_properties(),
             None,
         )
         .await
@@ -321,7 +328,7 @@ async fn wait_for_packet_id_available() {
             None,
             None,
             None,
-            ConnectProperties::default(),
+            persistent_connect_properties(),
             None,
         )
         .await
@@ -440,7 +447,7 @@ async fn wait_for_packet_id_available() {
             None,
             None,
             None,
-            ConnectProperties::default(),
+            persistent_connect_properties(),
             None,
         )
         .await
@@ -531,7 +538,7 @@ async fn wait_for_packet_id_available() {
             None,
             None,
             None,
-            ConnectProperties::default(),
+            persistent_connect_properties(),
             None,
         )
         .await

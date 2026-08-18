@@ -263,9 +263,7 @@ async fn message_relay(
                 drop(manual_ack);
             }
             DeliveryQoS::ExactlyOnce(_) => {
-                unreachable!(
-                    "the downstream subscription requests a maximum of QoS 1, and QoS 2 is not supported"
-                );
+                unreachable!("the downstream subscription requests a maximum of QoS 1");
             }
         }
     }

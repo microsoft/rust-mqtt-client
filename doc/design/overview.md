@@ -96,8 +96,8 @@ let client_result: Result<PublishQoS2CompletionToken, DetachedError> = client.pu
     false,                                  // Retain
     PublishProperties::default()            // Properties
 ).await;
-let completion_token = client_result.unwrap();
-let completion_result: Result<(PubRec, Option<PubRelToken>), CompletionError> = completion_token.await;
+let completion_ttion_tokenen = client_result.unwrap();
+let completion_result: Result<(PubRec, Option<PubRelToken>), CompletionError> = completion_tion_tokenoken.await;
 let (pub_rec, pubrel_token) = completion_result.unwrap();
 
 // PUBREC (or any packet) can then be inspected for details about the operation
@@ -161,7 +161,8 @@ If dropped without explicit acknowledgement by the user, the `ManualAcknowledgem
 
 In order to be maximally compatible with MQTT servers (and in particular, the AIO MQ broker), a `PubAckToken` (used with QoS1) is valid only for the connection epoch in which it was received. Once the connection epoch changes, the token can no longer acknowledge its PUBLISH: a PUBACK from the old epoch is not transmitted on the new connection, and any still-pending completion token resolves with an error. Completion tokens that resolved before the epoch changed are unaffected.
 
-If using QoS2, `PubRecToken` and `PubCompToken` are not subject to this limitation as all MQTT servers are required to redeliver.
+QoS 2 controls are scoped to the MQTT session rather than one connection. They remain valid across
+a reconnect when CONNACK reports Session Present, and are canceled when that session expires.
 
 ### Dispatching
 
