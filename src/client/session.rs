@@ -319,60 +319,69 @@ where
         // e.g. acknowledgement requests with ordering requirements may not be ready
         loop {
             // First check the ordering for a pending acknowledgement that is now ready
-            if let Some((_, PendingAcknowledgement::Ready(ack_req))) =
-                self.in_application.publishes.first()
+            if self
+                .in_application
+                .publishes
+                .first()
+                .is_some_and(|(_, pending)| pending.request.is_some())
             {
-                if let (_, PendingAcknowledgement::Ready(ack_req)) = self
+                let (_, mut pending) = self
                     .in_application
                     .publishes
                     .shift_remove_index(0)
-                    .expect("Already checked")
-                {
-                    // Ignore request if its epoch does not match the current connection epoch.
-                    match &ack_req {
-                        AcknowledgementRequest::PubAck(_, _, epoch) => {
-                            if *epoch == self.connection_epoch {
-                                break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
-                            }
-                        }
-                        _ => break OutgoingPacketRequest::AcknowledgementRequest(ack_req),
-                    }
-                }
+                    .expect("Already checked");
+                break OutgoingPacketRequest::AcknowledgementRequest(
+                    pending.request.take().expect("Already checked"),
+                );
             }
             // Otherwise, poll for next outgoing request
-            else {
-                let request = poll_for_outgoing_request(
-                    &mut self.ch,
-                    self.pingreq_timer.as_mut(),
-                    &mut self.pkid_pool,
-                )
-                .await;
+            let request = poll_for_outgoing_request(
+                &mut self.ch,
+                self.pingreq_timer.as_mut(),
+                &mut self.pkid_pool,
+            )
+            .await;
 
-                // Route acknowledgements with ordering requirements through the in_application
-                // tracker. PUBCOMP has no ordering requirement and can be returned immediately.
-                if let OutgoingPacketRequest::AcknowledgementRequest(ack_req) = request {
-                    let pkid = match &ack_req {
-                        AcknowledgementRequest::PubAck(_, puback, _) => puback.packet_identifier,
-                        AcknowledgementRequest::PubRecAccept(_, pubrec)
-                        | AcknowledgementRequest::PubRecReject(_, pubrec) => {
-                            pubrec.packet_identifier
-                        }
-                        AcknowledgementRequest::PubRel(_, pubrel) => pubrel.packet_identifier,
-                        AcknowledgementRequest::PubComp(_, _) => {
-                            break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
-                        }
-                    };
-                    let pending = self
+            // Route acknowledgements with ordering requirements through the in_application
+            // tracker. PUBCOMP has no ordering requirement and can be returned immediately.
+            if let OutgoingPacketRequest::AcknowledgementRequest(ack_req) = request {
+                let pkid = match &ack_req {
+                    AcknowledgementRequest::PubAck(_, puback, _) => puback.packet_identifier,
+                    AcknowledgementRequest::PubRecAccept(_, pubrec)
+                    | AcknowledgementRequest::PubRecReject(_, pubrec) => pubrec.packet_identifier,
+                    AcknowledgementRequest::PubRel(_, pubrel) => pubrel.packet_identifier,
+                    AcknowledgementRequest::PubComp(_, _) => {
+                        break OutgoingPacketRequest::AcknowledgementRequest(ack_req);
+                    }
+                };
+
+                // A PUBACK token is scoped to the connection that delivered its PUBLISH.
+                // A stale request may remove only the matching old delivery; it must not
+                // disturb a retransmission that now owns the same packet identifier.
+                if let AcknowledgementRequest::PubAck(_, _, epoch) = &ack_req
+                    && *epoch != self.connection_epoch
+                {
+                    if self
                         .in_application
                         .publishes
-                        .get_mut(&pkid)
-                        .expect("application forged an AcknowledgementRequest for a PUBLISH that we didn't give it");
-                    *pending = PendingAcknowledgement::Ready(ack_req);
+                        .get(&pkid)
+                        .is_some_and(|pending| pending.connection_epoch == Some(*epoch))
+                    {
+                        self.in_application.publishes.shift_remove(&pkid);
+                    }
+                    continue;
                 }
-                // For all other request types, return them as-is
-                else {
-                    break request;
-                }
+
+                let pending = self
+                    .in_application
+                    .publishes
+                    .get_mut(&pkid)
+                    .expect("application forged an AcknowledgementRequest for a PUBLISH that we didn't give it");
+                pending.request = Some(ack_req);
+            }
+            // For all other request types, return them as-is
+            else {
+                break request;
             }
         }
     }
@@ -546,16 +555,17 @@ where
     pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
         let incoming = match publish.packet_identifier_dup_qos {
             PacketIdentifierDupQoS::AtMostOnce => IncomingPublishAndToken::QoS0(publish),
-            PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
-                let r = self
-                    .in_application
-                    .publishes
-                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
-                // TODO: How to handle if the pkid already exists? What should the error
-                // story / experience be precisely?
+            PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, dup) => {
+                let previous = self.in_application.publishes.insert(
+                    packet_identifier,
+                    PendingAcknowledgement::puback(self.connection_epoch),
+                );
                 assert!(
-                    r.is_none(),
-                    "TODO: Handle the case where pkid already exists"
+                    previous.is_none()
+                        || dup
+                            && previous.as_ref().is_some_and(|pending| pending
+                                .is_puback_from_prior_connection(self.connection_epoch)),
+                    "incoming QoS 1 PUBLISH reused a packet identifier without DUP"
                 );
                 IncomingPublishAndToken::QoS1(
                     publish,
@@ -569,7 +579,7 @@ where
             PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
                 self.in_application
                     .publishes
-                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
+                    .insert(packet_identifier, PendingAcknowledgement::session_scoped());
                 todo!()
             }
         };
@@ -639,6 +649,12 @@ where
 
         // Build list of packets to replay
         self.inflight.packets_to_replay.clear();
+
+        // PUBACK state is scoped to a connection and cannot survive expiry of the MQTT session.
+        // Session-scoped QoS 2 acknowledgement state remains eligible for a future implementation.
+        self.in_application
+            .publishes
+            .retain(|_, pending| pending.connection_epoch.is_none());
         for (pubrel, _) in self.inflight.pubrel.values() {
             self.inflight
                 .packets_to_replay
@@ -945,12 +961,36 @@ where
     publishes: IndexMap<PacketIdentifier, PendingAcknowledgement<S>>,
 }
 
-enum PendingAcknowledgement<S>
+struct PendingAcknowledgement<S>
 where
     S: Shared,
 {
-    NotReady,
-    Ready(AcknowledgementRequest<S>),
+    connection_epoch: Option<u64>,
+    request: Option<AcknowledgementRequest<S>>,
+}
+
+impl<S> PendingAcknowledgement<S>
+where
+    S: Shared,
+{
+    fn puback(connection_epoch: u64) -> Self {
+        Self {
+            connection_epoch: Some(connection_epoch),
+            request: None,
+        }
+    }
+
+    fn session_scoped() -> Self {
+        Self {
+            connection_epoch: None,
+            request: None,
+        }
+    }
+
+    fn is_puback_from_prior_connection(&self, current_epoch: u64) -> bool {
+        self.connection_epoch
+            .is_some_and(|epoch| epoch != current_epoch)
+    }
 }
 
 struct ReceiverStream<T>(Receiver<T>);

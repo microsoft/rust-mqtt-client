@@ -15,7 +15,7 @@ use ms_mqtt_client::mqtt_proto::{
     self, ConnectReasonCode, Packet, PacketIdentifier, PacketIdentifierDupQoS, PubAckReasonCode,
     topic,
 };
-use ms_mqtt_client::packet::{ConnAck, ConnectProperties};
+use ms_mqtt_client::packet::{ConnAck, ConnectProperties, DeliveryQoS, SessionExpiryInterval};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -256,4 +256,172 @@ async fn puback() {
         }))) if packet_identifier.get() == 8
     );
     assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn qos1_retransmission_after_resumed_session_gets_fresh_puback_token() {
+    let options = ClientOptions {
+        client_id: Some("persistent-client".to_string()),
+        ..Default::default()
+    };
+    let (_client, connect_handle, mut receiver) = new_client(options);
+    let connect_properties = ConnectProperties {
+        session_expiry_interval: SessionExpiryInterval::Duration(60),
+        ..Default::default()
+    };
+
+    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
+    let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();
+    incoming_packets_tx
+        .send(Packet::ConnAck(mqtt_proto::ConnAck {
+            reason_code: ConnectReasonCode::Success {
+                session_present: false,
+            },
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+
+    let ConnectResult::Success(connection, _, _disconnect_handle) = connect_handle
+        .connect(
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
+            },
+            false,
+            KeepAliveConfig::Infinite,
+            None,
+            None,
+            None,
+            connect_properties.clone(),
+            None,
+        )
+        .await
+    else {
+        panic!("expected successful connect")
+    };
+    let mut connection = pin!(connection.run_until_disconnect());
+
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().await,
+        Some(Packet::Connect(mqtt_proto::Connect { .. }))
+    );
+
+    let packet_identifier = PacketIdentifier::new(5).unwrap();
+    incoming_packets_tx
+        .send(Packet::Publish(mqtt_proto::Publish {
+            topic_name: topic("foo"),
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
+                packet_identifier,
+                false,
+            ),
+            retain: false,
+            payload: Bytes::from_static(b"payload"),
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    let (_, ManualAcknowledgement::QoS1(old_ack_token)) =
+        receive_publish(&mut connection, &mut receiver).await
+    else {
+        panic!("did not receive expected PUBLISH and ack token");
+    };
+
+    drop(incoming_packets_tx);
+    let (connect_handle, disconnected_event) = connection.await;
+    assert_matches!(disconnected_event, DisconnectedEvent::IoError(_));
+
+    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
+    let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();
+    incoming_packets_tx
+        .send(Packet::ConnAck(mqtt_proto::ConnAck {
+            reason_code: ConnectReasonCode::Success {
+                session_present: true,
+            },
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+
+    let ConnectResult::Success(connection, _, _disconnect_handle) = connect_handle
+        .connect(
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
+            },
+            false,
+            KeepAliveConfig::Infinite,
+            None,
+            None,
+            None,
+            connect_properties,
+            None,
+        )
+        .await
+    else {
+        panic!("expected successful reconnect")
+    };
+    let mut connection = pin!(connection.run_until_disconnect());
+
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().await,
+        Some(Packet::Connect(mqtt_proto::Connect { .. }))
+    );
+
+    incoming_packets_tx
+        .send(Packet::Publish(mqtt_proto::Publish {
+            topic_name: topic("foo"),
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, true),
+            retain: false,
+            payload: Bytes::from_static(b"payload"),
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+    let (retransmission, ManualAcknowledgement::QoS1(current_ack_token)) =
+        receive_publish(&mut connection, &mut receiver).await
+    else {
+        panic!("did not receive retransmitted PUBLISH and ack token");
+    };
+    assert_eq!(retransmission.payload, Bytes::from_static(b"payload"));
+    assert_matches!(
+        retransmission.qos,
+        DeliveryQoS::AtLeastOnce(info)
+            if info.packet_identifier == packet_identifier && info.dup
+    );
+
+    drop(old_ack_token);
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(outgoing_packets_rx.recv().now_or_never(), None);
+
+    accept_publish(&mut connection, current_ack_token, Default::default()).await;
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_matches!(
+        outgoing_packets_rx.recv().now_or_never(),
+        Some(Some(Packet::PubAck(mqtt_proto::PubAck {
+            packet_identifier: id,
+            reason_code: PubAckReasonCode::Success,
+            ..
+        }))) if id == packet_identifier
+    );
 }
