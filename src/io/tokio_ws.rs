@@ -151,8 +151,11 @@ where
                         self.next_read = next_read;
                     }
 
-                    Poll::Ready(Some(Ok(tungstenite::Message::Text(next_read)))) => {
-                        self.next_read = next_read.into();
+                    Poll::Ready(Some(Ok(tungstenite::Message::Text(_)))) => {
+                        return Poll::Ready(Err(IoError::new(
+                            io::ErrorKind::InvalidData,
+                            "MQTT data must be sent in WebSocket binary frames",
+                        )));
                     }
 
                     Poll::Ready(Some(Ok(tungstenite::Message::Close(_)))) => {
@@ -281,5 +284,96 @@ fn tungstenite_err_to_io_err(err: tungstenite::Error) -> io::Error {
     match err {
         tungstenite::Error::Io(err) => err,
         err => io::Error::other(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use async_tungstenite::tungstenite::{
+        Message,
+        handshake::server::{Request, Response},
+        http::HeaderValue,
+    };
+    use matches::assert_matches;
+    use tokio::net::TcpListener;
+
+    use crate::buffer_pool::BytesPool;
+
+    use super::connect;
+
+    async fn websocket_reader(
+        messages: Vec<Message>,
+    ) -> (
+        crate::io::Reader<BytesPool>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = async_tungstenite::tokio::accept_hdr_async(
+                stream,
+                |request: &Request, mut response: Response| {
+                    assert_eq!(request.headers()["Sec-WebSocket-Protocol"], "mqtt");
+                    response.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        HeaderValue::from_static("mqtt"),
+                    );
+                    Ok(response)
+                },
+            )
+            .await
+            .unwrap();
+
+            for message in messages {
+                websocket.send(message).await.unwrap();
+            }
+        });
+
+        let (reader, _writer) = connect(
+            format!("ws://{addr}/mqtt"),
+            None,
+            None,
+            false,
+            &BytesPool,
+        )
+        .await
+        .unwrap();
+        (reader, server)
+    }
+
+    #[tokio::test]
+    async fn binary_frames_are_read_as_mqtt_packets() {
+        let packet = b"\x30\x04\x00\x01a\x00";
+        let (mut reader, server) = websocket_reader(vec![
+            Message::Ping(Vec::new().into()),
+            Message::Binary(packet.to_vec().into()),
+        ])
+        .await;
+
+        assert_matches!(
+            reader.read().await,
+            Ok(packet) if packet.first_byte == 0x30 && packet.rest == b"\x00\x01a\x00"[..]
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn text_frames_are_rejected_instead_of_read_as_mqtt_packets() {
+        // These UTF-8 bytes also form a valid MQTT 5 QoS 0 PUBLISH packet.
+        let (mut reader, server) =
+            websocket_reader(vec![Message::Text("0\u{4}\0\u{1}a\0".into())]).await;
+
+        assert_matches!(reader.read().await, Err(err) if err.kind() == std::io::ErrorKind::InvalidData);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_text_frames_are_rejected() {
+        let (mut reader, server) = websocket_reader(vec![Message::Text("".into())]).await;
+
+        assert_matches!(reader.read().await, Err(err) if err.kind() == std::io::ErrorKind::InvalidData);
+        server.await.unwrap();
     }
 }
