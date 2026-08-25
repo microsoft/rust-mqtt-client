@@ -78,6 +78,10 @@ where
             return Err(DecodeError::EmptyFilter);
         }
 
+        if inner_ref.len() > usize::from(u16::MAX) || inner_ref.contains('\0') {
+            return Err(DecodeError::InvalidFilter(inner_ref.to_owned()));
+        }
+
         let (kind, filter) = if inner_ref.as_bytes()[0] == DOLLAR_SIGN as u8 {
             // Ref[5.0]: [MQTT-4.8.2-1], [MQTT-4.8.2-2]
             if let Some(slice) = inner_ref.strip_prefix(SHARED_SUBSCRIPTION_PREFIX) {
