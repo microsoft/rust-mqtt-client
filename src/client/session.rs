@@ -62,6 +62,8 @@ where
     connection_epoch: u64,
     /// Whether the session is transient (i.e. non-persistent, can expire)
     transient: bool,
+    /// Whether local state exists that can correspond to a resumed server session.
+    has_session_state: bool,
     /// Timer for tracking when to send the next PINGREQ (based on keep-alive)
     pingreq_timer: Option<Timer>,
     pub(crate) owned: O, // NOTE: This really shouldn't be pub(crate)
@@ -104,6 +106,7 @@ where
             connected: ConnectionState::Disconnected,
             connection_epoch: 0, // move this to the connection state?
             transient: false,    // move this to the connection state?
+            has_session_state: false,
             pingreq_timer: None,
             owned,
         }
@@ -461,12 +464,22 @@ where
         Ok(())
     }
 
-    pub fn incoming_connack(&mut self, connack: ConnAck<O::Shared>, client_keep_alive: KeepAlive) {
+    pub fn incoming_connack(
+        &mut self,
+        connack: ConnAck<O::Shared>,
+        client_keep_alive: KeepAlive,
+        clean_start: bool,
+    ) -> Result<(), ProtocolError> {
         if let ConnectReasonCode::Success { session_present } = connack.reason_code {
+            if session_present && (clean_start || !self.has_session_state) {
+                return Err(ProtocolErrorRepr::UnexpectedPacket)?;
+            }
+
             if !session_present {
                 // Previous session, if any, is not present on the server.
                 self.session_expired();
             }
+            self.has_session_state = true;
 
             self.connection_epoch += 1;
 
@@ -498,6 +511,7 @@ where
 
             self.connected = ConnectionState::Connected { connack };
         }
+        Ok(())
     }
 
     /// Trigger a disconnect and adjust state based on the information in the outgoing `Disconnect` packet
@@ -675,6 +689,8 @@ where
     /// 2. The client closed the connect via a DISCONNECT with session expiry interval == 0
     /// 3. A new connection was established and the CONNACK says session present == false
     fn session_expired(&mut self) {
+        self.has_session_state = false;
+
         // Remove and cancel all in-flight QoS 1 PUBLISHes
         for (pkid, (_, notifier)) in self.inflight.publish_qos1.drain(..) {
             let _ = notifier.cancel("MQTT session expired");
