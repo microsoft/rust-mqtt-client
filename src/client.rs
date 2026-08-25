@@ -19,7 +19,7 @@ use bytes::{Bytes, BytesMut};
 use futures_util::future::{self, FutureExt as _};
 use thiserror::Error;
 
-use crate::buffer_pool::{BufferPool, BytesPool};
+use crate::buffer_pool::{BufferPool, BytesPool, Shared};
 use crate::client::{
     channel_data::{
         DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0, PublishRequestQoS1QoS2,
@@ -55,6 +55,16 @@ use crate::packet::{
 };
 use crate::topic::{TopicFilter, TopicName};
 use crate::transport::{ConnectionTransportConfig, ConnectionTransportType};
+
+fn authentication_method_matches<S>(
+    authentication: Option<&mqtt_proto::Authentication<S>>,
+    expected_method: &str,
+) -> bool
+where
+    S: Shared,
+{
+    authentication.is_some_and(|authentication| authentication.method == expected_method)
+}
 
 // TODO: What should this module and factory function be called?
 // The three components are the client collectively - so what should the outbound struct (currently called the Client) be?
@@ -688,6 +698,17 @@ impl ConnectHandle {
 
         match packet {
             Packet::ConnAck(connack) => {
+                if connack.is_success()
+                    && !authentication_method_matches(
+                        connack.other_properties.authentication.as_ref(),
+                        &auth_method,
+                    )
+                {
+                    return ConnectEnhancedAuthResult::Failure(
+                        self,
+                        ConnectError::Protocol(ProtocolErrorRepr::UnexpectedPacket.into()),
+                    );
+                }
                 self.session
                     .incoming_connack(connack.clone(), keep_alive.into());
                 if connack.is_success() {
@@ -724,6 +745,12 @@ impl ConnectHandle {
             }
 
             Packet::Auth(auth) => {
+                if !authentication_method_matches(auth.authentication.as_ref(), &auth_method) {
+                    return ConnectEnhancedAuthResult::Failure(
+                        self,
+                        ConnectError::Protocol(ProtocolErrorRepr::UnexpectedPacket.into()),
+                    );
+                }
                 let auth_handle = EnhancedAuthHandle {
                     session: self.session,
                     reader_pool: self.reader_pool,
@@ -940,6 +967,23 @@ impl EnhancedAuthHandle {
 
         match packet {
             Packet::ConnAck(connack) => {
+                if connack.is_success()
+                    && !authentication_method_matches(
+                        connack.other_properties.authentication.as_ref(),
+                        &self.auth_method,
+                    )
+                {
+                    let connect_handle = ConnectHandle {
+                        session: self.session,
+                        reader_pool: self.reader_pool,
+                        writer_pool: self.writer_pool,
+                        cfg_client_id: self.cfg_client_id,
+                    };
+                    return ConnectEnhancedAuthResult::Failure(
+                        connect_handle,
+                        ConnectError::Protocol(ProtocolErrorRepr::UnexpectedPacket.into()),
+                    );
+                }
                 self.session
                     .incoming_connack(connack.clone(), self.cfg_keep_alive.into());
 
@@ -986,7 +1030,22 @@ impl EnhancedAuthHandle {
                 }
             }
 
-            Packet::Auth(auth) => ConnectEnhancedAuthResult::Continue(auth.into(), self),
+            Packet::Auth(auth) => {
+                if authentication_method_matches(auth.authentication.as_ref(), &self.auth_method) {
+                    ConnectEnhancedAuthResult::Continue(auth.into(), self)
+                } else {
+                    let connect_handle = ConnectHandle {
+                        session: self.session,
+                        reader_pool: self.reader_pool,
+                        writer_pool: self.writer_pool,
+                        cfg_client_id: self.cfg_client_id,
+                    };
+                    ConnectEnhancedAuthResult::Failure(
+                        connect_handle,
+                        ConnectError::Protocol(ProtocolErrorRepr::UnexpectedPacket.into()),
+                    )
+                }
+            }
 
             _ => {
                 let connect_handle = ConnectHandle {
