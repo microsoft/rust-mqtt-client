@@ -34,7 +34,10 @@ where
                 return Err(DecodeError::EmptyTopic);
             }
 
-            if inner.contains(|c| [MULTI_LEVEL_MATCH, SINGLE_LEVEL_MATCH].contains(&c)) {
+            if inner.len() > usize::from(u16::MAX)
+                || inner.contains('\0')
+                || inner.contains(|c| [MULTI_LEVEL_MATCH, SINGLE_LEVEL_MATCH].contains(&c))
+            {
                 return Err(DecodeError::InvalidTopic(inner.to_owned()));
             }
         }
