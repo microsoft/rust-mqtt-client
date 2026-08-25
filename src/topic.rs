@@ -210,4 +210,43 @@ mod tests {
         assert_eq!(tn.as_str(), tn_buffered.as_str());
         assert_eq!(tf.as_str(), tf_buffered.as_str());
     }
+
+    fn assert_topic_name_constructors_reject(value: &str) {
+        assert!(TopicName::new(value).is_err());
+        assert!(TopicName::try_from(value.to_owned()).is_err());
+        assert!(TopicName::try_from(value).is_err());
+        assert!(value.parse::<TopicName>().is_err());
+    }
+
+    fn assert_topic_filter_constructors_reject(value: &str) {
+        assert!(TopicFilter::new(value).is_err());
+        assert!(TopicFilter::try_from(value.to_owned()).is_err());
+        assert!(TopicFilter::try_from(value).is_err());
+        assert!(value.parse::<TopicFilter>().is_err());
+    }
+
+    #[test]
+    fn rejects_mqtt_invalid_topic_strings() {
+        let overlong_ascii = "a".repeat(usize::from(u16::MAX) + 1);
+        let overlong_multibyte = "é".repeat(usize::from(u16::MAX) / 2 + 1);
+
+        for invalid in ["a\0b", &overlong_ascii, &overlong_multibyte] {
+            assert_topic_name_constructors_reject(invalid);
+            assert_topic_filter_constructors_reject(invalid);
+        }
+    }
+
+    #[test]
+    fn accepts_maximum_length_topic_strings() {
+        let maximum_length = "a".repeat(usize::from(u16::MAX));
+
+        assert_eq!(
+            TopicName::new(&maximum_length).unwrap().as_str(),
+            maximum_length
+        );
+        assert_eq!(
+            TopicFilter::new(&maximum_length).unwrap().as_str(),
+            maximum_length
+        );
+    }
 }
