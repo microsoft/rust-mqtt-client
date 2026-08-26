@@ -2,7 +2,7 @@
 # Brought up and torn down by `make network-test BROKER=emqx`.
 services:
   emqx:
-    image: emqx/emqx:6.2.2
+    image: emqx/emqx:6.2.3
     ports:
       - "${MQTT_PORT:-1883}:1883"
       - "${MQTT_TLS_PORT:-8883}:8883"
