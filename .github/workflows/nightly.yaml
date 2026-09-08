@@ -57,10 +57,10 @@ jobs:
         rust: ["1.88", "stable", "beta", "nightly"]
 
     steps:
-    - uses: 'actions/checkout@v7'
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
 
     - name: Setup Rust (pinned via rust-toolchain.toml)
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+      uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
       with:
         cache: false
         # No `-D warnings`: this workflow runs tests across moving toolchains,
@@ -71,7 +71,7 @@ jobs:
       run: rustup toolchain install ${{ matrix.rust }} --profile minimal
 
     - name: Cache cargo build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         shared-key: nightly-test-${{ matrix.rust }}
 
@@ -102,10 +102,10 @@ jobs:
         deps: ["latest", "minimal"]
 
     steps:
-    - uses: 'actions/checkout@v7'
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
 
     - name: Setup Rust (pinned via rust-toolchain.toml)
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+      uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
       with:
         cache: false
         # No `-D warnings` (see the `test` job above).
@@ -118,7 +118,7 @@ jobs:
       run: rustup toolchain install nightly --profile minimal
 
     - name: Install cargo tooling
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
       with:
         tool: cargo-deny
 

@@ -22,6 +22,8 @@ updates:
       github-actions:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
 
   # Broker images for the live network suite. Test infrastructure, so the exclusion above
   # doesn't apply -- nothing here reaches consumers.
