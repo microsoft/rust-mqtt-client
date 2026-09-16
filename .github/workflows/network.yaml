@@ -66,12 +66,12 @@ jobs:
             kubernetes: true
 
     steps:
-    - uses: 'actions/checkout@v7'
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
 
     # kubectl ships with the runner image; helm is pinned and k3d isn't present at all.
     - name: Install Helm
       if: matrix.kubernetes
-      uses: azure/setup-helm@v5
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       with:
         version: 'v3.16.3'
 
@@ -84,7 +84,7 @@ jobs:
         k3d version
 
     - name: Setup Rust (pinned via rust-toolchain.toml)
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+      uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
       with:
         # Swatinem/rust-cache (below) handles caching, including target/.
         cache: false
@@ -93,7 +93,7 @@ jobs:
         rustflags: ''
 
     - name: Cache cargo build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         shared-key: network
 
