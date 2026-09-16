@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+// NOTE: Consider refactoring or restructuring this test module as appopriate after QoS2 expanded testing lands
+
 use std::num::NonZeroU16;
 use std::pin::Pin;
 use std::time::Duration;
