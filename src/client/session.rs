@@ -352,7 +352,13 @@ where
                 // tracker. PUBCOMP has no ordering requirement and can be returned immediately.
                 if let OutgoingPacketRequest::AcknowledgementRequest(ack_req) = request {
                     let pkid = match &ack_req {
-                        AcknowledgementRequest::PubAck(_, puback, _) => puback.packet_identifier,
+                        AcknowledgementRequest::PubAck(_, puback, epoch) => {
+                            // An old token must not affect a new delivery using the same PKID.
+                            if *epoch != self.connection_epoch {
+                                continue;
+                            }
+                            puback.packet_identifier
+                        }
                         AcknowledgementRequest::PubRecAccept(_, pubrec)
                         | AcknowledgementRequest::PubRecReject(_, pubrec) => {
                             pubrec.packet_identifier
@@ -469,6 +475,11 @@ where
             }
 
             self.connection_epoch += 1;
+
+            // PUBACK tokens and their ordering are connection-scoped, even on session resumption.
+            // Reset here because not every connection exit runs disconnected().
+            // TODO: Preserve session-scoped incoming state when QoS 2 is implemented.
+            self.in_application.publishes.clear();
 
             if matches!(
                 connack.other_properties.session_expiry_interval,
