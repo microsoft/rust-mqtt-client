@@ -84,7 +84,7 @@ jobs:
         k3d version
 
     - name: Setup Rust (pinned via rust-toolchain.toml)
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+      uses: actions-rust-lang/setup-rust-toolchain@v2
       with:
         # Swatinem/rust-cache (below) handles caching, including target/.
         cache: false
