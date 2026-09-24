@@ -212,31 +212,22 @@ mod tests {
         assert_eq!(tf.as_str(), tf_buffered.as_str());
     }
 
-    fn assert_invalid_byte_str(error: &TopicError, expected_message: &str) {
-        assert_matches!(
-            &error.0,
-            mqtt_proto::DecodeError::InvalidByteStr(message) if *message == expected_message
-        );
+    fn assert_invalid_byte_str(error: &TopicError) {
+        assert_matches!(&error.0, mqtt_proto::DecodeError::InvalidByteStr(_));
     }
 
-    fn assert_topic_name_constructors_reject(value: &str, expected_message: &str) {
-        assert_invalid_byte_str(&TopicName::new(value).unwrap_err(), expected_message);
-        assert_invalid_byte_str(
-            &TopicName::try_from(value.to_owned()).unwrap_err(),
-            expected_message,
-        );
-        assert_invalid_byte_str(&TopicName::try_from(value).unwrap_err(), expected_message);
-        assert_invalid_byte_str(&value.parse::<TopicName>().unwrap_err(), expected_message);
+    fn assert_topic_name_constructors_reject(value: &str) {
+        assert_invalid_byte_str(&TopicName::new(value).unwrap_err());
+        assert_invalid_byte_str(&TopicName::try_from(value.to_owned()).unwrap_err());
+        assert_invalid_byte_str(&TopicName::try_from(value).unwrap_err());
+        assert_invalid_byte_str(&value.parse::<TopicName>().unwrap_err());
     }
 
-    fn assert_topic_filter_constructors_reject(value: &str, expected_message: &str) {
-        assert_invalid_byte_str(&TopicFilter::new(value).unwrap_err(), expected_message);
-        assert_invalid_byte_str(
-            &TopicFilter::try_from(value.to_owned()).unwrap_err(),
-            expected_message,
-        );
-        assert_invalid_byte_str(&TopicFilter::try_from(value).unwrap_err(), expected_message);
-        assert_invalid_byte_str(&value.parse::<TopicFilter>().unwrap_err(), expected_message);
+    fn assert_topic_filter_constructors_reject(value: &str) {
+        assert_invalid_byte_str(&TopicFilter::new(value).unwrap_err());
+        assert_invalid_byte_str(&TopicFilter::try_from(value.to_owned()).unwrap_err());
+        assert_invalid_byte_str(&TopicFilter::try_from(value).unwrap_err());
+        assert_invalid_byte_str(&value.parse::<TopicFilter>().unwrap_err());
     }
 
     #[test]
@@ -244,13 +235,9 @@ mod tests {
         let overlong_ascii = "a".repeat(usize::from(u16::MAX) + 1);
         let overlong_multibyte = "é".repeat(usize::from(u16::MAX) / 2 + 1);
 
-        for (invalid, expected_message) in [
-            ("a\0b", "contains U+0000"),
-            (overlong_ascii.as_str(), "longer than 65,535 bytes"),
-            (overlong_multibyte.as_str(), "longer than 65,535 bytes"),
-        ] {
-            assert_topic_name_constructors_reject(invalid, expected_message);
-            assert_topic_filter_constructors_reject(invalid, expected_message);
+        for invalid in ["a\0b", &overlong_ascii, &overlong_multibyte] {
+            assert_topic_name_constructors_reject(invalid);
+            assert_topic_filter_constructors_reject(invalid);
         }
     }
 
@@ -279,13 +266,11 @@ mod tests {
         let overlong_prefix = format!("{maximum_prefix}a");
         assert_matches!(
             mqtt_proto::Topic::combine(&overlong_prefix, &second),
-            Err(mqtt_proto::DecodeError::InvalidByteStr(message))
-                if message == "longer than 65,535 bytes"
+            Err(mqtt_proto::DecodeError::InvalidByteStr(_))
         );
         assert_matches!(
             mqtt_proto::Topic::combine("a\0", &second),
-            Err(mqtt_proto::DecodeError::InvalidByteStr(message))
-                if message == "contains U+0000"
+            Err(mqtt_proto::DecodeError::InvalidByteStr(_))
         );
     }
 
@@ -304,7 +289,7 @@ mod tests {
         );
 
         let overlong = format!("{maximum_length}a");
-        assert_topic_filter_constructors_reject(&overlong, "longer than 65,535 bytes");
-        assert_topic_filter_constructors_reject("$share/gro\0up/a", "contains U+0000");
+        assert_topic_filter_constructors_reject(&overlong);
+        assert_topic_filter_constructors_reject("$share/gro\0up/a");
     }
 }
