@@ -34,10 +34,19 @@ where
                 return Err(DecodeError::EmptyTopic);
             }
 
-            if inner.len() > usize::from(u16::MAX)
-                || inner.contains('\0')
-                || inner.contains(|c| [MULTI_LEVEL_MATCH, SINGLE_LEVEL_MATCH].contains(&c))
-            {
+            // Ref[3.1.1]: [MQTT-4.7.3-3]
+            // Ref[5.0]: [MQTT-4.7.3-3]
+            if inner.len() > usize::from(u16::MAX) {
+                return Err(DecodeError::InvalidByteStr("longer than 65,535 bytes"));
+            }
+
+            // Ref[3.1.1]: [MQTT-4.7.3-2]
+            // Ref[5.0]: [MQTT-4.7.3-2]
+            if inner.contains('\0') {
+                return Err(DecodeError::InvalidByteStr("contains U+0000"));
+            }
+
+            if inner.contains(|c| [MULTI_LEVEL_MATCH, SINGLE_LEVEL_MATCH].contains(&c)) {
                 return Err(DecodeError::InvalidTopic(inner.to_owned()));
             }
         }
@@ -123,7 +132,7 @@ impl Topic<String> {
             return Err(DecodeError::InvalidTopic(first.to_owned()));
         }
 
-        Ok(Topic(format!("{}{}", first, second.as_str())))
+        Topic::new(format!("{}{}", first, second.as_str()))
     }
 
     /// Creates a copy of this `Topic` with another [`Shared`] type as the backing buffer.

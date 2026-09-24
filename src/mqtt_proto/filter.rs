@@ -78,8 +78,16 @@ where
             return Err(DecodeError::EmptyFilter);
         }
 
-        if inner_ref.len() > usize::from(u16::MAX) || inner_ref.contains('\0') {
-            return Err(DecodeError::InvalidFilter(inner_ref.to_owned()));
+        // Ref[3.1.1]: [MQTT-4.7.3-3]
+        // Ref[5.0]: [MQTT-4.7.3-3]
+        if inner_ref.len() > usize::from(u16::MAX) {
+            return Err(DecodeError::InvalidByteStr("longer than 65,535 bytes"));
+        }
+
+        // Ref[3.1.1]: [MQTT-4.7.3-2]
+        // Ref[5.0]: [MQTT-4.7.3-2]
+        if inner_ref.contains('\0') {
+            return Err(DecodeError::InvalidByteStr("contains U+0000"));
         }
 
         let (kind, filter) = if inner_ref.as_bytes()[0] == DOLLAR_SIGN as u8 {
