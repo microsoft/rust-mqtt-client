@@ -28,7 +28,7 @@ use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportTy
 use test_case::test_matrix;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-mod common;
+use crate::common;
 
 #[derive(Clone, Copy, Debug)]
 enum Disconnect {

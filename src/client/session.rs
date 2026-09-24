@@ -14,7 +14,6 @@ use tokio::time::Duration;
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
-    InnerConnectionError,
     buffered::ReauthResult,
     channel_data::{
         AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0,
@@ -476,11 +475,6 @@ where
 
             self.connection_epoch += 1;
 
-            // PUBACK tokens and their ordering are connection-scoped, even on session resumption.
-            // Reset here because not every connection exit runs disconnected().
-            // TODO: Preserve session-scoped incoming state when QoS 2 is implemented.
-            self.in_application.publishes.clear();
-
             if matches!(
                 connack.other_properties.session_expiry_interval,
                 Some(SessionExpiryInterval::Duration(0))
@@ -542,9 +536,9 @@ where
         }
     }
 
-    /// Trigger a disconnect and adjust state based on the error from the underlying transport
-    pub fn transport_disconnect(&mut self, err: &InnerConnectionError) {
-        log::error!("client disconnected due to transport error {err}");
+    /// Trigger a disconnect and adjust state after the connection ended without a DISCONNECT exchange
+    pub fn transport_disconnect(&mut self, reason: &dyn std::fmt::Display) {
+        log::error!("client disconnected without DISCONNECT: {reason}");
 
         self.disconnected();
 
@@ -647,6 +641,10 @@ where
             .auth
             .take()
             .map(|n| n.cancel("Client disconnected"));
+
+        // PUBACK tokens and their ordering are connection-scoped, even on session resumption.
+        // TODO: Preserve session-scoped incoming state when QoS 2 is implemented.
+        self.in_application.publishes.clear();
 
         // Build list of packets to replay
         self.inflight.packets_to_replay.clear();
