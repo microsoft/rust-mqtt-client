@@ -63,13 +63,14 @@ async fn reconnect(
     clean_start: bool,
     expiry_seconds: u32,
 ) -> TestConnection {
-    reconnect_tcp_with_session(
+    // Boxed to keep callers' futures under clippy's `large_futures` threshold.
+    Box::pin(reconnect_tcp_with_session(
         disconnected.client,
         disconnected.connect_handle,
         disconnected.receiver,
         endpoint,
         session_options(clean_start, expiry_seconds),
-    )
+    ))
     .await
 }
 

@@ -122,3 +122,66 @@ async fn connect_connack_success() {
     let (_connect_handle, disconnected_event) = connection.await;
     assert_matches!(disconnected_event, DisconnectedEvent::IoError(_));
 }
+
+#[tokio::test(start_paused = true)]
+async fn ping_completes_on_pingresp() {
+    let (client, connect_handle, _receiver) = new_client(ClientOptions::default());
+
+    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
+    let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();
+
+    incoming_packets_tx
+        .send(Packet::ConnAck(mqtt_proto::ConnAck {
+            reason_code: ConnectReasonCode::Success {
+                session_present: false,
+            },
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+
+    let ConnectResult::Success(connection, _connack, _disconnect_handle) = connect_handle
+        .connect(
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
+            },
+            false,
+            KeepAliveConfig::Infinite,
+            None,
+            None,
+            None,
+            ConnectProperties::default(),
+            None,
+        )
+        .await
+    else {
+        panic!("expected successful connect")
+    };
+    let outgoing_packet = outgoing_packets_rx.recv().await.unwrap();
+    assert_matches!(outgoing_packet, Packet::Connect(mqtt_proto::Connect { .. }));
+
+    let mut connection = pin!(connection.run_until_disconnect());
+    let mut ct = client.ping().await.unwrap();
+
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    let outgoing_packet = outgoing_packets_rx.recv().await.unwrap();
+    assert_matches!(outgoing_packet, Packet::PingReq(mqtt_proto::PingReq));
+    assert!((&mut ct).now_or_never().is_none());
+
+    incoming_packets_tx
+        .send(Packet::PingResp(mqtt_proto::PingResp))
+        .unwrap();
+    assert_matches!(
+        tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
+        Err(_)
+    );
+    assert_eq!(ct.now_or_never(), Some(Ok(())));
+}

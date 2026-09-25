@@ -180,6 +180,14 @@ make_completion_token_ty!(
 );
 
 make_completion_token_ty!(
+    /// Completion token returned by [`crate::client::Client::ping`].
+    ///
+    /// Awaiting this token returns `Ok(())` when the corresponding PINGRESP is received, or a
+    /// [`CompletionError`] if the accepted operation cannot complete.
+    pub struct PingCompletionToken(CompletionToken<()>)
+);
+
+make_completion_token_ty!(
     /// Completion token returned by [`crate::client::ReauthHandle::reauth`].
     ///
     /// Awaiting this token returns the server's [`crate::client::ReauthResult`], or a
@@ -259,6 +267,7 @@ pub(crate) mod buffered {
         CompletionNotifier<(PubRec<S>, Option<PubRelToken<S>>)>;
     pub(crate) type SubscribeCompletionNotifier<S> = CompletionNotifier<SubAck<S>>;
     pub(crate) type UnsubscribeCompletionNotifier<S> = CompletionNotifier<UnsubAck<S>>;
+    pub(crate) type PingCompletionNotifier = CompletionNotifier<()>;
     pub(crate) type PubAckCompletionNotifier = CompletionNotifier<()>;
     pub(crate) type PubRecAcceptCompletionNotifier<S> =
         CompletionNotifier<(PubRel<S>, PubCompToken<S>)>;
