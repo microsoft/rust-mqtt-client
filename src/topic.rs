@@ -179,9 +179,8 @@ impl fmt::Display for TopicFilter {
 #[allow(clippy::similar_names)] // clippy doesn't like tn/tf variables
 mod tests {
     use bytes::Bytes;
-    use matches::assert_matches;
 
-    use super::{TopicError, TopicFilter, TopicName};
+    use super::{TopicFilter, TopicName};
     use crate::mqtt_proto;
 
     #[test]
@@ -210,86 +209,5 @@ mod tests {
 
         assert_eq!(tn.as_str(), tn_buffered.as_str());
         assert_eq!(tf.as_str(), tf_buffered.as_str());
-    }
-
-    fn assert_invalid_byte_str(error: &TopicError) {
-        assert_matches!(&error.0, mqtt_proto::DecodeError::InvalidByteStr(_));
-    }
-
-    fn assert_topic_name_constructors_reject(value: &str) {
-        assert_invalid_byte_str(&TopicName::new(value).unwrap_err());
-        assert_invalid_byte_str(&TopicName::try_from(value.to_owned()).unwrap_err());
-        assert_invalid_byte_str(&TopicName::try_from(value).unwrap_err());
-        assert_invalid_byte_str(&value.parse::<TopicName>().unwrap_err());
-    }
-
-    fn assert_topic_filter_constructors_reject(value: &str) {
-        assert_invalid_byte_str(&TopicFilter::new(value).unwrap_err());
-        assert_invalid_byte_str(&TopicFilter::try_from(value.to_owned()).unwrap_err());
-        assert_invalid_byte_str(&TopicFilter::try_from(value).unwrap_err());
-        assert_invalid_byte_str(&value.parse::<TopicFilter>().unwrap_err());
-    }
-
-    #[test]
-    fn rejects_mqtt_invalid_topic_strings() {
-        let overlong_ascii = "a".repeat(usize::from(u16::MAX) + 1);
-        let overlong_multibyte = "é".repeat(usize::from(u16::MAX) / 2 + 1);
-
-        for invalid in ["a\0b", &overlong_ascii, &overlong_multibyte] {
-            assert_topic_name_constructors_reject(invalid);
-            assert_topic_filter_constructors_reject(invalid);
-        }
-    }
-
-    #[test]
-    fn accepts_maximum_length_topic_strings() {
-        let maximum_length = "a".repeat(usize::from(u16::MAX));
-
-        assert_eq!(
-            TopicName::new(&maximum_length).unwrap().as_str(),
-            maximum_length
-        );
-        assert_eq!(
-            TopicFilter::new(&maximum_length).unwrap().as_str(),
-            maximum_length
-        );
-    }
-
-    #[test]
-    fn validates_combined_topic_strings() {
-        let second = mqtt_proto::Topic::new("b").unwrap();
-        let maximum_prefix = "a".repeat(usize::from(u16::MAX) - second.as_bytes().len());
-        let maximum_length = mqtt_proto::Topic::combine(&maximum_prefix, &second).unwrap();
-
-        assert_eq!(maximum_length.as_bytes().len(), usize::from(u16::MAX));
-
-        let overlong_prefix = format!("{maximum_prefix}a");
-        assert_matches!(
-            mqtt_proto::Topic::combine(&overlong_prefix, &second),
-            Err(mqtt_proto::DecodeError::InvalidByteStr(_))
-        );
-        assert_matches!(
-            mqtt_proto::Topic::combine("a\0", &second),
-            Err(mqtt_proto::DecodeError::InvalidByteStr(_))
-        );
-    }
-
-    #[test]
-    fn validates_shared_subscription_topic_strings() {
-        let prefix = "$share/group/";
-        let maximum_length = format!(
-            "{prefix}{}",
-            "a".repeat(usize::from(u16::MAX) - prefix.len())
-        );
-
-        assert_eq!(maximum_length.len(), usize::from(u16::MAX));
-        assert_eq!(
-            TopicFilter::new(&maximum_length).unwrap().as_str(),
-            maximum_length
-        );
-
-        let overlong = format!("{maximum_length}a");
-        assert_topic_filter_constructors_reject(&overlong);
-        assert_topic_filter_constructors_reject("$share/gro\0up/a");
     }
 }

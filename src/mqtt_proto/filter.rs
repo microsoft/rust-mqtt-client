@@ -430,6 +430,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use matches::assert_matches;
     use test_case::test_case;
 
     use super::super::topic::topic_str;
@@ -450,6 +451,48 @@ mod tests {
         assert_eq!(
             format!("{:?}", Filter::new(filter)),
             format!("{:?}", Err::<Filter<String>, DecodeError>(err))
+        );
+    }
+
+    #[test]
+    fn rejects_mqtt_invalid_topic_strings() {
+        let overlong_ascii = "a".repeat(usize::from(u16::MAX) + 1);
+        let overlong_multibyte = "é".repeat(usize::from(u16::MAX) / 2 + 1);
+
+        for invalid in ["a\0b", &overlong_ascii, &overlong_multibyte] {
+            assert_matches!(Filter::new(invalid), Err(DecodeError::InvalidByteStr(_)));
+        }
+    }
+
+    #[test]
+    fn accepts_maximum_length_topic_strings() {
+        let maximum_length = "a".repeat(usize::from(u16::MAX));
+
+        assert_eq!(
+            Filter::new(&maximum_length).unwrap().as_str(),
+            maximum_length
+        );
+    }
+
+    #[test]
+    fn validates_shared_subscription_topic_strings() {
+        let prefix = "$share/group/";
+        let maximum_length = format!(
+            "{prefix}{}",
+            "a".repeat(usize::from(u16::MAX) - prefix.len())
+        );
+
+        assert_eq!(maximum_length.len(), usize::from(u16::MAX));
+        assert_eq!(
+            Filter::new(&maximum_length).unwrap().as_str(),
+            maximum_length
+        );
+
+        let overlong = format!("{maximum_length}a");
+        assert_matches!(Filter::new(&overlong), Err(DecodeError::InvalidByteStr(_)));
+        assert_matches!(
+            Filter::new("$share/gro\0up/a"),
+            Err(DecodeError::InvalidByteStr(_))
         );
     }
 

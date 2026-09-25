@@ -272,6 +272,45 @@ mod tests {
         assert_matches!(Topic::new(ByteStr::from(topic)), Err(DecodeError::InvalidTopic(t)) if t == topic);
     }
 
+    #[test]
+    fn rejects_mqtt_invalid_topic_strings() {
+        let overlong_ascii = "a".repeat(usize::from(u16::MAX) + 1);
+        let overlong_multibyte = "é".repeat(usize::from(u16::MAX) / 2 + 1);
+
+        for invalid in ["a\0b", &overlong_ascii, &overlong_multibyte] {
+            assert_matches!(Topic::new(invalid), Err(DecodeError::InvalidByteStr(_)));
+        }
+    }
+
+    #[test]
+    fn accepts_maximum_length_topic_strings() {
+        let maximum_length = "a".repeat(usize::from(u16::MAX));
+
+        assert_eq!(
+            Topic::new(&maximum_length).unwrap().as_str(),
+            maximum_length
+        );
+    }
+
+    #[test]
+    fn validates_combined_topic_strings() {
+        let second = Topic::new("b").unwrap();
+        let maximum_prefix = "a".repeat(usize::from(u16::MAX) - second.as_bytes().len());
+        let maximum_length = Topic::combine(&maximum_prefix, &second).unwrap();
+
+        assert_eq!(maximum_length.as_bytes().len(), usize::from(u16::MAX));
+
+        let overlong_prefix = format!("{maximum_prefix}a");
+        assert_matches!(
+            Topic::combine(&overlong_prefix, &second),
+            Err(DecodeError::InvalidByteStr(_))
+        );
+        assert_matches!(
+            Topic::combine("a\0", &second),
+            Err(DecodeError::InvalidByteStr(_))
+        );
+    }
+
     #[test_case("/b", &["", "b"], "b", &["b"])]
     #[test_case("a/", &["a", ""], "a", &["a"])]
     #[test_case("C", &["C"], "c", &["c"])]
