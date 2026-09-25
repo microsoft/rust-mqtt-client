@@ -43,7 +43,7 @@ communicating with a server.
 | Will messages | ✓ | Includes Will Delay Interval and the other MQTT 5 Will properties. Publication after an ungraceful disconnect is server behavior. |
 | Disconnect with Will Message | ✗ | The public disconnect API always sends Normal Disconnection (`0x00`) and cannot request publication of the configured Will with reason code `0x04`. |
 | Keep alive | ✓ | Automatic PINGREQ, PINGRESP timeout detection, and the Server Keep Alive override are implemented. |
-| Manual PINGREQ | ✓ | `Client::ping` submits a PINGREQ on demand, irrespective of Keep Alive, and returns a completion token that resolves when the corresponding PINGRESP is received. |
+| Manual PINGREQ | ✓ | `Client::ping` submits a PINGREQ on demand, irrespective of Keep Alive, and returns a completion token that resolves with the round-trip time when the corresponding PINGRESP is received. |
 | Server-assigned Client Identifier | ✓ | With Clean Start enabled, setting `ClientOptions::client_id` to `None` requests a server-assigned identifier, which is exposed from CONNACK as `ConnAckProperties::assigned_client_identifier`. |
 | Session negotiation and continuation | ✓ | Clean Start, Session Expiry Interval, and Session Present are supported. The server owns persisted session state. |
 | Orderly and server-initiated disconnect | ✓ | Normal client DISCONNECT and incoming server DISCONNECT reason codes, properties, and connection outcomes are exposed. |

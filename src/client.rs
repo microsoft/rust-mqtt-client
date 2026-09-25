@@ -350,7 +350,8 @@ impl Client {
     /// Sends a PINGREQ packet to the server.
     ///
     /// On success, the operation has been submitted to the client and a completion token is
-    /// returned. Awaiting the token reports when the corresponding PINGRESP is received.
+    /// returned. Awaiting the token returns the round-trip time, from sending the PINGREQ to
+    /// receiving the corresponding PINGRESP.
     pub async fn ping(&self) -> Result<PingCompletionToken, DetachedError> {
         let (notifier, token) = completion_pair();
         self.ping_tx

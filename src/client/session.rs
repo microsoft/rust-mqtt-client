@@ -10,7 +10,7 @@ use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
 use indexmap::IndexMap;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
@@ -304,7 +304,7 @@ where
                 }
 
                 OutgoingPacketRequest::PingReq(notifier) => {
-                    self.inflight.pingreq.push_back(notifier);
+                    self.inflight.pingreq.push_back((Instant::now(), notifier));
                     Packet::PingReq(PingReq)
                 }
             }
@@ -628,8 +628,8 @@ where
     /// An incoming PINGRESP packet has been received from the server
     pub fn incoming_pingresp(&mut self) {
         // An unsolicited PINGRESP is ignored, not treated as a protocol error.
-        if let Some(notifier) = self.inflight.pingreq.pop_front().flatten() {
-            _ = notifier.complete(());
+        if let Some((sent_at, Some(notifier))) = self.inflight.pingreq.pop_front() {
+            _ = notifier.complete(sent_at.elapsed());
         }
     }
 
@@ -656,7 +656,12 @@ where
             .take()
             .map(|n| n.cancel("Client disconnected"));
         // Remove and cancel all in-flight PINGREQs
-        for notifier in self.inflight.pingreq.drain(..).flatten() {
+        for notifier in self
+            .inflight
+            .pingreq
+            .drain(..)
+            .filter_map(|(_, notifier)| notifier)
+        {
             let _ = notifier.cancel("Client disconnected");
         }
 
@@ -971,8 +976,8 @@ where
     // --- Other ----
     /// Inflight AUTH operation, if any.
     auth: Option<ReauthCompletionNotifier<S>>,
-    /// Inflight PINGREQs in the order their PINGRESPs arrive; `None` for keep-alive pings.
-    pingreq: VecDeque<Option<PingCompletionNotifier>>,
+    /// Inflight PINGREQs and send times, in PINGRESP order; no notifier for keep-alive pings.
+    pingreq: VecDeque<(Instant, Option<PingCompletionNotifier>)>,
 }
 
 #[derive_where(Default)]
@@ -1007,6 +1012,7 @@ impl<T> Stream for ReceiverStream<T> {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU16;
+    use std::time::Duration;
 
     use bytes::BytesMut;
     use futures_util::future::FutureExt as _;
@@ -1100,17 +1106,20 @@ mod tests {
             session.next_outgoing_packet().await,
             Packet::PingReq(_)
         ));
+        tokio::time::advance(Duration::from_millis(100)).await;
         let (notifier, mut ct) = completion_pair();
         ping_tx.send(PingRequest(notifier)).await.unwrap();
         assert!(matches!(
             session.next_outgoing_packet().await,
             Packet::PingReq(_)
         ));
+        tokio::time::advance(Duration::from_millis(250)).await;
 
         session.incoming_pingresp();
         assert!((&mut ct).now_or_never().is_none());
         session.incoming_pingresp();
-        assert_eq!(ct.now_or_never(), Some(Ok(())));
+        // Timed from the manual PINGREQ, not the earlier keep-alive one.
+        assert_eq!(ct.now_or_never(), Some(Ok(Duration::from_millis(250))));
     }
 
     #[tokio::test]
@@ -1165,6 +1174,6 @@ mod tests {
             Packet::PingReq(_)
         ));
         session.incoming_pingresp();
-        assert_eq!(ct.now_or_never(), Some(Ok(())));
+        assert!(matches!(ct.now_or_never(), Some(Ok(_))));
     }
 }

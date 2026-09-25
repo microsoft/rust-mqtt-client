@@ -7,6 +7,8 @@
 //! token reports the operation-specific completion event. Dropping a token does not cancel or undo
 //! the accepted operation.
 
+use std::time::Duration;
+
 use bytes::Bytes;
 use thiserror::Error;
 
@@ -182,9 +184,9 @@ make_completion_token_ty!(
 make_completion_token_ty!(
     /// Completion token returned by [`crate::client::Client::ping`].
     ///
-    /// Awaiting this token returns `Ok(())` when the corresponding PINGRESP is received, or a
-    /// [`CompletionError`] if the accepted operation cannot complete.
-    pub struct PingCompletionToken(CompletionToken<()>)
+    /// Awaiting this token returns the time between sending the PINGREQ and receiving the
+    /// corresponding PINGRESP, or a [`CompletionError`] if the accepted operation cannot complete.
+    pub struct PingCompletionToken(CompletionToken<Duration>)
 );
 
 make_completion_token_ty!(
@@ -219,6 +221,7 @@ pub(crate) mod buffered {
     use std::future::Future;
     use std::pin::Pin;
     use std::task::Poll;
+    use std::time::Duration;
 
     use tokio::sync::oneshot;
 
@@ -267,7 +270,7 @@ pub(crate) mod buffered {
         CompletionNotifier<(PubRec<S>, Option<PubRelToken<S>>)>;
     pub(crate) type SubscribeCompletionNotifier<S> = CompletionNotifier<SubAck<S>>;
     pub(crate) type UnsubscribeCompletionNotifier<S> = CompletionNotifier<UnsubAck<S>>;
-    pub(crate) type PingCompletionNotifier = CompletionNotifier<()>;
+    pub(crate) type PingCompletionNotifier = CompletionNotifier<Duration>;
     pub(crate) type PubAckCompletionNotifier = CompletionNotifier<()>;
     pub(crate) type PubRecAcceptCompletionNotifier<S> =
         CompletionNotifier<(PubRel<S>, PubCompToken<S>)>;

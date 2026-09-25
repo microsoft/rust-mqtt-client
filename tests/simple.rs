@@ -183,5 +183,6 @@ async fn ping_completes_on_pingresp() {
         tokio::time::timeout(Duration::from_secs(1), &mut connection).await,
         Err(_)
     );
-    assert_eq!(ct.now_or_never(), Some(Ok(())));
+    // Paused time: the PINGREQ went out at 0s and its PINGRESP was read at 1s.
+    assert_eq!(ct.now_or_never(), Some(Ok(Duration::from_secs(1))));
 }
