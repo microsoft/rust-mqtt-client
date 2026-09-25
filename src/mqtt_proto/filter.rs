@@ -454,46 +454,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rejects_mqtt_invalid_topic_strings() {
-        let overlong_ascii = "a".repeat(usize::from(u16::MAX) + 1);
-        let overlong_multibyte = "é".repeat(usize::from(u16::MAX) / 2 + 1);
-
-        for invalid in ["a\0b", &overlong_ascii, &overlong_multibyte] {
-            assert_matches!(Filter::new(invalid), Err(DecodeError::InvalidByteStr(_)));
-        }
-    }
-
-    #[test]
-    fn accepts_maximum_length_topic_strings() {
-        let maximum_length = "a".repeat(usize::from(u16::MAX));
-
-        assert_eq!(
-            Filter::new(&maximum_length).unwrap().as_str(),
-            maximum_length
-        );
-    }
-
-    #[test]
-    fn validates_shared_subscription_topic_strings() {
-        let prefix = "$share/group/";
-        let maximum_length = format!(
-            "{prefix}{}",
-            "a".repeat(usize::from(u16::MAX) - prefix.len())
-        );
-
-        assert_eq!(maximum_length.len(), usize::from(u16::MAX));
-        assert_eq!(
-            Filter::new(&maximum_length).unwrap().as_str(),
-            maximum_length
-        );
-
-        let overlong = format!("{maximum_length}a");
-        assert_matches!(Filter::new(&overlong), Err(DecodeError::InvalidByteStr(_)));
-        assert_matches!(
-            Filter::new("$share/gro\0up/a"),
-            Err(DecodeError::InvalidByteStr(_))
-        );
+    #[test_case("a\0b".to_owned(); "null")]
+    #[test_case("a".repeat(usize::from(u16::MAX) + 1); "overlong ascii")]
+    #[test_case("é".repeat(usize::from(u16::MAX) / 2 + 1); "overlong multibyte")]
+    fn invalid_mqtt_string(filter: String) {
+        assert_matches!(Filter::new(filter), Err(DecodeError::InvalidByteStr(_)));
     }
 
     #[test_case("a", &["a"]; "single")]
@@ -504,6 +469,13 @@ mod tests {
     fn valid(filter: &str, components: &[&str]) {
         let filter = super::filter(filter);
         assert!(filter.iter().eq(components.iter().copied()));
+    }
+
+    #[test]
+    fn maximum_length() {
+        let filter = Filter::new("a".repeat(usize::from(u16::MAX))).unwrap();
+
+        assert_eq!(filter.as_str().len(), usize::from(u16::MAX));
     }
 
     #[test_case("/b", &["", "b"], "b", &["b"])]
@@ -543,6 +515,27 @@ mod tests {
             }
             _ => panic!("Expected filter of type: Shared"),
         }
+    }
+
+    #[test]
+    fn shared_subscription_maximum_length() {
+        let prefix = "$share/group/";
+        let filter = Filter::new(format!(
+            "{prefix}{}",
+            "a".repeat(usize::from(u16::MAX) - prefix.len())
+        ))
+        .unwrap();
+
+        assert_eq!(filter.as_str().len(), usize::from(u16::MAX));
+    }
+
+    #[test_case(
+        format!("$share/group/{}", "a".repeat(usize::from(u16::MAX) - "$share/group/".len() + 1));
+        "overlong"
+    )]
+    #[test_case("$share/gro\0up/a".to_owned(); "null group")]
+    fn shared_subscription_invalid_mqtt_string(filter: String) {
+        assert_matches!(Filter::new(filter), Err(DecodeError::InvalidByteStr(_)));
     }
 
     #[test_case("$share/group1/mytopic", &FilterKind::Shared { index_group_name_and_filter: 13 })]
