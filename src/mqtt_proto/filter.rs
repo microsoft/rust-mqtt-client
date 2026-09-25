@@ -4,6 +4,7 @@
 use std::fmt::{Display, Formatter};
 use std::iter::zip;
 
+use super::byte_str::validate_mqtt_string;
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
     ByteStr, DOLLAR_SIGN, DecodeError, EncodeError, MULTI_LEVEL_MATCH, MULTI_LEVEL_MATCH_STR,
@@ -87,14 +88,12 @@ where
             return Err(DecodeError::InvalidByteStr("longer than 65,535 bytes"));
         }
 
-        // Ref[3.1.1]: [MQTT-4.7.3-2]
-        // Ref[5.0]: [MQTT-4.7.3-2]
-        // NOTE: String-backed values can come from public API input, so enforce this constraint
+        // Ref[3.1.1]: [MQTT-4.7.3-2], 1.5.3 UTF-8 encoded strings
+        // Ref[5.0]: [MQTT-4.7.3-2], 1.5.4 UTF-8 Encoded String
+        // NOTE: String-backed values can come from public API input, so enforce these constraints
         // here. `InvalidByteStr` is the closest existing error variant; its use on a `String` path
         // reflects the original assumption that such values were already valid.
-        if inner_ref.contains('\0') {
-            return Err(DecodeError::InvalidByteStr("contains U+0000"));
-        }
+        validate_mqtt_string(inner_ref.as_bytes())?;
 
         let (kind, filter) = if inner_ref.as_bytes()[0] == DOLLAR_SIGN as u8 {
             // Ref[5.0]: [MQTT-4.8.2-1], [MQTT-4.8.2-2]
@@ -461,6 +460,9 @@ mod tests {
     }
 
     #[test_case("a\0b".to_owned(); "null")]
+    #[test_case("a\u{1}b".to_owned(); "C0 control")]
+    #[test_case("a\u{7f}b".to_owned(); "C1 control")]
+    #[test_case("a\u{ffff}b".to_owned(); "non-character")]
     #[test_case("a".repeat(usize::from(u16::MAX) + 1); "overlong ascii")]
     #[test_case("é".repeat(usize::from(u16::MAX) / 2 + 1); "overlong multibyte")]
     fn invalid_mqtt_string(filter: String) {
@@ -540,6 +542,9 @@ mod tests {
         "overlong"
     )]
     #[test_case("$share/gro\0up/a".to_owned(); "null group")]
+    #[test_case("$share/gro\u{1}up/a".to_owned(); "C0 control in group")]
+    #[test_case("$share/gro\u{7f}up/a".to_owned(); "C1 control in group")]
+    #[test_case("$share/gro\u{ffff}up/a".to_owned(); "non-character in group")]
     fn shared_subscription_invalid_mqtt_string(filter: String) {
         assert_matches!(Filter::new(filter), Err(DecodeError::InvalidByteStr(_)));
     }

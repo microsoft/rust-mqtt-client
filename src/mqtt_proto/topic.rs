@@ -6,6 +6,7 @@ use std::{
     fmt::{Display, Formatter},
 };
 
+use super::byte_str::validate_mqtt_string;
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{
     ByteStr, DecodeError, EncodeError, MULTI_LEVEL_MATCH, SEPARATOR, SINGLE_LEVEL_MATCH,
@@ -43,14 +44,12 @@ where
                 return Err(DecodeError::InvalidByteStr("longer than 65,535 bytes"));
             }
 
-            // Ref[3.1.1]: [MQTT-4.7.3-2]
-            // Ref[5.0]: [MQTT-4.7.3-2]
-            // NOTE: String-backed values can come from public API input, so enforce this constraint
+            // Ref[3.1.1]: [MQTT-4.7.3-2], 1.5.3 UTF-8 encoded strings
+            // Ref[5.0]: [MQTT-4.7.3-2], 1.5.4 UTF-8 Encoded String
+            // NOTE: String-backed values can come from public API input, so enforce these constraints
             // here. `InvalidByteStr` is the closest existing error variant; its use on a `String` path
             // reflects the original assumption that such values were already valid.
-            if inner.contains('\0') {
-                return Err(DecodeError::InvalidByteStr("contains U+0000"));
-            }
+            validate_mqtt_string(inner.as_bytes())?;
 
             if inner.contains(|c| [MULTI_LEVEL_MATCH, SINGLE_LEVEL_MATCH].contains(&c)) {
                 return Err(DecodeError::InvalidTopic(inner.to_owned()));
@@ -286,6 +285,9 @@ mod tests {
     }
 
     #[test_case("a\0b".to_owned(); "null")]
+    #[test_case("a\u{1}b".to_owned(); "C0 control")]
+    #[test_case("a\u{7f}b".to_owned(); "C1 control")]
+    #[test_case("a\u{ffff}b".to_owned(); "non-character")]
     #[test_case("a".repeat(usize::from(u16::MAX) + 1); "overlong ascii")]
     #[test_case("é".repeat(usize::from(u16::MAX) / 2 + 1); "overlong multibyte")]
     fn invalid_mqtt_string(topic: String) {
@@ -327,6 +329,9 @@ mod tests {
     }
 
     #[test_case("a\0".to_owned(); "null")]
+    #[test_case("a\u{1}".to_owned(); "C0 control")]
+    #[test_case("a\u{7f}".to_owned(); "C1 control")]
+    #[test_case("a\u{ffff}".to_owned(); "non-character")]
     #[test_case("a".repeat(usize::from(u16::MAX)); "overlong")]
     fn combine_invalid_mqtt_string(first: String) {
         let second = Topic::new("b").unwrap();
