@@ -22,8 +22,8 @@ use thiserror::Error;
 use crate::buffer_pool::{BufferPool, BytesPool};
 use crate::client::{
     channel_data::{
-        DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0, PublishRequestQoS1QoS2,
-        ReauthRequest, SubscriptionRequest,
+        DisconnectRequest, IncomingPublishAndToken, PingRequest, PublishRequestQoS0,
+        PublishRequestQoS1QoS2, ReauthRequest, SubscriptionRequest,
     },
     session::{CompletedOperation, Session},
     timer::Timer,
@@ -31,8 +31,9 @@ use crate::client::{
         acknowledgement::{PubAckToken, PubRecToken},
         completion::buffered::completion_pair,
         completion::{
-            PublishQoS0CompletionToken, PublishQoS1CompletionToken, PublishQoS2CompletionToken,
-            ReauthCompletionToken, SubscribeCompletionToken, UnsubscribeCompletionToken,
+            PingCompletionToken, PublishQoS0CompletionToken, PublishQoS1CompletionToken,
+            PublishQoS2CompletionToken, ReauthCompletionToken, SubscribeCompletionToken,
+            UnsubscribeCompletionToken,
         },
         reauth::ReauthToken,
     },
@@ -80,6 +81,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     // buffering packets that are not yet owned by the internal session state.
     let (sub_tx, sub_rx) = tokio::sync::mpsc::channel(1);
     let (auth_tx, auth_rx) = tokio::sync::mpsc::channel(1);
+    let (ping_tx, ping_rx) = tokio::sync::mpsc::channel(1);
     // NOTE: We use an unbounded channel for acknowledgements, as there could be many ocurring simultaneously
     // and the fallback Drop implementation cannot await channel capacity without spawning many tasks/threads
     // in a way which severely affects performance.
@@ -91,6 +93,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         pub_qos0_tx: o_pub_q0_tx,
         pub_qos12_tx: o_pub_q12_tx,
         sub_tx,
+        ping_tx,
     };
     let reader_pool = BytesPool;
     let writer_pool = BytesPool;
@@ -101,6 +104,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         o_pub_q12_rx,
         ack_rx,
         auth_rx,
+        ping_rx,
         i_pub_tx,
         ack_tx,
         auth_tx,
@@ -188,6 +192,8 @@ pub struct Client {
     pub_qos12_tx: tokio::sync::mpsc::Sender<PublishRequestQoS1QoS2<Bytes>>,
     /// Channel that transmits outgoing SUBSCRIBE/UNSUBSCRIBE requests
     sub_tx: tokio::sync::mpsc::Sender<SubscriptionRequest<Bytes>>,
+    /// Channel that transmits outgoing PINGREQ requests
+    ping_tx: tokio::sync::mpsc::Sender<PingRequest>,
 }
 
 impl Client {
@@ -339,6 +345,20 @@ impl Client {
             .await
             .map_err(|_| DetachedError {})?;
         Ok(UnsubscribeCompletionToken(token))
+    }
+
+    /// Sends a PINGREQ packet to the server.
+    ///
+    /// On success, the operation has been submitted to the client and a completion token is
+    /// returned. Awaiting the token returns the round-trip time, from sending the PINGREQ to
+    /// receiving the corresponding PINGRESP.
+    pub async fn ping(&self) -> Result<PingCompletionToken, DetachedError> {
+        let (notifier, token) = completion_pair();
+        self.ping_tx
+            .send(PingRequest(notifier))
+            .await
+            .map_err(|_| DetachedError {})?;
+        Ok(PingCompletionToken(token))
     }
 }
 
@@ -1138,6 +1158,7 @@ impl Connection {
                     Packet::PingResp(_) => {
                         // Remove ping response timer as we have successfully received a PINGRESP.
                         pingresp_timer = None;
+                        self.session.incoming_pingresp();
                     }
 
                     packet => {

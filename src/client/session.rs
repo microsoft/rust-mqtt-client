@@ -10,22 +10,23 @@ use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
 use indexmap::IndexMap;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 
 use crate::buffer_pool::{Owned, Shared};
 use crate::client::{
     buffered::ReauthResult,
     channel_data::{
-        AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PublishRequestQoS0,
-        PublishRequestQoS1QoS2, ReauthRequest, SubscriptionRequest,
+        AcknowledgementRequest, DisconnectRequest, IncomingPublishAndToken, PingRequest,
+        PublishRequestQoS0, PublishRequestQoS1QoS2, ReauthRequest, SubscriptionRequest,
     },
     session::pkid::PkidPool,
     timer::Timer,
     token::acknowledgement::buffered::{PubAckToken, PubCompToken, PubRelToken},
     token::completion::buffered::{
-        PubRecAcceptCompletionNotifier, PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
-        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, ReauthCompletionNotifier,
-        SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+        PingCompletionNotifier, PubRecAcceptCompletionNotifier, PubRelCompletionNotifier,
+        PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
+        PublishQoS2CompletionNotifier, ReauthCompletionNotifier, SubscribeCompletionNotifier,
+        UnsubscribeCompletionNotifier,
     },
     token::reauth::buffered::ReauthToken,
 };
@@ -77,6 +78,7 @@ where
         o_pub_q12_rx: Receiver<PublishRequestQoS1QoS2<O::Shared>>,
         ack_rx: UnboundedReceiver<AcknowledgementRequest<O::Shared>>,
         auth_rx: Receiver<ReauthRequest<O::Shared>>,
+        ping_rx: Receiver<PingRequest>,
         i_pub_tx: UnboundedSender<IncomingPublishAndToken<O::Shared>>,
         ack_tx: UnboundedSender<AcknowledgementRequest<O::Shared>>,
         auth_tx: Sender<ReauthRequest<O::Shared>>,
@@ -90,6 +92,7 @@ where
             sub_rx: ReceiverStream(sub_rx).peekable(),
             ack_rx,
             auth_rx,
+            ping_rx,
             i_pub_tx,
             ack_tx,
             auth_tx,
@@ -300,7 +303,10 @@ where
                     Packet::Auth(auth)
                 }
 
-                OutgoingPacketRequest::PingReq => Packet::PingReq(PingReq),
+                OutgoingPacketRequest::PingReq(notifier) => {
+                    self.inflight.pingreq.push_back((Instant::now(), notifier));
+                    Packet::PingReq(PingReq)
+                }
             }
         };
 
@@ -619,6 +625,14 @@ where
         Ok(())
     }
 
+    /// An incoming PINGRESP packet has been received from the server
+    pub fn incoming_pingresp(&mut self) {
+        // An unsolicited PINGRESP is ignored, not treated as a protocol error.
+        if let Some((sent_at, Some(notifier))) = self.inflight.pingreq.pop_front() {
+            _ = notifier.complete(sent_at.elapsed());
+        }
+    }
+
     /// The connection has been closed for any reason.
     fn disconnected(&mut self) {
         // NOTE: When we cancel CompletionNotifiers here, we don't care about the Result because
@@ -641,6 +655,15 @@ where
             .auth
             .take()
             .map(|n| n.cancel("Client disconnected"));
+        // Remove and cancel all in-flight PINGREQs
+        for notifier in self
+            .inflight
+            .pingreq
+            .drain(..)
+            .filter_map(|(_, notifier)| notifier)
+        {
+            let _ = notifier.cancel("Client disconnected");
+        }
 
         // PUBACK tokens and their ordering are connection-scoped, even on session resumption.
         // TODO: Preserve session-scoped incoming state when QoS 2 is implemented.
@@ -763,6 +786,8 @@ where
     ack_rx: UnboundedReceiver<AcknowledgementRequest<S>>,
     /// Channel for receiving outgoing AUTH requests
     auth_rx: Receiver<ReauthRequest<S>>,
+    /// Channel for receiving outgoing PINGREQ requests
+    ping_rx: Receiver<PingRequest>,
     /// Channel for sending incoming PUBLISHes and associated acknowledgement tokens
     i_pub_tx: UnboundedSender<IncomingPublishAndToken<S>>,
 
@@ -783,7 +808,8 @@ where
     SubscriptionRequest(SubscriptionRequest<S>, PacketIdentifier),
     PublishRequest(PublishRequestWithPkid<S>),
     ReauthRequest(ReauthRequest<S>),
-    PingReq,
+    /// `None` for keep-alive pings
+    PingReq(Option<PingCompletionNotifier>),
 }
 
 /// This represents a `PublishRequest` that has been assigned a packet identifier if it needed one.
@@ -819,7 +845,8 @@ where
 }
 
 /// Poll for the next outgoing packet request.
-/// Priority order: Disconnects, Acknowledgements, Subscriptions, Publishes, Pings
+/// Priority order: Disconnects, Acknowledgements, Auth, Manual pings, Subscriptions, Publishes,
+/// Keep-alive pings
 fn poll_for_outgoing_request<S>(
     ch: &mut Channels<S>,
     mut pingreq_timer: Option<&mut Timer>,
@@ -849,6 +876,11 @@ where
         // TODO: Ideally, no polling for reauth if one is already in progress
         if let Poll::Ready(Some(auth_req)) = ch.auth_rx.poll_recv(cx) {
             return Poll::Ready(OutgoingPacketRequest::ReauthRequest(auth_req));
+        }
+
+        // Next priority are manual ping requests
+        if let Poll::Ready(Some(PingRequest(notifier))) = ch.ping_rx.poll_recv(cx) {
+            return Poll::Ready(OutgoingPacketRequest::PingReq(Some(notifier)));
         }
 
         // Next priority are subscription requests
@@ -902,7 +934,7 @@ where
         if let Some(ref mut pingreq_timer) = pingreq_timer
             && let Poll::Ready(()) = Pin::new(&mut *pingreq_timer).poll(cx)
         {
-            return Poll::Ready(OutgoingPacketRequest::PingReq);
+            return Poll::Ready(OutgoingPacketRequest::PingReq(None));
         }
 
         Poll::Pending
@@ -944,6 +976,8 @@ where
     // --- Other ----
     /// Inflight AUTH operation, if any.
     auth: Option<ReauthCompletionNotifier<S>>,
+    /// Inflight PINGREQs and send times, in PINGRESP order; no notifier for keep-alive pings.
+    pingreq: VecDeque<(Instant, Option<PingCompletionNotifier>)>,
 }
 
 #[derive_where(Default)]
@@ -977,13 +1011,19 @@ impl<T> Stream for ReceiverStream<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU16;
+    use std::time::Duration;
+
     use bytes::BytesMut;
+    use futures_util::future::FutureExt as _;
     use tokio::sync::mpsc::{channel, unbounded_channel};
 
     use super::{OutgoingPacketRequest, Session};
-    use crate::client::channel_data::AcknowledgementRequest;
-    use crate::client::token::completion::buffered::completion_pair;
-    use crate::mqtt_proto::{PacketIdentifier, PubComp, PubCompReasonCode};
+    use crate::client::channel_data::{AcknowledgementRequest, PingRequest};
+    use crate::client::token::completion::{CompletionError, buffered::completion_pair};
+    use crate::mqtt_proto::{
+        ConnAck, ConnectReasonCode, KeepAlive, Packet, PacketIdentifier, PubComp, PubCompReasonCode,
+    };
 
     #[tokio::test]
     async fn pubcomp_bypasses_publish_acknowledgement_ordering() {
@@ -992,6 +1032,7 @@ mod tests {
         let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
         let (ack_tx, ack_rx) = unbounded_channel();
         let (auth_tx, auth_rx) = channel(1);
+        let (_ping_tx, ping_rx) = channel(1);
         let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
         let mut session = Session::new(
             sub_rx,
@@ -999,6 +1040,7 @@ mod tests {
             publish_qos12_rx,
             ack_rx,
             auth_rx,
+            ping_rx,
             incoming_publish_tx,
             ack_tx.clone(),
             auth_tx,
@@ -1025,5 +1067,113 @@ mod tests {
         };
         assert_eq!(outgoing_pubcomp, pubcomp);
         assert!(session.in_application.publishes.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn keep_alive_pingresp_does_not_complete_manual_ping() {
+        let (_sub_tx, sub_rx) = channel(1);
+        let (_publish_qos0_tx, publish_qos0_rx) = channel(1);
+        let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
+        let (ack_tx, ack_rx) = unbounded_channel();
+        let (auth_tx, auth_rx) = channel(1);
+        let (ping_tx, ping_rx) = channel(1);
+        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let mut session = Session::new(
+            sub_rx,
+            publish_qos0_rx,
+            publish_qos12_rx,
+            ack_rx,
+            auth_rx,
+            ping_rx,
+            incoming_publish_tx,
+            ack_tx,
+            auth_tx,
+            PacketIdentifier::new(u16::MAX).unwrap(),
+            BytesMut::new(),
+        );
+        session.incoming_connack(
+            ConnAck {
+                reason_code: ConnectReasonCode::Success {
+                    session_present: false,
+                },
+                other_properties: Default::default(),
+            },
+            KeepAlive::Duration(NonZeroU16::new(1).unwrap()),
+        );
+
+        // The keep-alive PINGREQ is sent first, so the first PINGRESP answers it.
+        assert!(matches!(
+            session.next_outgoing_packet().await,
+            Packet::PingReq(_)
+        ));
+        tokio::time::advance(Duration::from_millis(100)).await;
+        let (notifier, mut ct) = completion_pair();
+        ping_tx.send(PingRequest(notifier)).await.unwrap();
+        assert!(matches!(
+            session.next_outgoing_packet().await,
+            Packet::PingReq(_)
+        ));
+        tokio::time::advance(Duration::from_millis(250)).await;
+
+        session.incoming_pingresp();
+        assert!((&mut ct).now_or_never().is_none());
+        session.incoming_pingresp();
+        // Timed from the manual PINGREQ, not the earlier keep-alive one.
+        assert_eq!(ct.now_or_never(), Some(Ok(Duration::from_millis(250))));
+    }
+
+    #[tokio::test]
+    async fn disconnect_cancels_inflight_manual_ping() {
+        let (_sub_tx, sub_rx) = channel(1);
+        let (_publish_qos0_tx, publish_qos0_rx) = channel(1);
+        let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
+        let (ack_tx, ack_rx) = unbounded_channel();
+        let (auth_tx, auth_rx) = channel(1);
+        let (ping_tx, ping_rx) = channel(1);
+        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let mut session = Session::new(
+            sub_rx,
+            publish_qos0_rx,
+            publish_qos12_rx,
+            ack_rx,
+            auth_rx,
+            ping_rx,
+            incoming_publish_tx,
+            ack_tx,
+            auth_tx,
+            PacketIdentifier::new(u16::MAX).unwrap(),
+            BytesMut::new(),
+        );
+        let connack = ConnAck {
+            reason_code: ConnectReasonCode::Success {
+                session_present: false,
+            },
+            other_properties: Default::default(),
+        };
+        session.incoming_connack(connack.clone(), KeepAlive::Infinite);
+
+        let (notifier, stale_ct) = completion_pair();
+        ping_tx.send(PingRequest(notifier)).await.unwrap();
+        assert!(matches!(
+            session.next_outgoing_packet().await,
+            Packet::PingReq(_)
+        ));
+
+        session.transport_disconnect(&"PINGRESP timeout");
+        assert!(matches!(
+            stale_ct.now_or_never(),
+            Some(Err(CompletionError::Canceled(_)))
+        ));
+
+        // The next connection's PINGRESP must answer its own PINGREQ.
+        session.incoming_connack(connack, KeepAlive::Infinite);
+        let (notifier, ct) = completion_pair();
+        ping_tx.send(PingRequest(notifier)).await.unwrap();
+        assert!(matches!(
+            session.next_outgoing_packet().await,
+            Packet::PingReq(_)
+        ));
+        session.incoming_pingresp();
+        assert!(matches!(ct.now_or_never(), Some(Ok(_))));
     }
 }

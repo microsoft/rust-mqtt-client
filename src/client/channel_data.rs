@@ -7,10 +7,11 @@ use crate::buffer_pool::Shared;
 use crate::client::token::{
     acknowledgement::buffered::{PubAckToken, PubRecToken},
     completion::buffered::{
-        PubAckCompletionNotifier, PubCompCompletionNotifier, PubRecAcceptCompletionNotifier,
-        PubRecRejectCompletionNotifier, PubRelCompletionNotifier, PublishQoS0CompletionNotifier,
-        PublishQoS1CompletionNotifier, PublishQoS2CompletionNotifier, ReauthCompletionNotifier,
-        SubscribeCompletionNotifier, UnsubscribeCompletionNotifier,
+        PingCompletionNotifier, PubAckCompletionNotifier, PubCompCompletionNotifier,
+        PubRecAcceptCompletionNotifier, PubRecRejectCompletionNotifier, PubRelCompletionNotifier,
+        PublishQoS0CompletionNotifier, PublishQoS1CompletionNotifier,
+        PublishQoS2CompletionNotifier, ReauthCompletionNotifier, SubscribeCompletionNotifier,
+        UnsubscribeCompletionNotifier,
     },
 };
 
@@ -97,6 +98,9 @@ where
 pub struct ReauthRequest<S>(pub(crate) ReauthCompletionNotifier<S>, pub Auth<S>)
 where
     S: Shared;
+
+/// Request to send a PINGREQ packet
+pub struct PingRequest(pub PingCompletionNotifier);
 
 /// Incoming Publish + Acknowledgement infrastructure
 pub enum IncomingPublishAndToken<S>
