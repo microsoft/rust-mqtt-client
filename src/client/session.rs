@@ -296,7 +296,13 @@ where
 
                 OutgoingPacketRequest::ReauthRequest(auth_req) => {
                     let (notifier, auth) = (auth_req.0, auth_req.1);
-                    self.inflight.auth = Some(notifier);
+                    let method = auth
+                        .authentication
+                        .as_ref()
+                        .expect("outgoing AUTH must contain an Authentication Method")
+                        .method
+                        .clone();
+                    self.inflight.auth = Some((method, notifier));
                     Packet::Auth(auth)
                 }
 
@@ -587,26 +593,20 @@ where
 
     /// An incoming AUTH packet has been received from the server
     pub fn incoming_auth(&mut self, auth: Auth<O::Shared>) -> Result<(), ProtocolError> {
+        let Some((method, notifier)) = self.inflight.auth.take() else {
+            return Err(ProtocolErrorRepr::UnexpectedPacket)?;
+        };
+        if !super::authentication_method_matches(auth.authentication.as_ref(), method.as_ref()) {
+            return Err(ProtocolErrorRepr::UnexpectedPacket)?;
+        }
+
         match auth.reason_code {
-            // TODO: Validate authentication method from CONNACK
             AuthenticateReasonCode::Success => {
-                let Some(notifier) = self.inflight.auth.take() else {
-                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
-                };
                 _ = notifier.complete(ReauthResult::Success(auth));
             }
             AuthenticateReasonCode::ContinueAuthentication => {
-                //pass on, do not stop tracking
-                let Some(notifier) = self.inflight.auth.take() else {
-                    return Err(ProtocolErrorRepr::UnexpectedPacket)?;
-                };
                 let token = ReauthToken {
-                    method: auth
-                        .authentication
-                        .as_ref()
-                        .expect("Authentication Method must be present for reason code 0x18")
-                        .method
-                        .clone(),
+                    method,
                     tx: self.ch.auth_tx.clone(),
                 };
                 _ = notifier.complete(ReauthResult::Continue(auth, token));
@@ -640,7 +640,7 @@ where
         self.inflight
             .auth
             .take()
-            .map(|n| n.cancel("Client disconnected"));
+            .map(|(_, notifier)| notifier.cancel("Client disconnected"));
 
         // PUBACK tokens and their ordering are connection-scoped, even on session resumption.
         // TODO: Preserve session-scoped incoming state when QoS 2 is implemented.
@@ -943,7 +943,7 @@ where
 
     // --- Other ----
     /// Inflight AUTH operation, if any.
-    auth: Option<ReauthCompletionNotifier<S>>,
+    auth: Option<(ByteStr<S>, ReauthCompletionNotifier<S>)>,
 }
 
 #[derive_where(Default)]
