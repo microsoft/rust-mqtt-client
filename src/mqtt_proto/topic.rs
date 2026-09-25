@@ -36,12 +36,18 @@ where
 
             // Ref[3.1.1]: [MQTT-4.7.3-3]
             // Ref[5.0]: [MQTT-4.7.3-3]
+            // NOTE: String-backed values can come from public API input, so enforce this constraint
+            // here. `InvalidByteStr` is the closest existing error variant; its use on a `String` path
+            // reflects the original assumption that such values were already valid.
             if inner.len() > usize::from(u16::MAX) {
                 return Err(DecodeError::InvalidByteStr("longer than 65,535 bytes"));
             }
 
             // Ref[3.1.1]: [MQTT-4.7.3-2]
             // Ref[5.0]: [MQTT-4.7.3-2]
+            // NOTE: String-backed values can come from public API input, so enforce this constraint
+            // here. `InvalidByteStr` is the closest existing error variant; its use on a `String` path
+            // reflects the original assumption that such values were already valid.
             if inner.contains('\0') {
                 return Err(DecodeError::InvalidByteStr("contains U+0000"));
             }
