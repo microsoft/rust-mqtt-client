@@ -7,6 +7,7 @@ use super::server::{EMQX, HIVEMQ_CE, MOSQUITTO, server_name};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FixtureCapability {
+    CustomEnhancedAuth,
     MutualTls,
     WebSocketPathValidation,
 }
@@ -14,11 +15,13 @@ pub(crate) enum FixtureCapability {
 pub(crate) fn supports_capability(capability: FixtureCapability) -> bool {
     matches!(
         (server_name().as_deref(), capability),
-        (None | Some(MOSQUITTO), FixtureCapability::MutualTls)
-            | (
-                Some(EMQX | HIVEMQ_CE),
-                FixtureCapability::WebSocketPathValidation
-            )
+        (
+            None | Some(MOSQUITTO),
+            FixtureCapability::CustomEnhancedAuth | FixtureCapability::MutualTls
+        ) | (
+            Some(EMQX | HIVEMQ_CE),
+            FixtureCapability::WebSocketPathValidation
+        )
     )
 }
 

@@ -58,7 +58,7 @@ macro_rules! test_timeout {
     };
 }
 
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn port_from_env(name: &str, default: u16) -> u16 {
     std::env::var(name)
