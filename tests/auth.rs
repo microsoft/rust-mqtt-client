@@ -8,8 +8,10 @@ use std::time::Duration;
 use bytes::Bytes;
 use matches::assert_matches;
 use ms_mqtt_client::client::{
-    ClientOptions, ConnectEnhancedAuthResult, KeepAliveConfig, ReauthResult, new_client,
+    ClientOptions, ConnectEnhancedAuthResult, ConnectResult, DisconnectedEvent, KeepAliveConfig,
+    ReauthResult, new_client,
 };
+use ms_mqtt_client::error::{CompletionError, ConnectError};
 use ms_mqtt_client::mqtt_proto::{
     self, AuthenticateReasonCode, Authentication, ConnectOtherProperties, ConnectReasonCode, Packet,
 };
@@ -149,7 +151,13 @@ async fn auth_reauth() {
             reason_code: ConnectReasonCode::Success {
                 session_present: false,
             },
-            other_properties: Default::default(),
+            other_properties: mqtt_proto::ConnAckOtherProperties {
+                authentication: Some(Authentication {
+                    method: "some method".into(),
+                    data: None,
+                }),
+                ..Default::default()
+            },
         }))
         .unwrap();
 
@@ -290,4 +298,215 @@ async fn auth_reauth() {
         }),
         properties: _,
     } if method == "some method" && data == b"some server data reauth 2"[..]);
+}
+
+async fn connect_with_first_packet(packet: Packet<Bytes>) -> ConnectEnhancedAuthResult {
+    let (_client, connect_handle, _receiver) = new_client(ClientOptions {
+        client_id: Some("foo".to_string()),
+        ..Default::default()
+    });
+    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
+    let (outgoing_packets_tx, _outgoing_packets_rx) = unbounded_channel();
+    incoming_packets_tx.send(packet).unwrap();
+
+    connect_handle
+        .connect_enhanced_auth(
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
+            },
+            false,
+            KeepAliveConfig::Infinite,
+            None,
+            None,
+            None,
+            Default::default(),
+            AuthenticationInfo {
+                method: "expected method".to_owned(),
+                data: None,
+            },
+            None,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn enhanced_auth_rejects_mismatched_initial_method() {
+    let result = connect_with_first_packet(Packet::Auth(mqtt_proto::Auth {
+        reason_code: AuthenticateReasonCode::ContinueAuthentication,
+        authentication: Some(Authentication {
+            method: "other method".into(),
+            data: None,
+        }),
+        reason_string: None,
+        user_properties: Default::default(),
+    }))
+    .await;
+
+    assert!(matches!(
+        result,
+        ConnectEnhancedAuthResult::Failure(_, ConnectError::Protocol(err))
+            if err.to_string().contains("authentication method")
+    ));
+}
+
+#[tokio::test]
+async fn enhanced_auth_rejects_success_without_method() {
+    let result = connect_with_first_packet(Packet::ConnAck(mqtt_proto::ConnAck {
+        reason_code: ConnectReasonCode::Success {
+            session_present: false,
+        },
+        other_properties: Default::default(),
+    }))
+    .await;
+
+    assert!(matches!(
+        result,
+        ConnectEnhancedAuthResult::Failure(_, ConnectError::Protocol(err))
+            if err.to_string().contains("authentication method")
+    ));
+}
+
+#[tokio::test]
+async fn connect_rejects_success_with_method() {
+    let (_client, connect_handle, _receiver) = new_client(ClientOptions {
+        client_id: Some("foo".to_string()),
+        ..Default::default()
+    });
+    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
+    let (outgoing_packets_tx, _outgoing_packets_rx) = unbounded_channel();
+    incoming_packets_tx
+        .send(Packet::ConnAck(mqtt_proto::ConnAck {
+            reason_code: ConnectReasonCode::Success {
+                session_present: false,
+            },
+            other_properties: mqtt_proto::ConnAckOtherProperties {
+                authentication: Some(Authentication {
+                    method: "unexpected method".into(),
+                    data: None,
+                }),
+                ..Default::default()
+            },
+        }))
+        .unwrap();
+
+    let result = connect_handle
+        .connect(
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
+            },
+            false,
+            KeepAliveConfig::Infinite,
+            None,
+            None,
+            None,
+            Default::default(),
+            None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        ConnectResult::Failure(_, ConnectError::Protocol(err))
+            if err.to_string().contains("authentication method")
+    ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn reauth_rejects_mismatched_method() {
+    let (_client, connect_handle, _receiver) = new_client(ClientOptions {
+        client_id: Some("foo".to_string()),
+        ..Default::default()
+    });
+    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
+    let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();
+    incoming_packets_tx
+        .send(Packet::ConnAck(mqtt_proto::ConnAck {
+            reason_code: ConnectReasonCode::Success {
+                session_present: false,
+            },
+            other_properties: mqtt_proto::ConnAckOtherProperties {
+                authentication: Some(Authentication {
+                    method: "expected method".into(),
+                    data: None,
+                }),
+                ..Default::default()
+            },
+        }))
+        .unwrap();
+
+    let ConnectEnhancedAuthResult::Success(connection, _connack, _disconnect_handle, reauth_handle) =
+        connect_handle
+            .connect_enhanced_auth(
+                ConnectionTransportConfig {
+                    transport_type: ConnectionTransportType::Test {
+                        incoming_packets: incoming_packets_rx,
+                        outgoing_packets: outgoing_packets_tx,
+                    },
+                    timeout: None,
+                    proxy: None,
+                    tcp_nodelay: false,
+                },
+                false,
+                KeepAliveConfig::Infinite,
+                None,
+                None,
+                None,
+                Default::default(),
+                AuthenticationInfo {
+                    method: "expected method".to_owned(),
+                    data: None,
+                },
+                None,
+            )
+            .await
+    else {
+        panic!("expected successful enhanced authentication");
+    };
+    assert_matches!(outgoing_packets_rx.recv().await, Some(Packet::Connect(_)));
+
+    let mut connection = pin!(connection.run_until_disconnect());
+    let reauth_token = reauth_handle
+        .reauth(None, Default::default())
+        .await
+        .unwrap();
+    let outgoing_auth = pin!(outgoing_packets_rx.recv());
+    assert_matches!(
+        run_with_connection(&mut connection, outgoing_auth).await,
+        Some(Some(Packet::Auth(mqtt_proto::Auth {
+            reason_code: AuthenticateReasonCode::ReAuthenticate,
+            authentication: Some(Authentication { method, .. }),
+            ..
+        }))) if method == "expected method"
+    );
+
+    incoming_packets_tx
+        .send(Packet::Auth(mqtt_proto::Auth {
+            reason_code: AuthenticateReasonCode::ContinueAuthentication,
+            authentication: Some(Authentication {
+                method: "other method".into(),
+                data: None,
+            }),
+            reason_string: None,
+            user_properties: Default::default(),
+        }))
+        .unwrap();
+
+    let (_connect_handle, event) = connection.await;
+    assert_matches!(reauth_token.await, Err(CompletionError::Canceled(_)));
+    assert_matches!(
+        event,
+        DisconnectedEvent::ProtocolError(err) if err.to_string().contains("authentication method")
+    );
 }
