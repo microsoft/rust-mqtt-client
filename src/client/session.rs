@@ -485,10 +485,11 @@ where
         client_auth_method: Option<&str>,
     ) -> Result<(), ProtocolError> {
         let server_authentication = connack.other_properties.authentication.as_ref();
-        let is_success = matches!(connack.reason_code, ConnectReasonCode::Success { .. });
-        if (client_auth_method.is_none() && server_authentication.is_some())
-            || (is_success
-                && !authentication_method_matches(server_authentication, client_auth_method))
+        // MQTT-4.12.0-5 requires a matching method only on successful enhanced-auth CONNACKs.
+        let is_rejected_enhanced_auth = client_auth_method.is_some()
+            && matches!(connack.reason_code, ConnectReasonCode::Refused(_));
+        if !is_rejected_enhanced_auth
+            && !authentication_method_matches(server_authentication, client_auth_method)
         {
             return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
         }
