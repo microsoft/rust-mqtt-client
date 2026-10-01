@@ -23,6 +23,8 @@ trait EnhancedAuthExchange {
     fn respond(&mut self, challenge: &Auth) -> Option<Bytes>;
 
     fn verify_success(&mut self, _server_info: Option<&AuthenticationInfo>) {}
+
+    fn verify_rejection(&mut self) {}
 }
 
 struct EnhancedAuthConnection {
@@ -207,6 +209,8 @@ where
             }
         }
     }
+
+    exchange.verify_rejection();
 }
 
 async fn exercise_rejected_reauth<C, R>(
@@ -258,6 +262,7 @@ async fn exercise_rejected_reauth<C, R>(
         matches!(event, DisconnectedEvent::ServerDisconnect(_)),
         "server did not reject re-authentication with DISCONNECT: {event:?}"
     );
+    rejected_exchange.verify_rejection();
 }
 
 /// Fixture-provided method: the client sends "1", the server challenges with "2", and the client
@@ -320,6 +325,13 @@ impl EnhancedAuthExchange for WrongCustomCounterExchange {
         );
         self.challenged = true;
         Some(Bytes::from_static(b"4"))
+    }
+
+    fn verify_rejection(&mut self) {
+        assert!(
+            self.challenged,
+            "server rejected before receiving the invalid counter response"
+        );
     }
 }
 
