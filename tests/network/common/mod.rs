@@ -28,12 +28,14 @@ pub(crate) const ENV_MQTT_HTTPS_PROXY_PORT: &str = "MQTT_HTTPS_PROXY_PORT";
 pub(crate) const ENV_MQTT_MTLS_PORT: &str = "MQTT_MTLS_PORT";
 pub(crate) const ENV_MQTT_PORT: &str = "MQTT_PORT";
 pub(crate) const ENV_MQTT_PROXY_HOST: &str = "MQTT_PROXY_HOST";
+pub(crate) const ENV_MQTT_SAT_PORT: &str = "MQTT_SAT_PORT";
 pub(crate) const ENV_MQTT_SERVER: &str = "MQTT_SERVER";
 pub(crate) const ENV_MQTT_TLS_PORT: &str = "MQTT_TLS_PORT";
 pub(crate) const ENV_MQTT_WS_PORT: &str = "MQTT_WS_PORT";
 pub(crate) const ENV_MQTT_WSS_PORT: &str = "MQTT_WSS_PORT";
 
 pub(crate) const TCP_PORT: u16 = 1883;
+pub(crate) const SAT_PORT: u16 = 1884;
 pub(crate) const HTTP_PROXY_PORT: u16 = 3128;
 pub(crate) const HTTPS_PROXY_PORT: u16 = 3129;
 pub(crate) const TLS_PORT: u16 = 8883;
@@ -66,10 +68,14 @@ pub(crate) fn port_from_env(name: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
-fn certificate(name: &str) -> Vec<u8> {
+pub(crate) fn credential_path(name: &str) -> String {
     let directory = std::env::var(ENV_MQTT_CERT_DIR)
         .unwrap_or_else(|_| "tests/network/fixtures/brokers/certs".to_string());
-    let path = format!("{directory}/{name}");
+    format!("{directory}/{name}")
+}
+
+fn certificate(name: &str) -> Vec<u8> {
+    let path = credential_path(name);
     std::fs::read(&path)
         .unwrap_or_else(|err| panic!("failed to read test certificate {path}: {err}"))
 }

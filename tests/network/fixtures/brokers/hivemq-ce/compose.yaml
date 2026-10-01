@@ -14,3 +14,22 @@ services:
     volumes:
       - ./config.xml:/opt/hivemq/conf/config.xml:ro
       - ../certs:/opt/hivemq/conf/certs:ro
+      - custom-counter-extension:/opt/hivemq/extensions/custom-counter-extension:ro
+
+  extension-builder:
+    image: maven:3.9.9-eclipse-temurin-21
+    profiles: ["build"]
+    entrypoint: ["sh", "-euc"]
+    command:
+      - >-
+        rm -rf /extension/* &&
+        mvn --batch-mode --quiet -f /src/pom.xml
+        -Dextension.build.directory=/build package &&
+        cp /build/custom-counter-extension-1.0.0.jar /extension/ &&
+        cp /src/hivemq-extension.xml /extension/
+    volumes:
+      - ./extensions/custom-counter:/src:ro
+      - custom-counter-extension:/extension
+
+volumes:
+  custom-counter-extension:

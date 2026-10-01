@@ -10,8 +10,8 @@
 //! Enabled by the `__network` and `websockets` features, which leaves `#[ignore]` free to
 //! quarantine a flaky test. Add a new area of coverage as another module here.
 
-mod auth;
 mod common;
+mod enhanced_auth;
 mod messaging;
 mod meta;
 mod session;

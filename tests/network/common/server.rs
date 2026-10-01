@@ -53,18 +53,15 @@ const UNSUPPORTED: &[(&str, &[ServerFeature])] = &[(
 )];
 
 /// The server fixture under test, from `MQTT_SERVER` (set by `make network-test`).
-pub(crate) fn server_name() -> Option<String> {
+pub(crate) fn server_name() -> String {
     std::env::var(ENV_MQTT_SERVER)
         .ok()
         .filter(|n| !n.is_empty())
+        .expect("MQTT_SERVER must name the server fixture under test")
 }
 
-/// An unnamed server is assumed to support everything: a real failure is more useful than a
-/// silent skip.
 pub(crate) fn supports(feature: ServerFeature) -> bool {
-    let Some(server) = server_name() else {
-        return true;
-    };
+    let server = server_name();
     !UNSUPPORTED
         .iter()
         .any(|(name, missing)| *name == server && missing.contains(&feature))
@@ -78,7 +75,7 @@ macro_rules! require_server_feature {
             // Printed rather than silent so a skip is visible with --nocapture.
             println!(
                 "SKIP: {} does not support {:?}",
-                $crate::common::server::server_name().unwrap_or_else(|| "<unknown>".into()),
+                $crate::common::server::server_name(),
                 $feature,
             );
             return;

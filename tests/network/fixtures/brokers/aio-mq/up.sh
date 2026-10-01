@@ -31,6 +31,7 @@ PORT="${MQTT_PORT:-1883}"
 TLS_PORT="${MQTT_TLS_PORT:-8883}"
 WS_PORT="${MQTT_WS_PORT:-8083}"
 WSS_PORT="${MQTT_WSS_PORT:-8084}"
+SAT_PORT="${MQTT_SAT_PORT:-1884}"
 
 for tool in k3d kubectl helm; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -50,7 +51,8 @@ k3d cluster create "$CLUSTER_NAME" \
     --port "${PORT}:1883@loadbalancer" \
     --port "${TLS_PORT}:8883@loadbalancer" \
     --port "${WS_PORT}:8083@loadbalancer" \
-    --port "${WSS_PORT}:8084@loadbalancer"
+    --port "${WSS_PORT}:8084@loadbalancer" \
+    --port "${SAT_PORT}:1884@loadbalancer"
 kubectl wait --for=condition=Ready nodes --all --timeout=120s
 
 log "Installing the aio-broker chart ($MQ_IMAGE_VERSION)..."
@@ -98,4 +100,10 @@ wait_for_port 127.0.0.1 "$PORT"
 wait_for_tls_port 127.0.0.1 "$TLS_PORT" ../certs/ca.crt
 wait_for_port 127.0.0.1 "$WS_PORT"
 wait_for_tls_port 127.0.0.1 "$WSS_PORT" ../certs/ca.crt
+wait_for_port 127.0.0.1 "$SAT_PORT"
+
+log "Minting a service account token for K8S-SAT..."
+# The audience must match broker.yaml; 24h outlives a manual up.sh followed by local test runs.
+token="$(kubectl create token default --audience aio-internal --duration 24h)"
+printf '%s' "$token" > ../certs/sat.token
 log "Broker is ready."

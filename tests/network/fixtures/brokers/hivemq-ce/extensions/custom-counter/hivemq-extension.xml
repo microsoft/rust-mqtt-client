@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hivemq-extension>
+    <id>custom-counter-extension</id>
+    <version>1.0.0</version>
+    <name>Custom Counter Test Extension</name>
+    <author>Microsoft</author>
+    <priority>100</priority>
+    <start-priority>100</start-priority>
+</hivemq-extension>
