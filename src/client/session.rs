@@ -484,15 +484,16 @@ where
         client_keep_alive: KeepAlive,
         client_auth_method: Option<&str>,
     ) -> Result<(), ProtocolError> {
-        if let ConnectReasonCode::Success { session_present } = connack.reason_code {
-            // Checked first so a rejected CONNACK leaves the session untouched (MQTT-4.12.0-5, -6).
-            if !authentication_method_matches(
-                connack.other_properties.authentication.as_ref(),
-                client_auth_method,
-            ) {
-                return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
-            }
+        let server_authentication = connack.other_properties.authentication.as_ref();
+        let is_success = matches!(connack.reason_code, ConnectReasonCode::Success { .. });
+        if (client_auth_method.is_none() && server_authentication.is_some())
+            || (is_success
+                && !authentication_method_matches(server_authentication, client_auth_method))
+        {
+            return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
+        }
 
+        if let ConnectReasonCode::Success { session_present } = connack.reason_code {
             if !session_present {
                 // Previous session, if any, is not present on the server.
                 self.session_expired();

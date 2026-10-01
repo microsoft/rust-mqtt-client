@@ -13,7 +13,8 @@ use ms_mqtt_client::client::{
 };
 use ms_mqtt_client::error::{CompletionError, ConnectError};
 use ms_mqtt_client::mqtt_proto::{
-    self, AuthenticateReasonCode, Authentication, ConnectOtherProperties, ConnectReasonCode, Packet,
+    self, AuthenticateReasonCode, Authentication, ConnectOtherProperties, ConnectReasonCode,
+    ConnectionRefusedReason, Packet,
 };
 use ms_mqtt_client::packet::{Auth, AuthReason, AuthenticationInfo, ConnAck};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
@@ -385,6 +386,55 @@ async fn connect_rejects_success_with_method() {
             reason_code: ConnectReasonCode::Success {
                 session_present: false,
             },
+            other_properties: mqtt_proto::ConnAckOtherProperties {
+                authentication: Some(Authentication {
+                    method: "unexpected method".into(),
+                    data: None,
+                }),
+                ..Default::default()
+            },
+        }))
+        .unwrap();
+
+    let result = connect_handle
+        .connect(
+            ConnectionTransportConfig {
+                transport_type: ConnectionTransportType::Test {
+                    incoming_packets: incoming_packets_rx,
+                    outgoing_packets: outgoing_packets_tx,
+                },
+                timeout: None,
+                proxy: None,
+                tcp_nodelay: false,
+            },
+            false,
+            KeepAliveConfig::Infinite,
+            None,
+            None,
+            None,
+            Default::default(),
+            None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        ConnectResult::Failure(_, ConnectError::Protocol(err))
+            if err.to_string().contains("authentication method")
+    ));
+}
+
+#[tokio::test]
+async fn connect_rejects_failure_with_method() {
+    let (_client, connect_handle, _receiver) = new_client(ClientOptions {
+        client_id: Some("foo".to_string()),
+        ..Default::default()
+    });
+    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
+    let (outgoing_packets_tx, _outgoing_packets_rx) = unbounded_channel();
+    incoming_packets_tx
+        .send(Packet::ConnAck(mqtt_proto::ConnAck {
+            reason_code: ConnectReasonCode::Refused(ConnectionRefusedReason::NotAuthorized),
             other_properties: mqtt_proto::ConnAckOtherProperties {
                 authentication: Some(Authentication {
                     method: "unexpected method".into(),

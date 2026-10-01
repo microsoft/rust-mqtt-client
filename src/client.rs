@@ -530,12 +530,7 @@ impl ConnectHandle {
         }
 
         let connack = match maybe_timeout(response_timeout, mqtt_receive(&mut reader)).await {
-            Ok(Ok(Packet::ConnAck(connack))) => {
-                if !connack.is_success() {
-                    return ConnectResult::Failure(self, ConnectError::Rejected(connack.into()));
-                }
-                connack
-            }
+            Ok(Ok(Packet::ConnAck(connack))) => connack,
             Ok(Ok(_)) => {
                 return ConnectResult::Failure(
                     self,
@@ -551,6 +546,9 @@ impl ConnectHandle {
             .incoming_connack(connack.clone(), keep_alive.into(), None)
         {
             return ConnectResult::Failure(self, ConnectError::Protocol(err));
+        }
+        if !connack.is_success() {
+            return ConnectResult::Failure(self, ConnectError::Rejected(connack.into()));
         }
 
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
