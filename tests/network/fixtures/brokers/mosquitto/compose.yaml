@@ -13,6 +13,7 @@ services:
       # Relative paths resolve against this file's directory, so `-f` from the repo root works.
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ../certs:/mosquitto/config/certs:ro
+      - plugins:/mosquitto/plugins:ro
     healthcheck:
       # The image ships the mosquitto clients; a successful publish proves the listener is
       # accepting connections, which is what `up --wait` needs to gate on.
@@ -21,3 +22,20 @@ services:
       timeout: 3s
       retries: 15
       start_period: 2s
+
+  # Compiles plugins/ against this image's Mosquitto headers; up.sh runs it before the broker.
+  plugin-builder:
+    image: eclipse-mosquitto:2.0.22
+    profiles: ["build"]
+    entrypoint: ["sh", "-euc"]
+    command:
+      - >-
+        apk add --no-cache --quiet build-base mosquitto-dev &&
+        gcc -Wall -Wextra -O2 -fPIC -shared
+        -o /plugins/custom_counter_method.so /src/custom_counter_method.c
+    volumes:
+      - ./plugins:/src:ro
+      - plugins:/plugins
+
+volumes:
+  plugins:

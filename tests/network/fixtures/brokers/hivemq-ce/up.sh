@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 source ../compose.sh
 
 ../generate-certs.sh
+docker compose run --rm -T extension-builder
 compose_up
 wait_for_tls_port 127.0.0.1 "${MQTT_TLS_PORT:-8883}" ../certs/ca.crt
 wait_for_port 127.0.0.1 "${MQTT_WS_PORT:-8083}"

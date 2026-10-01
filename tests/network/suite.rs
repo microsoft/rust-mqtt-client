@@ -11,6 +11,7 @@
 //! quarantine a flaky test. Add a new area of coverage as another module here.
 
 mod common;
+mod enhanced_auth;
 mod messaging;
 mod meta;
 mod session;

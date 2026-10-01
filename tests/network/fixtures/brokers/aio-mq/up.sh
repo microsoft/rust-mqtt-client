@@ -9,9 +9,10 @@
 #
 # AIO MQ 1.6.0 deployment workaround (latest stable standalone chart as of 2026-08-07):
 #
-# 1. Reusing one TLS Secret for MQTT/TLS and WSS makes the operator render duplicate volume
-#    mounts at the same path. Kubernetes rejects the frontend StatefulSet, so use two Secret
-#    names containing the same certificate and key.
+# Reusing one TLS Secret for MQTT/TLS and WSS makes the operator render duplicate volume
+# mounts at the same path. Kubernetes rejects the frontend StatefulSet, so use two Secret names
+# containing the same certificate and key.
+#
 # On a chart upgrade, first try using one Secret for both secure ports. This workaround can be
 # removed when a clean deployment reaches Running and the frontend StatefulSet contains only one
 # mount for the shared Secret.
@@ -26,11 +27,16 @@ CLUSTER_NAME="${MQ_CLUSTER_NAME:-ms-mqtt-network-tests}"
 MQ_IMAGE_ACR="${MQ_IMAGE_ACR:-mqbuilds.azurecr.io}"
 # Bump by hand: Dependabot covers the other brokers' compose images, but not a chart
 # version in a shell variable pulled from an OCI registry.
-MQ_IMAGE_VERSION="${MQ_IMAGE_VERSION:-1.6.0}"
+MQ_CHART_VERSION="${MQ_CHART_VERSION:-1.6.0}"
+# BEGIN TEMPORARY DEVELOPMENT IMAGE OVERRIDE CONFIGURATION
+MQ_IMAGE_VERSION="${MQ_IMAGE_VERSION:-1.7.0-pr-183744389}"
+MQ_IMAGE="$MQ_IMAGE_ACR/dmqtt-pod:$MQ_IMAGE_VERSION"
+# END TEMPORARY DEVELOPMENT IMAGE OVERRIDE CONFIGURATION
 PORT="${MQTT_PORT:-1883}"
 TLS_PORT="${MQTT_TLS_PORT:-8883}"
 WS_PORT="${MQTT_WS_PORT:-8083}"
 WSS_PORT="${MQTT_WSS_PORT:-8084}"
+SAT_PORT="${MQTT_SAT_PORT:-1884}"
 
 for tool in k3d kubectl helm; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -50,11 +56,12 @@ k3d cluster create "$CLUSTER_NAME" \
     --port "${PORT}:1883@loadbalancer" \
     --port "${TLS_PORT}:8883@loadbalancer" \
     --port "${WS_PORT}:8083@loadbalancer" \
-    --port "${WSS_PORT}:8084@loadbalancer"
+    --port "${WSS_PORT}:8084@loadbalancer" \
+    --port "${SAT_PORT}:1884@loadbalancer"
 kubectl wait --for=condition=Ready nodes --all --timeout=120s
 
-log "Installing the aio-broker chart ($MQ_IMAGE_VERSION)..."
-(cd "$WORKDIR" && helm pull "oci://$MQ_IMAGE_ACR/helm/aio-broker" --version "$MQ_IMAGE_VERSION" --untar)
+log "Installing the aio-broker chart ($MQ_CHART_VERSION)..."
+(cd "$WORKDIR" && helm pull "oci://$MQ_IMAGE_ACR/helm/aio-broker" --version "$MQ_CHART_VERSION" --untar)
 helm install aio-broker "$WORKDIR/aio-broker" --wait --timeout 5m \
     --set image.containerRegistry="$MQ_IMAGE_ACR"
 
@@ -92,10 +99,66 @@ if [[ "${status:-}" != *Running* ]]; then
     exit 1
 fi
 
+# BEGIN TEMPORARY DEVELOPMENT IMAGE OVERRIDE
+# Remove this block and the MQ image variables above when a mainstream AIO MQ release includes
+# the enhanced-auth fix. The stable chart can then manage its broker workloads normally.
+log "Switching broker workloads to $MQ_IMAGE..."
+kubectl scale statefulset/aio-broker-operator --replicas=0
+kubectl wait --for=delete pod/aio-broker-operator-0 --timeout=120s
+
+# The health manager is also a runtime dependency, so keep it running while removing only its
+# ability to restore generated workloads and its own reconciliation permissions.
+workload_rule="$(kubectl get role aio-broker-health-manager -o jsonpath='{.rules[3].resources[*]}')"
+rbac_rule="$(kubectl get role aio-broker-health-manager -o jsonpath='{.rules[5].resources[*]}')"
+if [[ " $workload_rule " != *" statefulsets "* || " $workload_rule " != *" deployments "* ||
+    " $rbac_rule " != *" roles "* || " $rbac_rule " != *" rolebindings "* ]]; then
+    echo "error: aio-broker-health-manager RBAC no longer matches the 1.6.0 chart" >&2
+    exit 1
+fi
+kubectl patch role aio-broker-health-manager --type=json --patch='[
+  {"op":"replace","path":"/rules/3/verbs","value":["list","get"]},
+  {"op":"remove","path":"/rules/5"}
+]'
+
+while read -r verb resource; do
+    if kubectl auth can-i "$verb" "$resource" \
+        --as=system:serviceaccount:default:aio-broker-health-manager \
+        --namespace=default --quiet; then
+        echo "error: aio-broker-health-manager can still $verb $resource" >&2
+        exit 1
+    fi
+done <<'EOF'
+patch statefulsets.apps
+create statefulsets.apps
+delete statefulsets.apps
+patch rolebindings.rbac.authorization.k8s.io
+create rolebindings.rbac.authorization.k8s.io
+EOF
+
+kubectl set image statefulset/aio-broker-backend-1 "broker=$MQ_IMAGE"
+kubectl set image statefulset/aio-broker-frontend "broker=$MQ_IMAGE"
+kubectl rollout status statefulset/aio-broker-backend-1 --timeout=5m
+kubectl rollout status statefulset/aio-broker-frontend --timeout=5m
+
+for statefulset in aio-broker-backend-1 aio-broker-frontend; do
+    image="$(kubectl get statefulset "$statefulset" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+    if [[ "$image" != "$MQ_IMAGE" ]]; then
+        echo "error: $statefulset reverted to $image" >&2
+        exit 1
+    fi
+done
+# END TEMPORARY DEVELOPMENT IMAGE OVERRIDE
+
 # Running only means the CR reconciled; listener readiness can lag behind it.
 log "Waiting for 127.0.0.1:${PORT} to accept connections..."
 wait_for_port 127.0.0.1 "$PORT"
 wait_for_tls_port 127.0.0.1 "$TLS_PORT" ../certs/ca.crt
 wait_for_port 127.0.0.1 "$WS_PORT"
 wait_for_tls_port 127.0.0.1 "$WSS_PORT" ../certs/ca.crt
+wait_for_port 127.0.0.1 "$SAT_PORT"
+
+log "Minting a service account token for K8S-SAT..."
+# The audience must match broker.yaml; 24h outlives a manual up.sh followed by local test runs.
+token="$(kubectl create token default --audience aio-internal --duration 24h)"
+printf '%s' "$token" > ../certs/sat.token
 log "Broker is ready."

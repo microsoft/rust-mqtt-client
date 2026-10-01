@@ -1,13 +1,28 @@
-# Adapted from the chart's examples/deployment.simple.yaml, with two deliberate changes:
+# Adapted from the chart's examples/deployment.simple.yaml, with three deliberate changes:
 #
 #   - The listener is LoadBalancer from the start. The example uses the default ClusterIP,
 #     which is cluster-internal only, so the published host port accepts connections and
 #     then drops them. Declaring it here avoids applying the example and patching it after.
 #   - Cardinality and memory are at their minimum. The example provisions 2 frontends and
 #     2 backend chains of 2; this suite runs a handful of clients on small CI runners.
+#   - Port 1884 requires K8S-SAT authentication; every other port stays anonymous.
 #
 # At least one BrokerListener must exist before the Broker, or the Broker reports a
 # missing-listener failure -- hence the ordering below.
+---
+apiVersion: mqttbroker.iotoperations.azure.com/v1
+kind: BrokerAuthentication
+metadata:
+  name: service-account-token
+  namespace: default
+spec:
+  authenticationMethods:
+    - method: ServiceAccountToken
+      serviceAccountTokenSettings:
+        # up.sh mints the test token for this audience.
+        audiences:
+          - aio-internal
+
 ---
 apiVersion: mqttbroker.iotoperations.azure.com/v1
 kind: BrokerListener
@@ -36,6 +51,9 @@ spec:
         manual:
           # AIO MQ 1.6.0 creates duplicate volume mounts when two ports share a Secret.
           secretRef: network-server-wss-tls
+    - port: 1884
+      protocol: Mqtt
+      authenticationRef: service-account-token
 
 ---
 apiVersion: mqttbroker.iotoperations.azure.com/v1

@@ -4,17 +4,14 @@
 //! Meta-tests that validate the live test fixtures and suite assumptions.
 
 use crate::common::server::{ServerFeature, server_name, supports};
-use crate::common::{ENV_MQTT_SERVER, Endpoint, connect_tcp};
+use crate::common::{Endpoint, connect_tcp};
 
 /// Verifies that the fixture's server-capability inventory matches the capabilities advertised
 /// by the live server in CONNACK.
 #[tokio::test]
 async fn inventory_matches_server() {
     crate::test_timeout! {
-        let Some(server) = server_name() else {
-            println!("SKIP: {ENV_MQTT_SERVER} is unset, so there is no inventory to verify");
-            return;
-        };
+        let server = server_name();
         let endpoint = Endpoint::from_env();
         let live = connect_tcp(&endpoint, "inventory_matches_server").await;
 
