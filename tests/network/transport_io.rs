@@ -452,8 +452,8 @@ async fn reconnect_cycles(profile: ConnectionProfile, route: ConnectionRoute) {
                 client,
                 connect_handle,
                 receiver,
-                profile.transport(),
-                route.proxy(),
+                || profile.transport(),
+                || route.proxy(),
                 KeepAliveConfig::Infinite,
             )
             .await;
