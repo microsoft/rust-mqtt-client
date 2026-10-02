@@ -27,9 +27,11 @@ CLUSTER_NAME="${MQ_CLUSTER_NAME:-ms-mqtt-network-tests}"
 MQ_IMAGE_ACR="${MQ_IMAGE_ACR:-mqbuilds.azurecr.io}"
 # Bump by hand: Dependabot covers the other brokers' compose images, but not a chart
 # version in a shell variable pulled from an OCI registry.
+# ../aio-mq-1.6 reuses this script with its own pinned chart version.
 MQ_CHART_VERSION="${MQ_CHART_VERSION:-1.6.0}"
 # BEGIN TEMPORARY DEVELOPMENT IMAGE OVERRIDE CONFIGURATION
-MQ_IMAGE_VERSION="${MQ_IMAGE_VERSION:-1.7.0-pr-183744389}"
+# Set empty to keep the chart's own broker image.
+MQ_IMAGE_VERSION="${MQ_IMAGE_VERSION-1.7.0-pr-183744389}"
 MQ_IMAGE="$MQ_IMAGE_ACR/dmqtt-pod:$MQ_IMAGE_VERSION"
 # END TEMPORARY DEVELOPMENT IMAGE OVERRIDE CONFIGURATION
 PORT="${MQTT_PORT:-1883}"
@@ -102,32 +104,33 @@ fi
 # BEGIN TEMPORARY DEVELOPMENT IMAGE OVERRIDE
 # Remove this block and the MQ image variables above when a mainstream AIO MQ release includes
 # the enhanced-auth fix. The stable chart can then manage its broker workloads normally.
-log "Switching broker workloads to $MQ_IMAGE..."
-kubectl scale statefulset/aio-broker-operator --replicas=0
-kubectl wait --for=delete pod/aio-broker-operator-0 --timeout=120s
+if [[ -n "$MQ_IMAGE_VERSION" ]]; then
+    log "Switching broker workloads to $MQ_IMAGE..."
+    kubectl scale statefulset/aio-broker-operator --replicas=0
+    kubectl wait --for=delete pod/aio-broker-operator-0 --timeout=120s
 
-# The health manager is also a runtime dependency, so keep it running while removing only its
-# ability to restore generated workloads and its own reconciliation permissions.
-workload_rule="$(kubectl get role aio-broker-health-manager -o jsonpath='{.rules[3].resources[*]}')"
-rbac_rule="$(kubectl get role aio-broker-health-manager -o jsonpath='{.rules[5].resources[*]}')"
-if [[ " $workload_rule " != *" statefulsets "* || " $workload_rule " != *" deployments "* ||
-    " $rbac_rule " != *" roles "* || " $rbac_rule " != *" rolebindings "* ]]; then
-    echo "error: aio-broker-health-manager RBAC no longer matches the 1.6.0 chart" >&2
-    exit 1
-fi
-kubectl patch role aio-broker-health-manager --type=json --patch='[
-  {"op":"replace","path":"/rules/3/verbs","value":["list","get"]},
-  {"op":"remove","path":"/rules/5"}
-]'
-
-while read -r verb resource; do
-    if kubectl auth can-i "$verb" "$resource" \
-        --as=system:serviceaccount:default:aio-broker-health-manager \
-        --namespace=default --quiet; then
-        echo "error: aio-broker-health-manager can still $verb $resource" >&2
+    # The health manager is also a runtime dependency, so keep it running while removing only its
+    # ability to restore generated workloads and its own reconciliation permissions.
+    workload_rule="$(kubectl get role aio-broker-health-manager -o jsonpath='{.rules[3].resources[*]}')"
+    rbac_rule="$(kubectl get role aio-broker-health-manager -o jsonpath='{.rules[5].resources[*]}')"
+    if [[ " $workload_rule " != *" statefulsets "* || " $workload_rule " != *" deployments "* ||
+        " $rbac_rule " != *" roles "* || " $rbac_rule " != *" rolebindings "* ]]; then
+        echo "error: aio-broker-health-manager RBAC no longer matches the 1.6.0 chart" >&2
         exit 1
     fi
-done <<'EOF'
+    kubectl patch role aio-broker-health-manager --type=json --patch='[
+      {"op":"replace","path":"/rules/3/verbs","value":["list","get"]},
+      {"op":"remove","path":"/rules/5"}
+    ]'
+
+    while read -r verb resource; do
+        if kubectl auth can-i "$verb" "$resource" \
+            --as=system:serviceaccount:default:aio-broker-health-manager \
+            --namespace=default --quiet; then
+            echo "error: aio-broker-health-manager can still $verb $resource" >&2
+            exit 1
+        fi
+    done <<'EOF'
 patch statefulsets.apps
 create statefulsets.apps
 delete statefulsets.apps
@@ -135,18 +138,19 @@ patch rolebindings.rbac.authorization.k8s.io
 create rolebindings.rbac.authorization.k8s.io
 EOF
 
-kubectl set image statefulset/aio-broker-backend-1 "broker=$MQ_IMAGE"
-kubectl set image statefulset/aio-broker-frontend "broker=$MQ_IMAGE"
-kubectl rollout status statefulset/aio-broker-backend-1 --timeout=5m
-kubectl rollout status statefulset/aio-broker-frontend --timeout=5m
+    kubectl set image statefulset/aio-broker-backend-1 "broker=$MQ_IMAGE"
+    kubectl set image statefulset/aio-broker-frontend "broker=$MQ_IMAGE"
+    kubectl rollout status statefulset/aio-broker-backend-1 --timeout=5m
+    kubectl rollout status statefulset/aio-broker-frontend --timeout=5m
 
-for statefulset in aio-broker-backend-1 aio-broker-frontend; do
-    image="$(kubectl get statefulset "$statefulset" -o jsonpath='{.spec.template.spec.containers[0].image}')"
-    if [[ "$image" != "$MQ_IMAGE" ]]; then
-        echo "error: $statefulset reverted to $image" >&2
-        exit 1
-    fi
-done
+    for statefulset in aio-broker-backend-1 aio-broker-frontend; do
+        image="$(kubectl get statefulset "$statefulset" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+        if [[ "$image" != "$MQ_IMAGE" ]]; then
+            echo "error: $statefulset reverted to $image" >&2
+            exit 1
+        fi
+    done
+fi
 # END TEMPORARY DEVELOPMENT IMAGE OVERRIDE
 
 # Running only means the CR reconciled; listener readiness can lag behind it.

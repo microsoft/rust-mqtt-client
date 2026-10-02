@@ -3,7 +3,7 @@
 
 //! Capabilities provisioned by live test fixtures.
 
-use super::server::{AIO_MQ, EMQX, HIVEMQ_CE, MOSQUITTO, server_name};
+use super::server::{AIO_MQ, AIO_MQ_1_6, EMQX, HIVEMQ_CE, MOSQUITTO, server_name};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FixtureCapability {
@@ -26,7 +26,9 @@ pub(crate) fn supports_capability(capability: FixtureCapability) -> bool {
             // of the fixtures to do without introducing brittleness.
             matches!(server.as_str(), MOSQUITTO | HIVEMQ_CE)
         }
-        FixtureCapability::EnhancedAuthMethod(EnhancedAuthMethod::K8sSat) => server == AIO_MQ,
+        FixtureCapability::EnhancedAuthMethod(EnhancedAuthMethod::K8sSat) => {
+            matches!(server.as_str(), AIO_MQ | AIO_MQ_1_6)
+        }
         FixtureCapability::MutualTls => server == MOSQUITTO,
         FixtureCapability::WebSocketPathValidation => {
             matches!(server.as_str(), EMQX | HIVEMQ_CE)

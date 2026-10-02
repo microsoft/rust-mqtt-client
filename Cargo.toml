@@ -70,6 +70,10 @@ __fuzzing = []
 # require a running server.
 # NOT part of the public, semver-stable API; do not enable as a consumer.
 __network = []
+# TEMPORARY (remove by 2027-03): accepts a successful CONNACK or AUTH that omits the
+# Authentication Method, as sent by AIO MQ 1.6.x.
+# NOT part of the public, semver-stable API.
+__allow_omitted_auth_method = []
 
 # The live network suite.
 # Declared explicitly because `required-features` only applies to manifest-declared

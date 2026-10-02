@@ -53,7 +53,7 @@ jobs:
     # endpoint, so it can fail for reasons unrelated to us. Letting it go red
     # without failing the workflow keeps it from masking a real regression in
     # another broker; the `notify` job still reports genuine failures.
-    continue-on-error: ${{ matrix.broker == 'aio-mq' }}
+    continue-on-error: ${{ startsWith(matrix.broker, 'aio-mq') }}
 
     strategy:
       fail-fast: false
@@ -64,6 +64,11 @@ jobs:
           - broker: hivemq-ce
           - broker: aio-mq
             kubernetes: true
+          # TEMPORARY (remove by 2027-03 with the feature): stable 1.6.x omits the
+          # Authentication Method, which only `__allow_omitted_auth_method` accepts.
+          - broker: aio-mq-1.6
+            kubernetes: true
+            features: __allow_omitted_auth_method
 
     steps:
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
@@ -106,14 +111,14 @@ jobs:
     - name: Test
       env:
         MQTT_SERVER: ${{ matrix.broker }}
-      run: cargo test --features __network,websockets --test network
+      run: cargo test --features "__network,websockets ${{ matrix.features }}" --test network
 
     - name: Stop fixtures
       if: always()
       run: tests/network/fixtures/down.sh ${{ matrix.broker }}
 
   # Scheduled runs have no PR to turn red and no author watching, so surface
-  # failures by opening (or updating) a tracking issue. The AIO MQ leg is
+  # failures by opening (or updating) a tracking issue. The AIO MQ legs are
   # neutralized by continue-on-error above and won't reach here.
   notify:
     name: Report failure
