@@ -29,6 +29,7 @@ pub(crate) const ENV_MQTT_MTLS_PORT: &str = "MQTT_MTLS_PORT";
 pub(crate) const ENV_MQTT_PORT: &str = "MQTT_PORT";
 pub(crate) const ENV_MQTT_PROXY_HOST: &str = "MQTT_PROXY_HOST";
 pub(crate) const ENV_MQTT_SAT_PORT: &str = "MQTT_SAT_PORT";
+pub(crate) const ENV_MQTT_SCRAM_PORT: &str = "MQTT_SCRAM_PORT";
 pub(crate) const ENV_MQTT_SERVER: &str = "MQTT_SERVER";
 pub(crate) const ENV_MQTT_TLS_PORT: &str = "MQTT_TLS_PORT";
 pub(crate) const ENV_MQTT_WS_PORT: &str = "MQTT_WS_PORT";
@@ -36,6 +37,7 @@ pub(crate) const ENV_MQTT_WSS_PORT: &str = "MQTT_WSS_PORT";
 
 pub(crate) const TCP_PORT: u16 = 1883;
 pub(crate) const SAT_PORT: u16 = 1884;
+pub(crate) const SCRAM_PORT: u16 = 1885;
 pub(crate) const HTTP_PROXY_PORT: u16 = 3128;
 pub(crate) const HTTPS_PROXY_PORT: u16 = 3129;
 pub(crate) const TLS_PORT: u16 = 8883;

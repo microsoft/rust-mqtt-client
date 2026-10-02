@@ -11,10 +11,16 @@ use ms_mqtt_client::client::{
 use ms_mqtt_client::error::{CompletionError, ConnectError};
 use ms_mqtt_client::packet::{Auth, AuthReason, AuthenticationInfo, DisconnectProperties};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
+use openssl::hash::MessageDigest;
+use openssl::pkcs5::pbkdf2_hmac;
+use openssl::pkey::PKey;
+use openssl::sha::sha256;
+use openssl::sign::Signer;
 
 use crate::common::fixture::{EnhancedAuthMethod, FixtureCapability};
 use crate::common::{
-    ENV_MQTT_SAT_PORT, Endpoint, RESPONSE_TIMEOUT, SAT_PORT, credential_path, port_from_env,
+    ENV_MQTT_SAT_PORT, ENV_MQTT_SCRAM_PORT, Endpoint, RESPONSE_TIMEOUT, SAT_PORT, SCRAM_PORT,
+    credential_path, port_from_env,
 };
 
 trait EnhancedAuthExchange {
@@ -83,9 +89,13 @@ where
                     )
                     .await;
             }
-            ConnectEnhancedAuthResult::Success(connection, _, disconnect_handle, reauth_handle) => {
-                // TODO: Pass CONNACK authentication information once ConnAckProperties exposes it.
-                exchange.verify_success(None);
+            ConnectEnhancedAuthResult::Success(
+                connection,
+                connack,
+                disconnect_handle,
+                reauth_handle,
+            ) => {
+                exchange.verify_success(connack.properties.authentication_info.as_ref());
                 return EnhancedAuthConnection {
                     connection,
                     disconnect_handle,
@@ -385,8 +395,200 @@ async fn custom_enhanced_auth_counter_rejects_wrong_response_during_reauth() {
     }
 }
 
-// TODO: Test SCRAM-SHA-256 authentication and re-authentication with EMQX's built-in database
-// once ConnAckProperties exposes authentication information.
+/// EMQX's built-in SCRAM method; the server proves that it knows the password in its final data.
+const SCRAM_SHA_256_METHOD: &str = "SCRAM-SHA-256";
+// Credentials that the EMQX fixture provisions in its built-in database.
+const SCRAM_USERNAME: &str = "network-scram-user";
+const SCRAM_PASSWORD: &str = "network-scram-password";
+
+fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let key = PKey::hmac(key).expect("HMAC key should be valid");
+    Signer::new(MessageDigest::sha256(), &key)
+        .and_then(|mut signer| signer.sign_oneshot_to_vec(data))
+        .expect("HMAC-SHA-256 should succeed")
+}
+
+/// Client side of SCRAM-SHA-256 without channel binding (RFC 5802, RFC 7677).
+struct ScramSha256Exchange {
+    password: &'static str,
+    client_first_bare: String,
+    expected_server_final: Option<String>,
+}
+
+impl ScramSha256Exchange {
+    fn new(password: &'static str) -> Self {
+        Self {
+            password,
+            client_first_bare: String::new(),
+            expected_server_final: None,
+        }
+    }
+}
+
+impl EnhancedAuthExchange for ScramSha256Exchange {
+    fn start(&mut self) -> AuthenticationInfo {
+        let mut nonce = [0; 18];
+        openssl::rand::rand_bytes(&mut nonce).expect("random nonce should be generated");
+        // Base64 contains no commas, so it is a valid SCRAM nonce.
+        let nonce = openssl::base64::encode_block(&nonce);
+        self.client_first_bare = format!("n={SCRAM_USERNAME},r={nonce}");
+        self.expected_server_final = None;
+        AuthenticationInfo {
+            method: SCRAM_SHA_256_METHOD.to_string(),
+            data: Some(Bytes::from(format!("n,,{}", self.client_first_bare))),
+        }
+    }
+
+    fn respond(&mut self, challenge: &Auth) -> Option<Bytes> {
+        assert!(
+            self.expected_server_final.is_none(),
+            "server challenged the SCRAM client-final message"
+        );
+        let server_first = challenge
+            .authentication_info
+            .as_ref()
+            .and_then(|info| info.data.as_deref())
+            .expect("server challenge should contain the SCRAM server-first message");
+        let server_first =
+            std::str::from_utf8(server_first).expect("SCRAM server-first message should be UTF-8");
+        let attribute = |name: &str| {
+            server_first
+                .split(',')
+                .find_map(|attribute| attribute.strip_prefix(name))
+                .unwrap_or_else(|| {
+                    panic!("SCRAM server-first message lacks {name}: {server_first}")
+                })
+        };
+        let nonce = attribute("r=");
+        let (_, client_nonce) = self
+            .client_first_bare
+            .split_once(",r=")
+            .expect("SCRAM client-first message should contain a nonce");
+        assert!(
+            nonce.starts_with(client_nonce) && nonce.len() > client_nonce.len(),
+            "server nonce must extend the client nonce"
+        );
+        let salt = openssl::base64::decode_block(attribute("s="))
+            .expect("SCRAM salt should be base64-encoded");
+        let iterations = attribute("i=")
+            .parse()
+            .expect("SCRAM iteration count should be an integer");
+
+        let mut salted_password = [0; 32];
+        pbkdf2_hmac(
+            self.password.as_bytes(),
+            &salt,
+            iterations,
+            MessageDigest::sha256(),
+            &mut salted_password,
+        )
+        .expect("PBKDF2-HMAC-SHA-256 should succeed");
+        let client_key = hmac_sha256(&salted_password, b"Client Key");
+        let stored_key = sha256(&client_key);
+        // "biws" is the base64 encoding of the "n,," GS2 header.
+        let client_final_without_proof = format!("c=biws,r={nonce}");
+        let auth_message = format!(
+            "{},{server_first},{client_final_without_proof}",
+            self.client_first_bare
+        );
+        let client_signature = hmac_sha256(&stored_key, auth_message.as_bytes());
+        let client_proof: Vec<u8> = client_key
+            .iter()
+            .zip(&client_signature)
+            .map(|(key, signature)| key ^ signature)
+            .collect();
+        let server_key = hmac_sha256(&salted_password, b"Server Key");
+        let server_signature = hmac_sha256(&server_key, auth_message.as_bytes());
+        self.expected_server_final = Some(format!(
+            "v={}",
+            openssl::base64::encode_block(&server_signature)
+        ));
+
+        Some(Bytes::from(format!(
+            "{client_final_without_proof},p={}",
+            openssl::base64::encode_block(&client_proof)
+        )))
+    }
+
+    fn verify_success(&mut self, server_info: Option<&AuthenticationInfo>) {
+        let expected_server_final = self
+            .expected_server_final
+            .as_deref()
+            .expect("server accepted before receiving the SCRAM client proof");
+        let server_final = server_info
+            .and_then(|info| info.data.as_deref())
+            .expect("server success should contain the SCRAM server-final message");
+        assert_eq!(
+            String::from_utf8_lossy(server_final),
+            expected_server_final,
+            "SCRAM server signature did not verify"
+        );
+    }
+
+    fn verify_rejection(&mut self) {
+        assert!(
+            self.expected_server_final.is_some(),
+            "server rejected before receiving the SCRAM client proof"
+        );
+    }
+}
+
+fn scram_endpoint() -> Endpoint {
+    Endpoint {
+        port: port_from_env(ENV_MQTT_SCRAM_PORT, SCRAM_PORT),
+        ..Endpoint::from_env()
+    }
+}
+
+/// Verifies SCRAM-SHA-256 authentication and re-authentication, validating the server signature
+/// from the successful CONNACK and from the final re-authentication AUTH.
+#[tokio::test]
+async fn scram_sha_256_enhanced_auth() {
+    crate::require_fixture_capability!(FixtureCapability::EnhancedAuthMethod(
+        EnhancedAuthMethod::ScramSha256
+    ));
+    crate::test_timeout! {
+        exercise_enhanced_auth(
+            "scram_sha_256_enhanced_auth",
+            scram_endpoint(),
+            || ScramSha256Exchange::new(SCRAM_PASSWORD),
+        )
+        .await;
+    }
+}
+
+/// Verifies that SCRAM-SHA-256 authentication rejects an incorrect password.
+#[tokio::test]
+async fn scram_sha_256_enhanced_auth_rejects_wrong_password_during_connect() {
+    crate::require_fixture_capability!(FixtureCapability::EnhancedAuthMethod(
+        EnhancedAuthMethod::ScramSha256
+    ));
+    crate::test_timeout! {
+        exercise_rejected_enhanced_auth(
+            "scram_sha_256_enhanced_auth_rejects_wrong_password_during_connect",
+            scram_endpoint(),
+            ScramSha256Exchange::new("wrong-password"),
+        )
+        .await;
+    }
+}
+
+/// Verifies that SCRAM-SHA-256 re-authentication rejects an incorrect password.
+#[tokio::test]
+async fn scram_sha_256_enhanced_auth_rejects_wrong_password_during_reauth() {
+    crate::require_fixture_capability!(FixtureCapability::EnhancedAuthMethod(
+        EnhancedAuthMethod::ScramSha256
+    ));
+    crate::test_timeout! {
+        exercise_rejected_reauth(
+            "scram_sha_256_enhanced_auth_rejects_wrong_password_during_reauth",
+            scram_endpoint(),
+            ScramSha256Exchange::new(SCRAM_PASSWORD),
+            ScramSha256Exchange::new("wrong-password"),
+        )
+        .await;
+    }
+}
 
 /// AIO MQ's method for Kubernetes service account tokens; the token is the authentication data.
 const K8S_SAT_METHOD: &str = "K8S-SAT";
