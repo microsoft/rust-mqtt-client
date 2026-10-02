@@ -13,10 +13,13 @@ pub(crate) mod server;
 use std::time::Duration;
 
 use ms_mqtt_client::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResult, DisconnectHandle, DisconnectedEvent,
-    KeepAliveConfig, Receiver, new_client,
+    Client, ClientOptions, ConnectHandle, ConnectResult, Connection, DisconnectHandle,
+    DisconnectedEvent, KeepAliveConfig, Receiver, new_client,
 };
-use ms_mqtt_client::packet::{ConnAck, ConnectProperties, DisconnectProperties, Will};
+use ms_mqtt_client::error::ConnectError;
+use ms_mqtt_client::packet::{
+    ConnAck, ConnAckReason, ConnectProperties, DisconnectProperties, Will,
+};
 use ms_mqtt_client::transport::{
     ConnectionTransportConfig, ConnectionTransportType, Proxy, TlsConfig,
 };
@@ -29,6 +32,7 @@ pub(crate) const ENV_MQTT_MTLS_PORT: &str = "MQTT_MTLS_PORT";
 pub(crate) const ENV_MQTT_PORT: &str = "MQTT_PORT";
 pub(crate) const ENV_MQTT_PROXY_HOST: &str = "MQTT_PROXY_HOST";
 pub(crate) const ENV_MQTT_SAT_PORT: &str = "MQTT_SAT_PORT";
+pub(crate) const ENV_MQTT_SCRAM_PORT: &str = "MQTT_SCRAM_PORT";
 pub(crate) const ENV_MQTT_SERVER: &str = "MQTT_SERVER";
 pub(crate) const ENV_MQTT_TLS_PORT: &str = "MQTT_TLS_PORT";
 pub(crate) const ENV_MQTT_WS_PORT: &str = "MQTT_WS_PORT";
@@ -36,6 +40,7 @@ pub(crate) const ENV_MQTT_WSS_PORT: &str = "MQTT_WSS_PORT";
 
 pub(crate) const TCP_PORT: u16 = 1883;
 pub(crate) const SAT_PORT: u16 = 1884;
+pub(crate) const SCRAM_PORT: u16 = 1885;
 pub(crate) const HTTP_PROXY_PORT: u16 = 3128;
 pub(crate) const HTTPS_PROXY_PORT: u16 = 3129;
 pub(crate) const TLS_PORT: u16 = 8883;
@@ -133,6 +138,7 @@ pub(crate) struct TestConnection {
     runner: AbortOnDropTask<(ConnectHandle, DisconnectedEvent)>,
 }
 
+#[derive(Clone)]
 pub(crate) struct SessionOptions {
     pub(crate) clean_start: bool,
     pub(crate) properties: ConnectProperties,
@@ -175,6 +181,25 @@ impl<T> Drop for AbortOnDropTask<T> {
 }
 
 impl TestConnection {
+    fn new(
+        client: Client,
+        receiver: Receiver,
+        connection: Connection,
+        connack: ConnAck,
+        disconnect_handle: DisconnectHandle,
+    ) -> Self {
+        let runner = AbortOnDropTask::new(tokio::spawn(async move {
+            connection.run_until_disconnect().await
+        }));
+        Self {
+            client,
+            receiver,
+            connack,
+            disconnect_handle,
+            runner,
+        }
+    }
+
     pub(crate) async fn disconnect(self) -> DisconnectedEvent {
         let (_, _, _, event) = self.disconnect_for_reconnect().await;
         event
@@ -319,22 +344,21 @@ pub(crate) async fn reconnect_with_transport(
     client: Client,
     connect_handle: ConnectHandle,
     receiver: Receiver,
-    transport_type: ConnectionTransportType,
-    proxy: Option<Proxy>,
+    transport_type: impl Fn() -> ConnectionTransportType,
+    proxy: impl Fn() -> Option<Proxy>,
     keep_alive: KeepAliveConfig,
 ) -> TestConnection {
-    establish_connection(
-        client,
-        connect_handle,
-        receiver,
-        transport_type,
-        TestConnectionOptions {
-            keep_alive,
-            will: None,
-            session: SessionOptions::default(),
-            proxy,
-        },
-    )
+    reestablish_connection(client, connect_handle, receiver, || {
+        (
+            transport_type(),
+            TestConnectionOptions {
+                keep_alive,
+                will: None,
+                session: SessionOptions::default(),
+                proxy: proxy(),
+            },
+        )
+    })
     .await
 }
 
@@ -345,22 +369,60 @@ pub(crate) async fn reconnect_tcp_with_session(
     endpoint: &Endpoint,
     session: SessionOptions,
 ) -> TestConnection {
-    establish_connection(
-        client,
-        connect_handle,
-        receiver,
-        ConnectionTransportType::Tcp {
-            hostname: endpoint.hostname.clone(),
-            port: endpoint.port,
-        },
-        TestConnectionOptions {
-            keep_alive: KeepAliveConfig::Infinite,
-            will: None,
-            session,
-            proxy: None,
-        },
-    )
+    reestablish_connection(client, connect_handle, receiver, || {
+        (
+            ConnectionTransportType::Tcp {
+                hostname: endpoint.hostname.clone(),
+                port: endpoint.port,
+            },
+            TestConnectionOptions {
+                keep_alive: KeepAliveConfig::Infinite,
+                will: None,
+                session: session.clone(),
+                proxy: None,
+            },
+        )
+    })
     .await
+}
+
+/// Reconnects with the client identifier of a connection that just closed.
+///
+/// EMQX rejects that identifier with Server Busy until it finishes cleaning up the previous
+/// connection, so retry briefly before treating the rejection as a failure.
+async fn reestablish_connection(
+    client: Client,
+    mut connect_handle: ConnectHandle,
+    receiver: Receiver,
+    connect_options: impl Fn() -> (ConnectionTransportType, TestConnectionOptions),
+) -> TestConnection {
+    const SERVER_BUSY_RETRY_DELAY: Duration = Duration::from_millis(100);
+    const SERVER_BUSY_ATTEMPTS: u32 = 50;
+
+    let mut attempt = 1;
+    loop {
+        let (transport_type, options) = connect_options();
+        match try_establish_connection(connect_handle, transport_type, options).await {
+            Ok((connection, connack, disconnect_handle)) => {
+                return TestConnection::new(
+                    client,
+                    receiver,
+                    connection,
+                    connack,
+                    disconnect_handle,
+                );
+            }
+            Err((handle, ConnectError::Rejected(connack)))
+                if connack.reason == ConnAckReason::ServerBusy
+                    && attempt < SERVER_BUSY_ATTEMPTS =>
+            {
+                connect_handle = handle;
+                attempt += 1;
+                tokio::time::sleep(SERVER_BUSY_RETRY_DELAY).await;
+            }
+            Err((_, err)) => panic!("MQTT CONNECT failed: {err}"),
+        }
+    }
 }
 
 async fn establish_connection(
@@ -370,42 +432,46 @@ async fn establish_connection(
     transport_type: ConnectionTransportType,
     options: TestConnectionOptions,
 ) -> TestConnection {
+    match try_establish_connection(connect_handle, transport_type, options).await {
+        Ok((connection, connack, disconnect_handle)) => {
+            TestConnection::new(client, receiver, connection, connack, disconnect_handle)
+        }
+        Err((_, err)) => panic!("MQTT CONNECT failed: {err}"),
+    }
+}
+
+async fn try_establish_connection(
+    connect_handle: ConnectHandle,
+    transport_type: ConnectionTransportType,
+    options: TestConnectionOptions,
+) -> Result<(Connection, ConnAck, DisconnectHandle), (ConnectHandle, ConnectError)> {
     let TestConnectionOptions {
         keep_alive,
         will,
         session,
         proxy,
     } = options;
-    match connect_handle
-        .connect(
-            ConnectionTransportConfig {
-                transport_type,
-                timeout: Some(RESPONSE_TIMEOUT),
-                proxy,
-                tcp_nodelay: false,
-            },
-            session.clean_start,
-            keep_alive,
-            will,
-            None,
-            None,
-            session.properties,
-            Some(RESPONSE_TIMEOUT),
-        )
-        .await
+    // Boxed to keep callers' futures under clippy's `large_futures` threshold.
+    match Box::pin(connect_handle.connect(
+        ConnectionTransportConfig {
+            transport_type,
+            timeout: Some(RESPONSE_TIMEOUT),
+            proxy,
+            tcp_nodelay: false,
+        },
+        session.clean_start,
+        keep_alive,
+        will,
+        None,
+        None,
+        session.properties,
+        Some(RESPONSE_TIMEOUT),
+    ))
+    .await
     {
         ConnectResult::Success(connection, connack, disconnect_handle) => {
-            let runner = AbortOnDropTask::new(tokio::spawn(async move {
-                connection.run_until_disconnect().await
-            }));
-            TestConnection {
-                client,
-                receiver,
-                connack,
-                disconnect_handle,
-                runner,
-            }
+            Ok((connection, connack, disconnect_handle))
         }
-        ConnectResult::Failure(_, err) => panic!("MQTT CONNECT failed: {err}"),
+        ConnectResult::Failure(connect_handle, err) => Err((connect_handle, err)),
     }
 }
