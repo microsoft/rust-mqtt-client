@@ -16,7 +16,7 @@ use ms_mqtt_client::mqtt_proto::{
     self, AuthenticateReasonCode, Authentication, ConnectOtherProperties, ConnectReasonCode,
     ConnectionRefusedReason, Packet,
 };
-use ms_mqtt_client::packet::{Auth, AuthReason, AuthenticationInfo, ConnAck};
+use ms_mqtt_client::packet::{Auth, AuthReason, AuthenticationInfo, ConnAck, ConnAckProperties};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -155,7 +155,7 @@ async fn auth_reauth() {
             other_properties: mqtt_proto::ConnAckOtherProperties {
                 authentication: Some(Authentication {
                     method: "some method".into(),
-                    data: None,
+                    data: Some(b"some server data 3".into()),
                 }),
                 ..Default::default()
             },
@@ -185,7 +185,16 @@ async fn auth_reauth() {
             ..
         }) if method == "some method" && data == b"some client data 3"[..]
     );
-    assert_matches!(connack, ConnAck { .. });
+    assert_matches!(connack, ConnAck {
+        properties: ConnAckProperties {
+            authentication_info: Some(AuthenticationInfo {
+                method,
+                data: Some(data),
+            }),
+            ..
+        },
+        ..
+    } if method == "some method" && data == b"some server data 3"[..]);
 
     let mut connection = pin!(connection.run_until_disconnect());
 
