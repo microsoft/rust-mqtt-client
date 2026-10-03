@@ -28,7 +28,7 @@ test:
 # plugs in the same way.
 # Deliberately not part of `test`: these need a server running.
 BROKER ?= mosquitto
-# Extra cargo features for the network suite, e.g. __allow_omitted_auth_method for aio-mq-1.6.
+# Extra cargo features for the network suite, e.g. __allow_omitted_auth_method for aio-mq-1.6.1.
 FEATURES ?=
 
 .PHONY: network-test

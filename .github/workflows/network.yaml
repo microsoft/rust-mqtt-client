@@ -64,9 +64,9 @@ jobs:
           - broker: hivemq-ce
           - broker: aio-mq
             kubernetes: true
-          # TEMPORARY (remove by 2027-03 with the feature): stable 1.6.x omits the
+          # TEMPORARY (remove by 2027-03 with the feature): AIO MQ before 1.6.2 omits the
           # Authentication Method, which only `__allow_omitted_auth_method` accepts.
-          - broker: aio-mq-1.6
+          - broker: aio-mq-1.6.1
             kubernetes: true
             features: __allow_omitted_auth_method
 
