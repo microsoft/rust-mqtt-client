@@ -5,8 +5,7 @@
 #   1. Gate vs. scheduled. The PR gate already tests against Mosquitto (the
 #      `network-mosquitto` job in pr.yaml), which is what proves a change didn't break
 #      talking to a real server. This workflow adds the BREADTH the gate can't hold
-#      stable: other implementations, and a broker pulled from a build registry that
-#      can rotate independently of our code. A red run here often means the outside
+#      stable: other implementations. A red run here often means the outside
 #      world moved, so -- like `nightly.yaml` -- it must not block a PR, and a
 #      `notify` job files the failure since no author is watching.
 #
@@ -49,10 +48,8 @@ jobs:
     # Generous because the AIO MQ leg stands up a k3d cluster and Helm-installs an
     # operator before a single test runs; Mosquitto starts in seconds.
     timeout-minutes: 25
-    # AIO MQ pulls its chart from a build registry rather than a distribution
-    # endpoint, so it can fail for reasons unrelated to us. Letting it go red
-    # without failing the workflow keeps it from masking a real regression in
-    # another broker; the `notify` job still reports genuine failures.
+    # Letting AIO MQ go red without failing the workflow keeps it from masking a
+    # real regression in another broker; the `notify` job still reports genuine failures.
     continue-on-error: ${{ startsWith(matrix.broker, 'aio-mq') }}
 
     strategy:

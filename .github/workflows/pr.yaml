@@ -200,8 +200,8 @@ jobs:
   # stable image, so a failure here means the PR broke the client -- the gate's
   # bar of being actionable by the author. The rest of the server matrix
   # (EMQX, HiveMQ, AIO MQ) runs on a schedule in `network.yaml`, because
-  # cross-implementation differences and a build-registry dependency can go red
-  # for reasons that have nothing to do with the PR.
+  # cross-implementation differences can go red for reasons that have nothing to
+  # do with the PR.
   network-mosquitto:
     name: Network (mosquitto)
     runs-on: 'ubuntu-24.04'
