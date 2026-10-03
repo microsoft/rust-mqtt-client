@@ -16,6 +16,8 @@ pub(crate) const MOSQUITTO: &str = "mosquitto";
 pub(crate) const EMQX: &str = "emqx";
 pub(crate) const HIVEMQ_CE: &str = "hivemq-ce";
 pub(crate) const AIO_MQ: &str = "aio-mq";
+/// TEMPORARY (remove by 2027-03 with the `__allow_omitted_auth_method` feature).
+pub(crate) const AIO_MQ_1_6_1: &str = "aio-mq-1.6.1";
 
 /// An MQTT server behavior that some servers don't implement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,10 +49,16 @@ impl ServerFeature {
 
 /// Features each server fixture lacks. Servers absent from this list are assumed to support
 /// everything.
-const UNSUPPORTED: &[(&str, &[ServerFeature])] = &[(
-    AIO_MQ,
-    &[ServerFeature::Qos2, ServerFeature::SubscriptionIdentifiers],
-)];
+const UNSUPPORTED: &[(&str, &[ServerFeature])] = &[
+    (
+        AIO_MQ,
+        &[ServerFeature::Qos2, ServerFeature::SubscriptionIdentifiers],
+    ),
+    (
+        AIO_MQ_1_6_1,
+        &[ServerFeature::Qos2, ServerFeature::SubscriptionIdentifiers],
+    ),
+];
 
 /// The server fixture under test, from `MQTT_SERVER` (set by `make network-test`).
 pub(crate) fn server_name() -> String {

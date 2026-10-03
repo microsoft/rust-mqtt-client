@@ -11,6 +11,8 @@ clean:
 .PHONY: test
 test:
 	cargo test --lib
+# TEMPORARY, remove with the feature. Lib-only: the strict integration tests reject what it allows.
+	cargo test --lib --features __allow_omitted_auth_method
 # `--tests` rather than `--test '*'`: the glob counts as explicit target selection,
 # so Cargo hard-errors on a target whose `required-features` are unmet (the live
 # network suites). Bulk selection skips those instead.
@@ -26,13 +28,15 @@ test:
 # plugs in the same way.
 # Deliberately not part of `test`: these need a server running.
 BROKER ?= mosquitto
+# Extra cargo features for the network suite, e.g. __allow_omitted_auth_method for aio-mq-1.6.1.
+FEATURES ?=
 
 .PHONY: network-test
 network-test:
 	tests/network/fixtures/up.sh $(BROKER)
 # Teardown shares one shell with the test run so it happens even on failure.
 	set -u; \
-	MQTT_SERVER=$(BROKER) cargo test --features __network,websockets --test network; \
+	MQTT_SERVER=$(BROKER) cargo test --features "__network,websockets $(FEATURES)" --test network; \
 	status=$$?; \
 	tests/network/fixtures/down.sh $(BROKER); \
 	exit $$status
