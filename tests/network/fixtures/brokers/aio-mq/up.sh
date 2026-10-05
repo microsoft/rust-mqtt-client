@@ -7,7 +7,7 @@
 #
 # The chart supplies the operator and CRDs; the broker itself comes from broker.yaml.
 #
-# AIO MQ deployment workaround (found on 1.6.0):
+# AIO MQ deployment workaround (still needed on 1.6.2):
 #
 # Reusing one TLS Secret for MQTT/TLS and WSS makes the operator render duplicate volume
 # mounts at the same path. Kubernetes rejects the frontend StatefulSet, so use two Secret names

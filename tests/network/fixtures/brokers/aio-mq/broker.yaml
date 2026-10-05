@@ -49,7 +49,7 @@ spec:
       tls:
         mode: Manual
         manual:
-          # AIO MQ 1.6.0 creates duplicate volume mounts when two ports share a Secret.
+          # AIO MQ 1.6.2 creates duplicate volume mounts when two ports share a Secret.
           secretRef: network-server-wss-tls
     - port: 1884
       protocol: Mqtt
