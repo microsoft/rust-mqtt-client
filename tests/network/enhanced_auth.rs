@@ -531,9 +531,10 @@ impl EnhancedAuthExchange for ScramSha256Exchange {
         let server_final = server_info
             .and_then(|info| info.data.as_deref())
             .expect("server success should contain the SCRAM server-final message");
+        let server_final =
+            std::str::from_utf8(server_final).expect("SCRAM server-final message should be UTF-8");
         assert_eq!(
-            String::from_utf8_lossy(server_final),
-            expected_server_final,
+            server_final, expected_server_final,
             "SCRAM server signature did not verify"
         );
     }
