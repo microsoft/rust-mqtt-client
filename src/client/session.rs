@@ -488,17 +488,16 @@ where
         // MQTT-4.12.0-5 requires a matching method only on successful enhanced-auth CONNACKs.
         let is_rejected_enhanced_auth = client_auth_method.is_some()
             && matches!(connack.reason_code, ConnectReasonCode::Refused(_));
-        if !is_rejected_enhanced_auth
+        let is_allowed_omission = cfg!(feature = "__allow_omitted_auth_method")
+            && client_auth_method.is_some()
+            && matches!(connack.reason_code, ConnectReasonCode::Success { .. })
+            && server_authentication.is_none();
+        if is_allowed_omission {
+            log::warn!("server omitted the Authentication Method from a successful CONNACK");
+        } else if !is_rejected_enhanced_auth
             && !authentication_method_matches(server_authentication, client_auth_method)
         {
-            if cfg!(feature = "__allow_omitted_auth_method")
-                && client_auth_method.is_some()
-                && server_authentication.is_none()
-            {
-                log::warn!("server omitted the Authentication Method from a successful CONNACK");
-            } else {
-                return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
-            }
+            return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
         }
 
         if let ConnectReasonCode::Success { session_present } = connack.reason_code {
@@ -626,15 +625,16 @@ where
             return Err(ProtocolErrorRepr::UnexpectedPacket)?;
         };
 
-        if !authentication_method_matches(auth.authentication.as_ref(), Some(method.as_ref())) {
-            if cfg!(feature = "__allow_omitted_auth_method")
-                && auth.authentication.is_none()
-                && matches!(auth.reason_code, AuthenticateReasonCode::Success)
-            {
-                log::warn!("server omitted the Authentication Method from AUTH Success");
-            } else {
-                return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
-            }
+        let is_allowed_omission = cfg!(feature = "__allow_omitted_auth_method")
+            && matches!(auth.reason_code, AuthenticateReasonCode::Success)
+            && auth.authentication.is_none();
+        if is_allowed_omission {
+            log::warn!("server omitted the Authentication Method from AUTH Success");
+        } else if !authentication_method_matches(
+            auth.authentication.as_ref(),
+            Some(method.as_ref()),
+        ) {
+            return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
         }
 
         match auth.reason_code {
