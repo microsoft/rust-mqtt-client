@@ -5,8 +5,7 @@
 #   1. Gate vs. scheduled. The PR gate already tests against Mosquitto (the
 #      `network-mosquitto` job in pr.yaml), which is what proves a change didn't break
 #      talking to a real server. This workflow adds the BREADTH the gate can't hold
-#      stable: other implementations, and a broker pulled from a build registry that
-#      can rotate independently of our code. A red run here often means the outside
+#      stable: other implementations. A red run here often means the outside
 #      world moved, so -- like `nightly.yaml` -- it must not block a PR, and a
 #      `notify` job files the failure since no author is watching.
 #
@@ -49,11 +48,9 @@ jobs:
     # Generous because the AIO MQ leg stands up a k3d cluster and Helm-installs an
     # operator before a single test runs; Mosquitto starts in seconds.
     timeout-minutes: 25
-    # AIO MQ pulls its chart from a build registry rather than a distribution
-    # endpoint, so it can fail for reasons unrelated to us. Letting it go red
-    # without failing the workflow keeps it from masking a real regression in
-    # another broker; the `notify` job still reports genuine failures.
-    continue-on-error: ${{ matrix.broker == 'aio-mq' }}
+    # Letting AIO MQ go red without failing the workflow keeps it from masking a
+    # real regression in another broker; the `notify` job still reports genuine failures.
+    continue-on-error: ${{ startsWith(matrix.broker, 'aio-mq') }}
 
     strategy:
       fail-fast: false
@@ -64,6 +61,11 @@ jobs:
           - broker: hivemq-ce
           - broker: aio-mq
             kubernetes: true
+          # TEMPORARY (remove by 2027-03 with the feature): AIO MQ before 1.6.2 omits the
+          # Authentication Method, which only `__allow_omitted_auth_method` accepts.
+          - broker: aio-mq-1.6.1
+            kubernetes: true
+            features: __allow_omitted_auth_method
 
     steps:
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
@@ -106,14 +108,14 @@ jobs:
     - name: Test
       env:
         MQTT_SERVER: ${{ matrix.broker }}
-      run: cargo test --features __network,websockets --test network
+      run: cargo test --features "__network,websockets ${{ matrix.features }}" --test network
 
     - name: Stop fixtures
       if: always()
       run: tests/network/fixtures/down.sh ${{ matrix.broker }}
 
   # Scheduled runs have no PR to turn red and no author watching, so surface
-  # failures by opening (or updating) a tracking issue. The AIO MQ leg is
+  # failures by opening (or updating) a tracking issue. The AIO MQ legs are
   # neutralized by continue-on-error above and won't reach here.
   notify:
     name: Report failure

@@ -488,7 +488,13 @@ where
         // MQTT-4.12.0-5 requires a matching method only on successful enhanced-auth CONNACKs.
         let is_rejected_enhanced_auth = client_auth_method.is_some()
             && matches!(connack.reason_code, ConnectReasonCode::Refused(_));
-        if !is_rejected_enhanced_auth
+        let is_allowed_omission = cfg!(feature = "__allow_omitted_auth_method")
+            && client_auth_method.is_some()
+            && matches!(connack.reason_code, ConnectReasonCode::Success { .. })
+            && server_authentication.is_none();
+        if is_allowed_omission {
+            log::warn!("server omitted the Authentication Method from a successful CONNACK");
+        } else if !is_rejected_enhanced_auth
             && !authentication_method_matches(server_authentication, client_auth_method)
         {
             return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
@@ -619,7 +625,15 @@ where
             return Err(ProtocolErrorRepr::UnexpectedPacket)?;
         };
 
-        if !authentication_method_matches(auth.authentication.as_ref(), Some(method.as_ref())) {
+        let is_allowed_omission = cfg!(feature = "__allow_omitted_auth_method")
+            && matches!(auth.reason_code, AuthenticateReasonCode::Success)
+            && auth.authentication.is_none();
+        if is_allowed_omission {
+            log::warn!("server omitted the Authentication Method from AUTH Success");
+        } else if !authentication_method_matches(
+            auth.authentication.as_ref(),
+            Some(method.as_ref()),
+        ) {
             return Err(ProtocolErrorRepr::AuthenticationMethodMismatch)?;
         }
 
@@ -1052,8 +1066,12 @@ mod tests {
     use tokio::sync::mpsc::{channel, unbounded_channel};
 
     use super::{OutgoingPacketRequest, Session};
+    #[cfg(feature = "__allow_omitted_auth_method")]
+    use crate::client::buffered::ReauthResult;
     use crate::client::channel_data::{AcknowledgementRequest, PingRequest};
     use crate::client::token::completion::{CompletionError, buffered::completion_pair};
+    #[cfg(feature = "__allow_omitted_auth_method")]
+    use crate::mqtt_proto::{Auth, AuthenticateReasonCode};
     use crate::mqtt_proto::{
         Authentication, ConnAck, ConnAckOtherProperties, ConnectReasonCode, KeepAlive, Packet,
         PacketIdentifier, PingReq, PubComp, PubCompReasonCode,
@@ -1266,5 +1284,108 @@ mod tests {
         assert_eq!(session.inflight.packets_to_replay.len(), 1);
         assert_eq!(session.connection_epoch, 0);
         assert!(!session.is_connected());
+    }
+
+    #[cfg(feature = "__allow_omitted_auth_method")]
+    #[test]
+    fn omitted_auth_method_tolerated_on_successful_connack() {
+        let (_sub_tx, sub_rx) = channel(1);
+        let (_publish_qos0_tx, publish_qos0_rx) = channel(1);
+        let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
+        let (ack_tx, ack_rx) = unbounded_channel();
+        let (auth_tx, auth_rx) = channel(1);
+        let (_ping_tx, ping_rx) = channel(1);
+        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let mut session = Session::new(
+            sub_rx,
+            publish_qos0_rx,
+            publish_qos12_rx,
+            ack_rx,
+            auth_rx,
+            ping_rx,
+            incoming_publish_tx,
+            ack_tx,
+            auth_tx,
+            PacketIdentifier::new(u16::MAX).unwrap(),
+            BytesMut::new(),
+        );
+        let mismatched_method = ConnAck {
+            reason_code: ConnectReasonCode::Success {
+                session_present: false,
+            },
+            other_properties: ConnAckOtherProperties {
+                authentication: Some(Authentication {
+                    method: "other method".into(),
+                    data: None,
+                }),
+                ..Default::default()
+            },
+        };
+        let omitted_method = ConnAck {
+            reason_code: ConnectReasonCode::Success {
+                session_present: false,
+            },
+            other_properties: Default::default(),
+        };
+
+        assert!(
+            session
+                .incoming_connack(
+                    mismatched_method,
+                    KeepAlive::Infinite,
+                    Some("expected method")
+                )
+                .is_err()
+        );
+        session
+            .incoming_connack(omitted_method, KeepAlive::Infinite, Some("expected method"))
+            .unwrap();
+        assert!(session.is_connected());
+    }
+
+    #[cfg(feature = "__allow_omitted_auth_method")]
+    #[test]
+    fn omitted_auth_method_tolerated_on_reauth_success() {
+        let (_sub_tx, sub_rx) = channel(1);
+        let (_publish_qos0_tx, publish_qos0_rx) = channel(1);
+        let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
+        let (ack_tx, ack_rx) = unbounded_channel();
+        let (auth_tx, auth_rx) = channel(1);
+        let (_ping_tx, ping_rx) = channel(1);
+        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let mut session = Session::new(
+            sub_rx,
+            publish_qos0_rx,
+            publish_qos12_rx,
+            ack_rx,
+            auth_rx,
+            ping_rx,
+            incoming_publish_tx,
+            ack_tx,
+            auth_tx,
+            PacketIdentifier::new(u16::MAX).unwrap(),
+            BytesMut::new(),
+        );
+        let (notifier, ct) = completion_pair();
+        session.inflight.auth = Some(("expected method".into(), notifier));
+        let continue_without_method = Auth {
+            reason_code: AuthenticateReasonCode::ContinueAuthentication,
+            authentication: None,
+            reason_string: None,
+            user_properties: Default::default(),
+        };
+        let success_without_method = Auth {
+            reason_code: AuthenticateReasonCode::Success,
+            authentication: None,
+            reason_string: None,
+            user_properties: Default::default(),
+        };
+
+        assert!(session.incoming_auth(continue_without_method).is_err());
+        session.incoming_auth(success_without_method).unwrap();
+        assert!(matches!(
+            ct.now_or_never(),
+            Some(Ok(ReauthResult::Success(_)))
+        ));
     }
 }
