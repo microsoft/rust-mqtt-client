@@ -397,9 +397,22 @@ async fn custom_enhanced_auth_counter_rejects_wrong_response_during_reauth() {
 
 /// EMQX's built-in SCRAM method; the server proves that it knows the password in its final data.
 const SCRAM_SHA_256_METHOD: &str = "SCRAM-SHA-256";
-// Credentials that the EMQX fixture provisions in its built-in database.
+/// The user that the EMQX fixture provisions in its built-in database.
 const SCRAM_USERNAME: &str = "network-scram-user";
-const SCRAM_PASSWORD: &str = "network-scram-password";
+
+/// Reads the password that the EMQX fixture generates for [`SCRAM_USERNAME`].
+fn scram_password() -> String {
+    let path = credential_path("scram.password");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read SCRAM password {path}: {err}"))
+}
+
+/// Generates a password that the EMQX fixture does not accept for [`SCRAM_USERNAME`].
+fn wrong_scram_password() -> String {
+    let mut password = [0; 16];
+    openssl::rand::rand_bytes(&mut password).expect("random password should be generated");
+    openssl::base64::encode_block(&password)
+}
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     let key = PKey::hmac(key).expect("HMAC key should be valid");
@@ -410,13 +423,13 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 
 /// Client side of SCRAM-SHA-256 without channel binding (RFC 5802, RFC 7677).
 struct ScramSha256Exchange {
-    password: &'static str,
+    password: String,
     client_first_bare: String,
     expected_server_final: Option<String>,
 }
 
 impl ScramSha256Exchange {
-    fn new(password: &'static str) -> Self {
+    fn new(password: String) -> Self {
         Self {
             password,
             client_first_bare: String::new(),
@@ -548,10 +561,11 @@ async fn scram_sha_256_enhanced_auth() {
         EnhancedAuthMethod::ScramSha256
     ));
     crate::test_timeout! {
+        let password = scram_password();
         exercise_enhanced_auth(
             "scram_sha_256_enhanced_auth",
             scram_endpoint(),
-            || ScramSha256Exchange::new(SCRAM_PASSWORD),
+            || ScramSha256Exchange::new(password.clone()),
         )
         .await;
     }
@@ -567,7 +581,7 @@ async fn scram_sha_256_enhanced_auth_rejects_wrong_password_during_connect() {
         exercise_rejected_enhanced_auth(
             "scram_sha_256_enhanced_auth_rejects_wrong_password_during_connect",
             scram_endpoint(),
-            ScramSha256Exchange::new("wrong-password"),
+            ScramSha256Exchange::new(wrong_scram_password()),
         )
         .await;
     }
@@ -583,8 +597,8 @@ async fn scram_sha_256_enhanced_auth_rejects_wrong_password_during_reauth() {
         exercise_rejected_reauth(
             "scram_sha_256_enhanced_auth_rejects_wrong_password_during_reauth",
             scram_endpoint(),
-            ScramSha256Exchange::new(SCRAM_PASSWORD),
-            ScramSha256Exchange::new("wrong-password"),
+            ScramSha256Exchange::new(scram_password()),
+            ScramSha256Exchange::new(wrong_scram_password()),
         )
         .await;
     }
