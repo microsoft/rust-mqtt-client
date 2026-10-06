@@ -1,0 +1,150 @@
+# Manual ESRP release pipeline for crates.io.
+#
+# Create the Azure DevOps pipeline through StartRight and point it at this file.
+# Before enabling publication:
+# - Replace REPLACE_WITH_APPROVED_1ES_HOSTED_POOL with a 1ES Hosted Pool that
+#   the owning ADO project is authorized to use.
+# - Configure toolchainFeed and cratesIoFeedOverride for RustInstaller@1.
+# - Define ESRP_SERVICE_CONNECTION, ESRP_KEYVAULT_NAME, ESRP_SIGN_CERT_NAME,
+#   ESRP_CLIENT_ID, ESRP_OWNERS, ESRP_APPROVERS, and ESRP_DOMAIN_TENANT_ID with
+#   the values supplied during ESRP Release onboarding.
+
+trigger: none
+pr: none
+
+parameters:
+  - name: dryRun
+    displayName: Dry run (package only; do not publish)
+    type: boolean
+    default: true
+
+variables:
+  CARGO_TERM_COLOR: always
+  crateName: ms-mqtt-client
+
+resources:
+  repositories:
+    - repository: 1esPipelines
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1esPipelines
+  parameters:
+    pool:
+      name: REPLACE_WITH_APPROVED_1ES_HOSTED_POOL
+      image: MMSUbuntu24.04-g2-Secure
+      os: linux
+
+    stages:
+      - stage: Build
+        displayName: Package crate
+        jobs:
+          - job: Package
+            displayName: Package ms-mqtt-client
+            timeoutInMinutes: 30
+            templateContext:
+              outputs:
+                - output: pipelineArtifact
+                  targetPath: $(Build.ArtifactStagingDirectory)/esrp-release
+                  artifactName: ms-mqtt-client-crate
+            steps:
+              - checkout: self
+                clean: true
+                fetchDepth: 1
+
+              - task: RustInstaller@1
+                displayName: Install Rust 1.88
+                inputs:
+                  rustVersion: ms-prod-1.88
+                  toolchainFeed: $(toolchainFeed)
+                  cratesIoFeedOverride: $(cratesIoFeedOverride)
+
+              - bash: |
+                  set -euo pipefail
+
+                  source_branch="$(Build.SourceBranch)"
+                  if [[ "$source_branch" != refs/tags/v* ]]; then
+                    echo "##vso[task.logissue type=error]Publishing is allowed only from a v* tag."
+                    exit 1
+                  fi
+
+                  crate_version="$(
+                    cargo metadata --locked --no-deps --format-version 1 \
+                      | jq -r --arg crate "$(crateName)" \
+                        '.packages[] | select(.name == $crate) | .version'
+                  )"
+                  tag_version="${source_branch#refs/tags/v}"
+
+                  if [[ -z "$crate_version" || "$crate_version" == "null" ]]; then
+                    echo "##vso[task.logissue type=error]Could not read $(crateName) version from Cargo metadata."
+                    exit 1
+                  fi
+
+                  if [[ "$crate_version" != "$tag_version" ]]; then
+                    echo "##vso[task.logissue type=error]Cargo version $crate_version does not match tag v$tag_version."
+                    exit 1
+                  fi
+                displayName: Validate release tag
+                condition: and(succeeded(), eq(${{ parameters.dryRun }}, false))
+                env:
+                  RUSTUP_TOOLCHAIN: ms-prod-1.88
+
+              - bash: |
+                  set -euo pipefail
+
+                  release_dir="$(Build.ArtifactStagingDirectory)/esrp-release"
+                  target_dir="$(Build.SourcesDirectory)/target"
+                  rm -rf "$release_dir"
+                  mkdir -p "$release_dir"
+
+                  CARGO_TARGET_DIR="$target_dir" cargo package --locked
+
+                  shopt -s nullglob
+                  crate_files=("$target_dir/package/$(crateName)-"*.crate)
+                  if [[ ${#crate_files[@]} -ne 1 ]]; then
+                    echo "##vso[task.logissue type=error]Expected exactly one $(crateName) .crate file; found ${#crate_files[@]}."
+                    exit 1
+                  fi
+
+                  cp "${crate_files[0]}" "$release_dir/"
+                  tar -tzf "$release_dir/$(basename "${crate_files[0]}")" >/dev/null
+                  ls -la "$release_dir"
+                displayName: Build and verify crate package
+                env:
+                  RUSTUP_TOOLCHAIN: ms-prod-1.88
+
+      - stage: Release
+        displayName: Publish crate
+        dependsOn: Build
+        condition: and(succeeded(), eq(${{ parameters.dryRun }}, false))
+        jobs:
+          - job: Publish
+            displayName: Publish ms-mqtt-client to crates.io
+            templateContext:
+              type: releaseJob
+              isProduction: true
+              inputs:
+                - input: pipelineArtifact
+                  artifactName: ms-mqtt-client-crate
+                  targetPath: $(Pipeline.Workspace)/rust-packages
+            steps:
+              - task: EsrpRelease@12
+                displayName: Publish to crates.io
+                inputs:
+                  connectedservicename: $(ESRP_SERVICE_CONNECTION)
+                  usemanagedidentity: true
+                  keyvaultname: $(ESRP_KEYVAULT_NAME)
+                  signcertname: $(ESRP_SIGN_CERT_NAME)
+                  clientid: $(ESRP_CLIENT_ID)
+                  intent: PackageDistribution
+                  contenttype: Rust
+                  contentsource: Folder
+                  folderlocation: $(Pipeline.Workspace)/rust-packages
+                  waitforreleasecompletion: true
+                  owners: $(ESRP_OWNERS)
+                  approvers: $(ESRP_APPROVERS)
+                  serviceendpointurl: https://api.esrp.microsoft.com
+                  mainpublisher: ESRPRELPACMAN
+                  domaintenantid: $(ESRP_DOMAIN_TENANT_ID)
