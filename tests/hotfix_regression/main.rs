@@ -10,3 +10,4 @@ mod common;
 
 mod connection_termination;
 mod puback_reconnect;
+mod session_expiry;
