@@ -60,8 +60,9 @@ where
     connected: ConnectionState<O::Shared>,
     /// Identifier for the current connection epoch
     connection_epoch: u64,
-    /// Whether the session is transient (i.e. non-persistent, can expire)
-    transient: bool,
+    /// Session Expiry Interval in effect for the current or most recent connection
+    // Nonzero intervals keep local state until the next CONNACK's Session Present resolves it.
+    expiry_interval: SessionExpiryInterval,
     /// Timer for tracking when to send the next PINGREQ (based on keep-alive)
     pingreq_timer: Option<Timer>,
     pub(crate) owned: O, // NOTE: This really shouldn't be pub(crate)
@@ -105,7 +106,7 @@ where
             in_application: InApplicationTracker::default(),
             connected: ConnectionState::Disconnected,
             connection_epoch: 0, // move this to the connection state?
-            transient: false,    // move this to the connection state?
+            expiry_interval: SessionExpiryInterval::Duration(0),
             pingreq_timer: None,
             owned,
         }
@@ -483,6 +484,7 @@ where
         connack: ConnAck<O::Shared>,
         client_keep_alive: KeepAlive,
         client_auth_method: Option<&str>,
+        client_session_expiry_interval: SessionExpiryInterval,
     ) -> Result<(), ProtocolError> {
         let server_authentication = connack.other_properties.authentication.as_ref();
         // MQTT-4.12.0-5 requires a matching method only on successful enhanced-auth CONNACKs.
@@ -508,14 +510,10 @@ where
 
             self.connection_epoch += 1;
 
-            if matches!(
-                connack.other_properties.session_expiry_interval,
-                Some(SessionExpiryInterval::Duration(0))
-            ) && !self.transient
-            {
-                // We asked for a persistent session but the server overrode it to transient.
-                self.transient = true;
-            }
+            self.expiry_interval = connack
+                .other_properties
+                .session_expiry_interval
+                .unwrap_or(client_session_expiry_interval);
 
             let keep_alive = if let Some(keep_alive) = connack.other_properties.server_keep_alive {
                 keep_alive
@@ -545,14 +543,12 @@ where
 
         self.disconnected();
 
-        // If the disconnect overrides the session to be transient
-        if let Some(SessionExpiryInterval::Duration(0)) =
-            disconnect.other_properties.session_expiry_interval
-        {
-            self.transient = true;
+        // The DISCONNECT value, if any, overrides the interval in effect
+        if let Some(expiry_interval) = disconnect.other_properties.session_expiry_interval {
+            self.expiry_interval = expiry_interval;
         }
 
-        if self.transient {
+        if self.expiry_interval == SessionExpiryInterval::Duration(0) {
             self.session_expired();
         }
     }
@@ -565,7 +561,7 @@ where
 
         // NOTE: Server disconnect cannot override session expiry interval of client.
 
-        if self.transient {
+        if self.expiry_interval == SessionExpiryInterval::Duration(0) {
             self.session_expired();
         }
     }
@@ -576,7 +572,7 @@ where
 
         self.disconnected();
 
-        if self.transient {
+        if self.expiry_interval == SessionExpiryInterval::Duration(0) {
             self.session_expired();
         }
     }
@@ -736,7 +732,7 @@ where
 
     /// Perform state changes when the session is known to be expired on the server:
     ///
-    /// 1. The connection closed, and it had originally been established with session expiry interval == 0
+    /// 1. The connection closed while the effective session expiry interval was 0
     /// 2. The client closed the connect via a DISCONNECT with session expiry interval == 0
     /// 3. A new connection was established and the CONNACK says session present == false
     fn session_expired(&mut self) {
@@ -1074,7 +1070,7 @@ mod tests {
     use crate::mqtt_proto::{Auth, AuthenticateReasonCode};
     use crate::mqtt_proto::{
         Authentication, ConnAck, ConnAckOtherProperties, ConnectReasonCode, KeepAlive, Packet,
-        PacketIdentifier, PingReq, PubComp, PubCompReasonCode,
+        PacketIdentifier, PingReq, PubComp, PubCompReasonCode, SessionExpiryInterval,
     };
 
     #[tokio::test]
@@ -1153,6 +1149,7 @@ mod tests {
                 },
                 KeepAlive::Duration(NonZeroU16::new(1).unwrap()),
                 None,
+                SessionExpiryInterval::Duration(0),
             )
             .unwrap();
 
@@ -1206,7 +1203,12 @@ mod tests {
             other_properties: Default::default(),
         };
         session
-            .incoming_connack(connack.clone(), KeepAlive::Infinite, None)
+            .incoming_connack(
+                connack.clone(),
+                KeepAlive::Infinite,
+                None,
+                SessionExpiryInterval::Duration(0),
+            )
             .unwrap();
 
         let (notifier, stale_ct) = completion_pair();
@@ -1224,7 +1226,12 @@ mod tests {
 
         // The next connection's PINGRESP must answer its own PINGREQ.
         session
-            .incoming_connack(connack, KeepAlive::Infinite, None)
+            .incoming_connack(
+                connack,
+                KeepAlive::Infinite,
+                None,
+                SessionExpiryInterval::Duration(0),
+            )
             .unwrap();
         let (notifier, ct) = completion_pair();
         ping_tx.send(PingRequest(notifier)).await.unwrap();
@@ -1277,7 +1284,12 @@ mod tests {
 
         assert!(
             session
-                .incoming_connack(connack, KeepAlive::Infinite, None)
+                .incoming_connack(
+                    connack,
+                    KeepAlive::Infinite,
+                    None,
+                    SessionExpiryInterval::Duration(0),
+                )
                 .is_err()
         );
         // Accepting it would have expired the session and started a new connection epoch.
@@ -1333,12 +1345,18 @@ mod tests {
                 .incoming_connack(
                     mismatched_method,
                     KeepAlive::Infinite,
-                    Some("expected method")
+                    Some("expected method"),
+                    SessionExpiryInterval::Duration(0),
                 )
                 .is_err()
         );
         session
-            .incoming_connack(omitted_method, KeepAlive::Infinite, Some("expected method"))
+            .incoming_connack(
+                omitted_method,
+                KeepAlive::Infinite,
+                Some("expected method"),
+                SessionExpiryInterval::Duration(0),
+            )
             .unwrap();
         assert!(session.is_connected());
     }
