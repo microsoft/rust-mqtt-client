@@ -5,6 +5,7 @@ services:
     image: emqx/emqx:6.3.1
     ports:
       - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_SCRAM_PORT:-1885}:1885"
       - "${MQTT_TLS_PORT:-8883}:8883"
       - "${MQTT_WS_PORT:-8083}:8083"
       - "${MQTT_WSS_PORT:-8084}:8084"
@@ -15,6 +16,16 @@ services:
       EMQX_LISTENERS__WSS__DEFAULT__SSL_OPTIONS__CACERTFILE: /opt/emqx/etc/network-certs/ca.crt
       EMQX_LISTENERS__WSS__DEFAULT__SSL_OPTIONS__CERTFILE: /opt/emqx/etc/network-certs/server.crt
       EMQX_LISTENERS__WSS__DEFAULT__SSL_OPTIONS__KEYFILE: /opt/emqx/etc/network-certs/server.key
+      # SCRAM-SHA-256 enhanced authentication on port 1885; up.sh provisions its user. EMQX denies
+      # clients that no authenticator accepts, so every other listener skips authentication.
+      EMQX_AUTHENTICATION: "[{mechanism = scram, backend = built_in_database, algorithm = sha256}]"
+      EMQX_LISTENERS__TCP__SCRAM__BIND: "0.0.0.0:1885"
+      EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN: "false"
+      EMQX_LISTENERS__SSL__DEFAULT__ENABLE_AUTHN: "false"
+      EMQX_LISTENERS__WS__DEFAULT__ENABLE_AUTHN: "false"
+      EMQX_LISTENERS__WSS__DEFAULT__ENABLE_AUTHN: "false"
+      # REST API credentials that up.sh generates for itself.
+      EMQX_API_KEY__BOOTSTRAP_FILE: /opt/emqx/etc/network-certs/emqx-api-keys.txt
     volumes:
       - ../certs:/opt/emqx/etc/network-certs:ro
     healthcheck:
