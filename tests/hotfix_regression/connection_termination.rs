@@ -14,15 +14,16 @@ use ms_mqtt_client::client::token::completion::{
     PublishQoS1CompletionToken, SubscribeCompletionToken,
 };
 use ms_mqtt_client::client::{
-    Client, ClientOptions, ConnectHandle, ConnectResult, DisconnectHandle, DisconnectedEvent,
-    KeepAliveConfig, new_client,
+    Client, ClientOptions, ConnectEnhancedAuthResult, ConnectHandle, ConnectResult, Connection,
+    DisconnectHandle, DisconnectedEvent, KeepAliveConfig, new_client,
 };
 use ms_mqtt_client::mqtt_proto::{
-    self, AuthenticateReasonCode, ConnectReasonCode, DisconnectReasonCode, Packet,
+    self, AuthenticateReasonCode, Authentication, ConnectReasonCode, DisconnectReasonCode, Packet,
     PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAckReasonCode,
 };
 use ms_mqtt_client::packet::{
-    ConnectProperties, DisconnectProperties, QoS, RetainOptions, SessionExpiryInterval,
+    AuthenticationInfo, ConnectProperties, DisconnectProperties, QoS, RetainOptions,
+    SessionExpiryInterval,
 };
 use ms_mqtt_client::topic::{TopicFilter, TopicName};
 use ms_mqtt_client::transport::{ConnectionTransportConfig, ConnectionTransportType};
@@ -34,7 +35,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 const UNKNOWN_PACKET_IDENTIFIER: u16 = 1000;
 
 #[derive(Clone, Copy, Debug)]
-enum Termination {
+pub(crate) enum Termination {
     // The server closes the transport.
     ReadEof,
     // Writing the next PINGREQ fails.
@@ -77,7 +78,35 @@ fn termination_packet(termination: Termination) -> Option<Packet<Bytes>> {
     }
 }
 
-struct TestConnection {
+const KEEP_ALIVE: KeepAliveConfig = KeepAliveConfig::Duration {
+    ping_after: NonZeroU16::new(10).unwrap(),
+    response_timeout: Duration::from_secs(2),
+};
+
+// Test transport whose server has already sent `connack`.
+fn test_transport(
+    connack: mqtt_proto::ConnAck<Bytes>,
+) -> (
+    ConnectionTransportConfig,
+    UnboundedSender<Packet<Bytes>>,
+    UnboundedReceiver<Packet<Bytes>>,
+) {
+    let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
+    let (outgoing_packets_tx, outgoing_packets_rx) = unbounded_channel();
+    incoming_packets_tx.send(Packet::ConnAck(connack)).unwrap();
+    let transport = ConnectionTransportConfig {
+        transport_type: ConnectionTransportType::Test {
+            incoming_packets: incoming_packets_rx,
+            outgoing_packets: outgoing_packets_tx,
+        },
+        timeout: None,
+        proxy: None,
+        tcp_nodelay: false,
+    };
+    (transport, incoming_packets_tx, outgoing_packets_rx)
+}
+
+pub(crate) struct TestConnection {
     driver: Pin<Box<dyn Future<Output = (ConnectHandle, DisconnectedEvent)>>>,
     incoming_packets_tx: UnboundedSender<Packet<Bytes>>,
     outgoing_packets_rx: UnboundedReceiver<Packet<Bytes>>,
@@ -86,44 +115,45 @@ struct TestConnection {
 
 impl TestConnection {
     // Requests a Session Expiry Interval of 60 seconds, which the CONNACK can override.
-    async fn connect(
+    pub(crate) async fn connect(
         connect_handle: ConnectHandle,
         session_present: bool,
         connack_session_expiry_interval: Option<SessionExpiryInterval>,
     ) -> Self {
-        let (incoming_packets_tx, incoming_packets_rx) = unbounded_channel();
-        let (outgoing_packets_tx, mut outgoing_packets_rx) = unbounded_channel();
-        incoming_packets_tx
-            .send(Packet::ConnAck(mqtt_proto::ConnAck {
+        Self::connect_with_session_expiry_interval(
+            connect_handle,
+            session_present,
+            SessionExpiryInterval::Duration(60),
+            connack_session_expiry_interval,
+        )
+        .await
+    }
+
+    pub(crate) async fn connect_with_session_expiry_interval(
+        connect_handle: ConnectHandle,
+        session_present: bool,
+        connect_session_expiry_interval: SessionExpiryInterval,
+        connack_session_expiry_interval: Option<SessionExpiryInterval>,
+    ) -> Self {
+        let (transport, incoming_packets_tx, outgoing_packets_rx) =
+            test_transport(mqtt_proto::ConnAck {
                 reason_code: ConnectReasonCode::Success { session_present },
                 other_properties: mqtt_proto::ConnAckOtherProperties {
                     session_expiry_interval: connack_session_expiry_interval,
                     ..Default::default()
                 },
-            }))
-            .unwrap();
+            });
 
         let ConnectResult::Success(connection, _, disconnect_handle) = connect_handle
             .connect(
-                ConnectionTransportConfig {
-                    transport_type: ConnectionTransportType::Test {
-                        incoming_packets: incoming_packets_rx,
-                        outgoing_packets: outgoing_packets_tx,
-                    },
-                    timeout: None,
-                    proxy: None,
-                    tcp_nodelay: false,
-                },
+                transport,
                 false,
-                KeepAliveConfig::Duration {
-                    ping_after: NonZeroU16::new(10).unwrap(),
-                    response_timeout: Duration::from_secs(2),
-                },
+                KEEP_ALIVE,
                 None,
                 None,
                 None,
                 ConnectProperties {
-                    session_expiry_interval: SessionExpiryInterval::Duration(60),
+                    session_expiry_interval: connect_session_expiry_interval,
                     ..Default::default()
                 },
                 None,
@@ -132,6 +162,70 @@ impl TestConnection {
         else {
             panic!("expected successful connect")
         };
+        Self::new(
+            connection,
+            incoming_packets_tx,
+            outgoing_packets_rx,
+            disconnect_handle,
+        )
+    }
+
+    pub(crate) async fn connect_enhanced_auth(
+        connect_handle: ConnectHandle,
+        connect_session_expiry_interval: SessionExpiryInterval,
+    ) -> Self {
+        let method = "method";
+        let (transport, incoming_packets_tx, outgoing_packets_rx) =
+            test_transport(mqtt_proto::ConnAck {
+                reason_code: ConnectReasonCode::Success {
+                    session_present: false,
+                },
+                other_properties: mqtt_proto::ConnAckOtherProperties {
+                    authentication: Some(Authentication {
+                        method: method.into(),
+                        data: None,
+                    }),
+                    ..Default::default()
+                },
+            });
+
+        let ConnectEnhancedAuthResult::Success(connection, _, disconnect_handle, _) =
+            connect_handle
+                .connect_enhanced_auth(
+                    transport,
+                    false,
+                    KEEP_ALIVE,
+                    None,
+                    None,
+                    None,
+                    ConnectProperties {
+                        session_expiry_interval: connect_session_expiry_interval,
+                        ..Default::default()
+                    },
+                    AuthenticationInfo {
+                        method: method.to_owned(),
+                        data: None,
+                    },
+                    None,
+                )
+                .await
+        else {
+            panic!("expected successful connect")
+        };
+        Self::new(
+            connection,
+            incoming_packets_tx,
+            outgoing_packets_rx,
+            disconnect_handle,
+        )
+    }
+
+    fn new(
+        connection: Connection,
+        incoming_packets_tx: UnboundedSender<Packet<Bytes>>,
+        mut outgoing_packets_rx: UnboundedReceiver<Packet<Bytes>>,
+        disconnect_handle: DisconnectHandle,
+    ) -> Self {
         assert_matches!(outgoing_packets_rx.try_recv(), Ok(Packet::Connect(_)));
         Self {
             driver: Box::pin(connection.run_until_disconnect()),
@@ -141,14 +235,14 @@ impl TestConnection {
         }
     }
 
-    async fn drive(&mut self) {
+    pub(crate) async fn drive(&mut self) {
         assert_matches!(
             tokio::time::timeout(Duration::from_millis(1), &mut self.driver).await,
             Err(_)
         );
     }
 
-    fn expect_publish(&mut self, packet_identifier: u16, dup: bool) {
+    pub(crate) fn expect_publish(&mut self, packet_identifier: u16, dup: bool) {
         assert_matches!(
             self.outgoing_packets_rx.try_recv(),
             Ok(Packet::Publish(publish))
@@ -176,7 +270,7 @@ impl TestConnection {
         );
     }
 
-    async fn terminate(self, termination: Termination) -> ConnectHandle {
+    pub(crate) async fn terminate(self, termination: Termination) -> ConnectHandle {
         let Self {
             driver,
             incoming_packets_tx,
@@ -217,7 +311,7 @@ impl TestConnection {
         connect_handle
     }
 
-    async fn disconnect(
+    pub(crate) async fn disconnect(
         self,
         properties: &DisconnectProperties,
     ) -> (
@@ -239,7 +333,9 @@ impl TestConnection {
     }
 }
 
-fn persistent_client(max_packet_identifier: PacketIdentifier) -> (Client, ConnectHandle) {
+pub(crate) fn persistent_client(
+    max_packet_identifier: PacketIdentifier,
+) -> (Client, ConnectHandle) {
     let (client, connect_handle, _receiver) = new_client(ClientOptions {
         client_id: Some("persistent-client".to_string()),
         max_packet_identifier,
@@ -248,7 +344,7 @@ fn persistent_client(max_packet_identifier: PacketIdentifier) -> (Client, Connec
     (client, connect_handle)
 }
 
-async fn publish_qos1(client: &Client) -> PublishQoS1CompletionToken {
+pub(crate) async fn publish_qos1(client: &Client) -> PublishQoS1CompletionToken {
     client
         .publish_qos1(
             TopicName::new("foo").unwrap(),
@@ -273,7 +369,7 @@ async fn subscribe(client: &Client) -> SubscribeCompletionToken {
         .unwrap()
 }
 
-fn expire_session_on_disconnect() -> DisconnectProperties {
+pub(crate) fn expire_session_on_disconnect() -> DisconnectProperties {
     DisconnectProperties {
         session_expiry_interval: Some(SessionExpiryInterval::Duration(0)),
         ..Default::default()

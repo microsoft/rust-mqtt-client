@@ -52,7 +52,7 @@ use crate::mqtt_proto::{
 use crate::packet::{
     Auth, AuthProperties, AuthReason, AuthenticationInfo, ConnAck, ConnectProperties, Disconnect,
     DisconnectProperties, KeepAlive, PacketIdentifier, Publish, PublishProperties, QoS,
-    RetainOptions, SubscribeProperties, UnsubscribeProperties, Will,
+    RetainOptions, SessionExpiryInterval, SubscribeProperties, UnsubscribeProperties, Will,
 };
 use crate::topic::{TopicFilter, TopicName};
 use crate::transport::{ConnectionTransportConfig, ConnectionTransportType};
@@ -513,6 +513,7 @@ impl ConnectHandle {
             }
         };
 
+        let session_expiry_interval = properties.session_expiry_interval;
         if let Err(err) = self
             .mqtt_connect(
                 &mut writer,
@@ -541,10 +542,12 @@ impl ConnectHandle {
             Err(_) => return ConnectResult::Failure(self, ConnectError::ResponseTimeout),
         };
 
-        if let Err(err) = self
-            .session
-            .incoming_connack(connack.clone(), keep_alive.into(), None)
-        {
+        if let Err(err) = self.session.incoming_connack(
+            connack.clone(),
+            keep_alive.into(),
+            None,
+            session_expiry_interval,
+        ) {
             return ConnectResult::Failure(self, ConnectError::Protocol(err));
         }
         if !connack.is_success() {
@@ -684,6 +687,7 @@ impl ConnectHandle {
             Ok(streams) => streams,
             Err(err) => return ConnectEnhancedAuthResult::Failure(self, err.into()),
         };
+        let session_expiry_interval = properties.session_expiry_interval;
         if let Err(err) = self
             .mqtt_connect(
                 &mut writer,
@@ -709,6 +713,7 @@ impl ConnectHandle {
             auth_method,
             cfg_client_id: self.cfg_client_id,
             cfg_keep_alive: keep_alive,
+            cfg_session_expiry_interval: session_expiry_interval,
         };
         auth_handle.receive_response(response_timeout).await
     }
@@ -838,6 +843,7 @@ pub struct EnhancedAuthHandle {
     auth_method: String,
     cfg_client_id: Option<String>,
     cfg_keep_alive: KeepAliveConfig,
+    cfg_session_expiry_interval: SessionExpiryInterval,
 }
 
 impl EnhancedAuthHandle {
@@ -896,6 +902,7 @@ impl EnhancedAuthHandle {
                     connack.clone(),
                     self.cfg_keep_alive.into(),
                     Some(self.auth_method.as_str()),
+                    self.cfg_session_expiry_interval,
                 ) {
                     return ConnectEnhancedAuthResult::Failure(
                         self.into_connect_handle(),

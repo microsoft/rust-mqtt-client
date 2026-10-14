@@ -17,7 +17,7 @@ services:
       - custom-counter-extension:/opt/hivemq/extensions/custom-counter-extension:ro
 
   extension-builder:
-    image: maven:3.9.9-eclipse-temurin-21
+    image: maven:3.9-eclipse-temurin-26
     profiles: ["build"]
     entrypoint: ["sh", "-euc"]
     command:
