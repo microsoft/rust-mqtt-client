@@ -2,9 +2,12 @@
 #
 # Create the Azure DevOps pipeline through StartRight and point it at this file.
 # Before enabling publication:
-# - Replace REPLACE_WITH_APPROVED_1ES_HOSTED_POOL with a 1ES Hosted Pool that
-#   the owning ADO project is authorized to use.
-# - Configure toolchainFeed and cratesIoFeedOverride for RustInstaller@1.
+# - Replace REPLACE_WITH_APPROVED_1ES_HOSTED_POOL with the shared pool confirmed
+#   by 1ES Resource Management, or with a dedicated 1ES Hosted Pool provisioned
+#   for this service. Do not use the legacy Azure Pipelines pool or the stale
+#   Azure-Pipelines-CI-Prod-EO pool.
+# - Replace REPLACE_WITH_POOL_LINUX_IMAGE with the exact Linux image name
+#   configured in that pool.
 # - Create and authorize the ms-mqtt-client-esrp variable group referenced
 #   below. Define ESRP_SERVICE_CONNECTION, ESRP_KEYVAULT_NAME,
 #   ESRP_SIGN_CERT_NAME, ESRP_CLIENT_ID, ESRP_OWNERS, ESRP_APPROVERS, and
@@ -36,9 +39,11 @@ resources:
 extends:
   template: v1/1ES.Official.PipelineTemplate.yml@1esPipelines
   parameters:
+    # TODO: Pool selection is a compile-time 1ES PT input. Replace these with literal
+    # checked-in values; do not use $(runtimeVariables) or a variable group.
     pool:
       name: REPLACE_WITH_APPROVED_1ES_HOSTED_POOL
-      image: MMSUbuntu24.04-g2-Secure
+      image: REPLACE_WITH_POOL_LINUX_IMAGE
       os: linux
 
     stages:
@@ -62,8 +67,8 @@ extends:
                 displayName: Install Rust 1.88
                 inputs:
                   rustVersion: ms-prod-1.88
-                  toolchainFeed: $(toolchainFeed)
-                  cratesIoFeedOverride: $(cratesIoFeedOverride)
+                  toolchainFeed: https://pkgs.dev.azure.com/github-private/microsoft/_packaging/RustTools/nuget/v3/index.json
+                  cratesIoFeedOverride: sparse+https://pkgs.dev.azure.com/github-private/microsoft/_packaging/Rust/Cargo/index/
 
               - bash: |
                   set -euo pipefail
