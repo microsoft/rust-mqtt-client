@@ -8,10 +8,14 @@
 #   Azure-Pipelines-CI-Prod-EO pool.
 # - Replace REPLACE_WITH_POOL_LINUX_IMAGE with the exact Linux image name
 #   configured in that pool.
+# - Replace REPLACE_WITH_POOL_WINDOWS_IMAGE with the exact Windows image name
+#   configured in the same pool for 1ES SDL source analysis.
 # - Create and authorize the ms-mqtt-client-esrp variable group referenced
 #   below. Define ESRP_SERVICE_CONNECTION, ESRP_KEYVAULT_NAME,
 #   ESRP_SIGN_CERT_NAME, ESRP_CLIENT_ID, ESRP_OWNERS, ESRP_APPROVERS, and
-#   ESRP_DOMAIN_TENANT_ID using the values in ESRP_ONBOARDING.md.
+#   ESRP_DOMAIN_TENANT_ID before creating this pipeline definition.
+# - Production publication is queued from main. The commit must already have a
+#   v<Cargo version> tag (for example, v0.1.0).
 
 trigger: none
 pr: none
@@ -39,12 +43,18 @@ resources:
 extends:
   template: v1/1ES.Official.PipelineTemplate.yml@1esPipelines
   parameters:
-    # TODO: Pool selection is a compile-time 1ES PT input. Replace these with literal
+    # Pool selection is a compile-time 1ES PT input. Replace these with literal
     # checked-in values; do not use $(runtimeVariables) or a variable group.
     pool:
       name: REPLACE_WITH_APPROVED_1ES_HOSTED_POOL
       image: REPLACE_WITH_POOL_LINUX_IMAGE
       os: linux
+
+    sdl:
+      sourceAnalysisPool:
+        name: REPLACE_WITH_APPROVED_1ES_HOSTED_POOL
+        image: REPLACE_WITH_POOL_WINDOWS_IMAGE
+        os: windows
 
     stages:
       - stage: Build
@@ -61,7 +71,8 @@ extends:
             steps:
               - checkout: self
                 clean: true
-                fetchDepth: 1
+                fetchDepth: 0
+                fetchTags: true
 
               - task: RustInstaller@1
                 displayName: Install Rust 1.88
@@ -74,31 +85,34 @@ extends:
                   set -euo pipefail
 
                   source_branch="$(Build.SourceBranch)"
-                  if [[ "$source_branch" != refs/tags/v* ]]; then
-                    echo "##vso[task.logissue type=error]Publishing is allowed only from a v* tag."
+                  if [[ "$source_branch" != refs/heads/main ]]; then
+                    echo "##vso[task.logissue type=error]Publishing is allowed only from refs/heads/main."
                     exit 1
                   fi
 
-                  crate_version="$(
-                    cargo metadata --locked --no-deps --format-version 1 \
-                      | jq -r --arg crate "$(crateName)" \
-                        '.packages[] | select(.name == $crate) | .version'
-                  )"
-                  tag_version="${source_branch#refs/tags/v}"
+                  crate_package_id="$(cargo pkgid --locked --package "$(crateName)")"
+                  crate_version="${crate_package_id##*@}"
 
-                  if [[ -z "$crate_version" || "$crate_version" == "null" ]]; then
-                    echo "##vso[task.logissue type=error]Could not read $(crateName) version from Cargo metadata."
+                  if [[ -z "$crate_version" || "$crate_version" == "$crate_package_id" ]]; then
+                    echo "##vso[task.logissue type=error]Could not read $(crateName) version from its Cargo package ID."
                     exit 1
                   fi
 
-                  if [[ "$crate_version" != "$tag_version" ]]; then
-                    echo "##vso[task.logissue type=error]Cargo version $crate_version does not match tag v$tag_version."
+                  expected_tag="v$crate_version"
+                  tag_commit="$(git rev-list -n 1 "$expected_tag" 2>/dev/null || true)"
+                  source_commit="$(git rev-parse HEAD)"
+
+                  if [[ -z "$tag_commit" ]]; then
+                    echo "##vso[task.logissue type=error]Required release tag $expected_tag does not exist."
                     exit 1
                   fi
-                displayName: Validate release tag
+
+                  if [[ "$tag_commit" != "$source_commit" ]]; then
+                    echo "##vso[task.logissue type=error]Tag $expected_tag does not point to source commit $source_commit."
+                    exit 1
+                  fi
+                displayName: Validate production branch and release tag
                 condition: and(succeeded(), eq(${{ parameters.dryRun }}, false))
-                env:
-                  RUSTUP_TOOLCHAIN: ms-prod-1.88
 
               - bash: |
                   set -euo pipefail
@@ -121,8 +135,6 @@ extends:
                   tar -tzf "$release_dir/$(basename "${crate_files[0]}")" >/dev/null
                   ls -la "$release_dir"
                 displayName: Build and verify crate package
-                env:
-                  RUSTUP_TOOLCHAIN: ms-prod-1.88
 
       - stage: Release
         displayName: Publish crate
