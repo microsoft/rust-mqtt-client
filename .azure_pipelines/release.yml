@@ -130,7 +130,7 @@ extends:
                   artifactName: ms-mqtt-client-crate
                   targetPath: $(Pipeline.Workspace)/rust-packages
             steps:
-              - task: EsrpRelease@12
+              - task: EsrpRelease@14
                 displayName: Publish to crates.io
                 inputs:
                   connectedservicename: $(ESRP_SERVICE_CONNECTION)
