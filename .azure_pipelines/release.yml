@@ -81,6 +81,9 @@ extends:
                   toolchainFeed: https://pkgs.dev.azure.com/github-private/microsoft/_packaging/RustTools/nuget/v3/index.json
                   cratesIoFeedOverride: sparse+https://pkgs.dev.azure.com/github-private/microsoft/_packaging/Rust/Cargo/index/
 
+              - bash: cargo generate-lockfile
+                displayName: Resolve release dependencies
+
               - bash: |
                   set -euo pipefail
 
