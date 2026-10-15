@@ -5,9 +5,10 @@
 # - Replace REPLACE_WITH_APPROVED_1ES_HOSTED_POOL with a 1ES Hosted Pool that
 #   the owning ADO project is authorized to use.
 # - Configure toolchainFeed and cratesIoFeedOverride for RustInstaller@1.
-# - Define ESRP_SERVICE_CONNECTION, ESRP_KEYVAULT_NAME, ESRP_SIGN_CERT_NAME,
-#   ESRP_CLIENT_ID, ESRP_OWNERS, ESRP_APPROVERS, and ESRP_DOMAIN_TENANT_ID with
-#   the values supplied during ESRP Release onboarding.
+# - Create and authorize the ms-mqtt-client-esrp variable group referenced
+#   below. Define ESRP_SERVICE_CONNECTION, ESRP_KEYVAULT_NAME,
+#   ESRP_SIGN_CERT_NAME, ESRP_CLIENT_ID, ESRP_OWNERS, ESRP_APPROVERS, and
+#   ESRP_DOMAIN_TENANT_ID using the values in ESRP_ONBOARDING.md.
 
 trigger: none
 pr: none
@@ -19,8 +20,11 @@ parameters:
     default: true
 
 variables:
-  CARGO_TERM_COLOR: always
-  crateName: ms-mqtt-client
+  - group: ms-mqtt-client-esrp
+  - name: CARGO_TERM_COLOR
+    value: always
+  - name: crateName
+    value: ms-mqtt-client
 
 resources:
   repositories:
