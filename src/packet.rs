@@ -701,6 +701,10 @@ where
     }
 }
 
+/// The largest packet MQTT can carry: a one-byte fixed header, a four-byte Remaining Length, and the
+/// largest Remaining Length that encoding allows (MQTT 5.0 §2.1.4, §1.5.5).
+const PROTOCOL_MAXIMUM_PACKET_SIZE: NonZeroU32 = NonZeroU32::new(1 + 4 + 268_435_455).unwrap();
+
 /// Properties for a CONNACK
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -709,6 +713,9 @@ pub struct ConnAckProperties {
     pub receive_maximum: NonZeroU16,
     pub maximum_qos: QoS,
     pub retain_available: bool,
+    /// The largest packet the server accepts. When the server omits Maximum Packet Size, or sends a
+    /// value above what the protocol can carry, this is the protocol limit of 268,435,460 bytes
+    /// (MQTT 5.0 §3.2.2.3.6).
     pub maximum_packet_size: NonZeroU32,
     pub assigned_client_identifier: Option<String>,
     pub topic_alias_maximum: u16,
@@ -755,7 +762,7 @@ where
             receive_maximum: value.receive_maximum,
             maximum_qos: value.maximum_qos.into(),
             retain_available: value.retain_available,
-            maximum_packet_size: value.maximum_packet_size,
+            maximum_packet_size: value.maximum_packet_size.min(PROTOCOL_MAXIMUM_PACKET_SIZE),
             assigned_client_identifier: value.assigned_client_id.map(|s| s.to_string()),
             topic_alias_maximum: value.topic_alias_maximum,
             reason_string: value.reason_string.map(|s| s.to_string()),
@@ -2484,4 +2491,26 @@ mod test {
             ],
         }
     );
+
+    #[test]
+    fn connack_maximum_packet_size_reports_the_limit_that_applies() {
+        for (sent, reported) in [
+            // The decoder's value when the server omits the property
+            (u32::MAX, 268_435_460),
+            (268_435_461, 268_435_460),
+            (268_435_460, 268_435_460),
+            (1024, 1024),
+        ] {
+            let properties =
+                packet::ConnAckProperties::from(mqtt_proto::ConnAckOtherProperties::<Bytes> {
+                    maximum_packet_size: NonZeroU32::new(sent).unwrap(),
+                    ..Default::default()
+                });
+            assert_eq!(
+                properties.maximum_packet_size.get(),
+                reported,
+                "sent {sent}"
+            );
+        }
+    }
 }
