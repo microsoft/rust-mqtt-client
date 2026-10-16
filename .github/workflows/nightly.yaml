@@ -5,8 +5,9 @@
 #   1. Gate vs. nightly. This workflow owns everything that can go red because
 #      the *outside world moved* rather than because our code changed -- so it
 #      must not gate PRs. That includes: toolchains beyond MSRV+stable (beta and
-#      nightly, to get early warning of future breakage) and security-advisory
-#      scans (the RustSec DB updates daily, independent of our source). Since a
+#      nightly, to get early warning of future breakage), security-advisory
+#      scans (the RustSec DB updates daily, independent of our source), and
+#      external documentation links (third-party sites can change or go down). Since a
 #      scheduled run has no PR to turn red, the `notify` job opens a tracking
 #      issue on failure. Deterministic, code-caused checks belong in the gate,
 #      not here.
@@ -129,12 +130,26 @@ jobs:
     - name: Check advisories
       run: cargo deny check advisories
 
+  links:
+    name: Documentation links (online)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+
+    steps:
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+
+    - name: Check Markdown links
+      uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+      with:
+        args: --include-fragments --no-progress --timeout 30 --max-retries 2 '**/*.md'
+        fail: true
+
   # Scheduled runs have no PR to turn red and no author watching, so surface
   # failures by opening (or updating) a tracking issue. nightly-toolchain
   # failures are neutralized by continue-on-error above and won't reach here.
   notify:
     name: Report failure
-    needs: [test, advisories]
+    needs: [test, advisories, links]
     if: failure()
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5

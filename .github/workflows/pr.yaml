@@ -82,6 +82,22 @@ jobs:
     - name: Check
       run: make -j check
 
+  # Local files and heading anchors are deterministic; external URLs are
+  # checked separately by the nightly workflow.
+  links:
+    name: Documentation links (local)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+
+    steps:
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+
+    - name: Check local Markdown links
+      uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+      with:
+        args: --offline --include-fragments --no-progress '**/*.md'
+        fail: true
+
   # Compile-guard for the fuzz targets. The `fuzz/` crate is a detached
   # workspace (its own `[workspace]`), so nothing else in this gate builds it --
   # yet its targets reach into internal APIs exposed by the `__fuzzing` feature,

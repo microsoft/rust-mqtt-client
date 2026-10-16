@@ -22,7 +22,7 @@ The client is designed for use with any standards-compliant MQTT 5 servers, such
 
 QoS 0 and QoS 1 are supported. The QoS 2 types and methods reserve the intended public API, but end-to-end QoS 2 publishing and receiving are not yet implemented.
 
-See [MQTT 5 feature support](doc/mqtt-support.md) for the detailed protocol and client feature matrix.
+See [MQTT 5 feature support](doc/feature-support.md) for the detailed protocol and client feature matrix.
 
 
 ## Design
