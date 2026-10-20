@@ -16,6 +16,7 @@ pub(crate) enum FixtureCapability {
 pub(crate) enum EnhancedAuthMethod {
     CustomCounter,
     K8sSat,
+    ScramSha256,
 }
 
 pub(crate) fn supports_capability(capability: FixtureCapability) -> bool {
@@ -29,6 +30,7 @@ pub(crate) fn supports_capability(capability: FixtureCapability) -> bool {
         FixtureCapability::EnhancedAuthMethod(EnhancedAuthMethod::K8sSat) => {
             matches!(server.as_str(), AIO_MQ | AIO_MQ_1_6_1)
         }
+        FixtureCapability::EnhancedAuthMethod(EnhancedAuthMethod::ScramSha256) => server == EMQX,
         FixtureCapability::MutualTls => server == MOSQUITTO,
         FixtureCapability::WebSocketPathValidation => {
             matches!(server.as_str(), EMQX | HIVEMQ_CE)
