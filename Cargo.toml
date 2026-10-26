@@ -38,8 +38,8 @@ log = {version = "0.4.8", default-features = false }
 # >= 0.10.72 to clear known RustSec advisories (verified via `cargo deny check advisories`).
 openssl = { version = "0.10.72", default-features = false }
 thiserror = { version = "2.0.7", default-features = false }
-# >= 1.38.2: RUSTSEC-2025-0023 (broadcast channel unsoundness).
-tokio = { version = "1.38.2", default-features = false, features = ["io-util", "net", "sync", "time"] }
+# >= 1.53.3: RUSTSEC-2026-0386 (`AsyncFd` I/O safety unsoundness).
+tokio = { version = "1.53.3", default-features = false, features = ["io-util", "net", "sync", "time"] }
 tokio-openssl = { version = "0.6", default-features = false }
 unicode-properties = { version = "0.1", default-features = false, features = [
     "general-category",
@@ -50,7 +50,7 @@ env_logger = {version = "0.10", default-features = false }
 matches = { version = "0.1.9", default-features = false }
 pastey = { version = "0.2", default-features = false }
 test-case = { version = "3.2", default-features = false }
-tokio = { version = "1.38.2", default-features = false, features = [
+tokio = { version = "1.53.3", default-features = false, features = [
     "macros",
     "rt",
     "rt-multi-thread",
