@@ -1,0 +1,120 @@
+# Dependency findings need applicability triage, independently of Nightly test failures.
+# Keep both resolutions: a clean latest graph says nothing about older supported versions.
+name: 'Dependency advisories'
+
+on:
+  schedule:
+    - cron: '30 11 * * *'   # Daily, staggered after Nightly and before Fuzz.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  scan:
+    name: Scan (${{ matrix.deps }} dependencies)
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+    env:
+      REPORT_DIR: ${{ runner.temp }}/dependency-advisories-${{ matrix.deps }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        deps: ["latest", "minimal"]
+
+    steps:
+    - name: Prepare report directory
+      run: mkdir -p "$REPORT_DIR"
+
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+
+    - name: Setup Rust (pinned via rust-toolchain.toml)
+      uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      with:
+        cache: false
+        rustflags: ''
+
+    - name: Install nightly Rust (for the minimal-versions resolver)
+      if: matrix.deps == 'minimal'
+      run: rustup toolchain install nightly --profile minimal
+
+    - name: Install cargo-deny
+      uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+      with:
+        # The reporter consumes this version's structured diagnostics.
+        tool: cargo-deny@0.20.2
+
+    - name: Resolve latest compatible dependencies
+      if: matrix.deps == 'latest'
+      run: cargo generate-lockfile 2>&1 | tee "$REPORT_DIR/resolution.log"
+
+    - name: Resolve minimum direct dependencies
+      if: matrix.deps == 'minimal'
+      run: cargo +nightly generate-lockfile -Z direct-minimal-versions 2>&1 | tee "$REPORT_DIR/resolution.log"
+
+    - name: Check advisories
+      run: |
+        cp Cargo.lock "$REPORT_DIR/Cargo.lock"
+        set +e
+        cargo deny --format json check advisories \
+          >"$REPORT_DIR/stdout.log" 2>"$REPORT_DIR/diagnostics.jsonl"
+        status=$?
+        set -e
+        printf '%s\n' "$status" >"$REPORT_DIR/exit-code.txt"
+        echo "cargo-deny exited with status $status; full diagnostics are in the scan artifact."
+        exit "$status"
+
+    - name: Upload scan report
+      if: always() && !cancelled()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: dependency-advisories-${{ matrix.deps }}
+        path: ${{ env.REPORT_DIR }}
+        if-no-files-found: error
+        retention-days: 14
+
+  report:
+    name: Report dependency findings
+    needs: scan
+    if: always() && !cancelled()
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+      id: checkout
+
+    - name: Download scan reports
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        pattern: dependency-advisories-*
+        path: ${{ runner.temp }}/advisory-reports
+
+    - name: Open or update dependency issues
+      if: always() && !cancelled() && steps.checkout.outcome == 'success'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        SCAN_RESULT: ${{ needs.scan.result }}
+      run: |
+        python3 .github/scripts/report_advisories.py \
+          --reports "$RUNNER_TEMP/advisory-reports" \
+          --repository "$GITHUB_REPOSITORY" \
+          --run-url "$RUN_URL" \
+          --scan-result "$SCAN_RESULT" \
+          --summary "$GITHUB_STEP_SUMMARY"

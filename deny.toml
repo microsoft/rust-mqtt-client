@@ -10,9 +10,10 @@ all-features = true
 
 [advisories]
 version = 2
-# Fail on any security advisory in the RustSec database, plus the license / bans /
-# sources policy below. Note: this evaluates the resolved dependency versions, not
-# every semver-compatible version a downstream consumer might select.
+# Unhandled advisories fail the standalone Dependency advisories workflow, not Nightly.
+# A finding requires applicability triage, not an automatic dependency-floor bump.
+# Reviewed non-applicability exceptions must include a reason and assessment link.
+# This evaluates resolved versions, not every version a consumer might select.
 yanked = "deny"
 ignore = []
 
