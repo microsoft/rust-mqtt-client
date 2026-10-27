@@ -4,6 +4,7 @@
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -15,6 +16,9 @@ ADVISORY_CODES = {"vulnerability", "unsound", "unmaintained", "notice"}
 REPORT_START = "<!-- dependency-advisory-report:start -->"
 REPORT_END = "<!-- dependency-advisory-report:end -->"
 RESOLUTIONS = ("latest", "minimal")
+ADVISORY_LABEL = "dependency-advisory"
+REVIEW_LABEL = "copilot-risk-review"
+REVIEW_STATE = re.compile(r"<!-- dependency-advisory-review:(\{[^\n]*\}) -->")
 
 
 @dataclass
@@ -22,6 +26,47 @@ class Issue:
     key: str
     title: str
     report: str
+    review: dict | None = None
+
+
+def review_state(body):
+    matches = REVIEW_STATE.findall(body)
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("Multiple dependency review states in one issue")
+    state = json.loads(matches[0])
+    if not re.fullmatch(r"[0-9a-f]{64}", state["fingerprint"]):
+        raise ValueError("Invalid dependency review fingerprint")
+    if not re.fullmatch(r"[0-9a-f]{40}", state["source_revision"]):
+        raise ValueError("Invalid dependency review source revision")
+    if not isinstance(state["advisory_key"], str):
+        raise ValueError("Invalid dependency review advisory key")
+    return state
+
+
+def attach_review_state(issues, findings, repository):
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    source = subprocess.check_output(
+        ["git", "ls-tree", "-r", "HEAD", "--", "src", "Cargo.toml", "build.rs"], text=True
+    )
+    for issue in issues:
+        if issue.key not in findings:
+            continue
+        fingerprint = hashlib.sha256(json.dumps(
+            {"source": source, "findings": findings[issue.key]}, sort_keys=True
+        ).encode()).hexdigest()
+        issue.review = {
+            "advisory_key": issue.key,
+            "fingerprint": fingerprint,
+            "source_revision": revision,
+        }
+        state = json.dumps(issue.review, sort_keys=True, separators=(",", ":"))
+        issue.report = (
+            f"<!-- dependency-advisory-review:{state} -->\n"
+            f"**Source revision:** [{revision[:12]}]"
+            f"(https://github.com/{repository}/tree/{revision})\n\n{issue.report}"
+        )
 
 
 def graph_lines(node, depth=0):
@@ -258,29 +303,60 @@ def gh(*arguments, body=None):
     return result.stdout
 
 
+def ensure_review_labels(repository):
+    pages = json.loads(gh(
+        "api", "--method", "GET", "--paginate", "--slurp",
+        f"repos/{repository}/labels", "-f", "per_page=100",
+    ))
+    existing = {label["name"].casefold() for page in pages for label in page}
+    definitions = {
+        ADVISORY_LABEL: ("5319e7", "Dependency finding requiring applicability triage"),
+        REVIEW_LABEL: ("fbca04", "Queue a comment-only Copilot dependency risk assessment"),
+    }
+    for name, (color, description) in definitions.items():
+        if name not in existing:
+            gh(
+                "label", "create", name, "--repo", repository,
+                "--color", color, "--description", description,
+            )
+
+
 def publish_issues(issues, repository):
     if not issues:
         return
+    if len({issue.key for issue in issues}) != len(issues):
+        raise ValueError("Duplicate advisory keys in the report")
+    if any(issue.review for issue in issues):
+        ensure_review_labels(repository)
     pages = json.loads(gh(
         "api", "--method", "GET", "--paginate", "--slurp",
         f"repos/{repository}/issues", "-f", "state=all", "-f", "per_page=100",
     ))
-    existing = [item for page in pages for item in page if "pull_request" not in item]
+    existing = {
+        item["number"]: item
+        for page in pages for item in page if "pull_request" not in item
+    }.values()
     for issue in issues:
         marker = f"<!-- dependency-advisory:{issue.key} -->"
         matches = [item for item in existing if marker in (item["body"] or "")]
         if len(matches) > 1:
             raise ValueError(f"Multiple tracking issues match {issue.key}")
         if not matches:
+            labels = ["dependencies"]
+            labels.extend(
+                [ADVISORY_LABEL, REVIEW_LABEL] if issue.review else ["infrastructure"]
+            )
+            label_arguments = [argument for label in labels for argument in ("--label", label)]
             url = gh(
                 "issue", "create", "--repo", repository, "--title", issue.title,
-                "--label", "dependencies", "--label", "infrastructure",
+                *label_arguments,
                 "--body-file", "-", body=issue_body(issue, repository),
             )
             print(f"Created {issue.key}: {url.strip()}")
             continue
         current = matches[0]
         body = current["body"]
+        previous_review = review_state(body) if issue.review else None
         if body.count(REPORT_START) != 1 or body.count(REPORT_END) != 1:
             raise ValueError(f"Tracking issue #{current['number']} has invalid report markers")
         start = body.index(REPORT_START)
@@ -294,12 +370,19 @@ def publish_issues(issues, repository):
             gh("issue", "edit", number, "--repo", repository, "--body-file", "-", body=updated)
         if current["state"] == "closed":
             gh("issue", "reopen", number, "--repo", repository)
+        if issue.review:
+            labels = ["--add-label", ADVISORY_LABEL]
+            if not previous_review or previous_review["fingerprint"] != issue.review["fingerprint"]:
+                labels.extend(["--add-label", REVIEW_LABEL])
+            gh("issue", "edit", number, "--repo", repository, *labels)
         print(f"Updated {issue.key}: {current['html_url']}")
 
 
 def report(reports, repository, run_url, scan_result, summary):
     findings, failures = collect_scans(reports, scan_result)
     issues = render_issues(findings, failures, run_url)
+    if findings:
+        attach_review_state(issues, findings, repository)
     with summary.open("a") as output:
         output.write("# Dependency advisory scans\n\n")
         output.write(f"Unhandled dependency findings: **{len(findings)}**\n\n")
