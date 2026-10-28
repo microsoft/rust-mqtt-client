@@ -385,10 +385,7 @@ def publish_issues(issues, repository):
         end += len(REPORT_END)
         updated = body[:start] + f"{REPORT_START}\n{issue.report}\n{REPORT_END}" + body[end:]
         number = str(current["number"])
-        if updated != body:
-            gh("issue", "edit", number, "--repo", repository, "--body-file", "-", body=updated)
-        if current["state"] == "closed":
-            gh("issue", "reopen", number, "--repo", repository)
+        # Queue the work before publishing its fingerprint so interrupted updates can retry.
         if issue.review:
             updates = ["--add-label", ADVISORY_LABEL]
             if not previous_review or previous_review["fingerprint"] != issue.review["fingerprint"]:
@@ -396,6 +393,10 @@ def publish_issues(issues, repository):
             if current.get("type") is None:
                 updates.extend(["--type", ADVISORY_ISSUE_TYPE])
             gh("issue", "edit", number, "--repo", repository, *updates)
+        if updated != body:
+            gh("issue", "edit", number, "--repo", repository, "--body-file", "-", body=updated)
+        if current["state"] == "closed":
+            gh("issue", "reopen", number, "--repo", repository)
         print(f"Updated {issue.key}: {current['html_url']}")
 
 

@@ -117,8 +117,8 @@ jobs:
         title="Nightly workflow failed"
         body="The scheduled nightly workflow failed. Run: ${RUN_URL}"
         labels="$(
-          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/labels?per_page=100" \
-            --jq '.[][] | .name'
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/labels?per_page=100" \
+            --jq '.[].name'
         )"
         if ! grep -Fxiq -- "ci-failure" <<<"${labels}"; then
           gh label create "ci-failure" --repo "${GITHUB_REPOSITORY}" \
