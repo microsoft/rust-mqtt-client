@@ -30,6 +30,10 @@ class Issue:
     review: dict | None = None
 
 
+def workflow_authored(item):
+    return (item.get("user") or {}).get("login") == "github-actions[bot]"
+
+
 def review_state(body):
     matches = REVIEW_STATE.findall(body)
     if not matches:
@@ -54,8 +58,17 @@ def attach_review_state(issues, findings, repository):
     for issue in issues:
         if issue.key not in findings:
             continue
+        semantic_findings = []
+        for resolution, fields in findings[issue.key]:
+            semantic_fields = dict(fields)
+            if "labels" in fields:
+                semantic_fields["labels"] = [
+                    {name: value for name, value in label.items() if name not in {"line", "column"}}
+                    for label in fields["labels"]
+                ]
+            semantic_findings.append((resolution, semantic_fields))
         fingerprint = hashlib.sha256(json.dumps(
-            {"source": source, "findings": findings[issue.key]}, sort_keys=True
+            {"source": source, "findings": semantic_findings}, sort_keys=True
         ).encode()).hexdigest()
         issue.review = {
             "advisory_key": issue.key,
@@ -130,6 +143,8 @@ def read_scan(directory):
         raise ValueError("Scanner status, summary, and diagnostics disagree")
 
     for event in events:
+        if event["type"] == "diagnostic" and event["fields"].get("code") == "index-failure":
+            raise ValueError(f"Scanner index failure: {event['fields']['message']}")
         if event["type"] == "diagnostic" and event["fields"]["severity"] == "bug":
             raise ValueError(f"Scanner bug: {event['fields']['message']}")
         if event["type"] == "log" and event["fields"]["level"].lower() == "error":
@@ -335,7 +350,8 @@ def publish_issues(issues, repository):
     ))
     existing = {
         item["number"]: item
-        for page in pages for item in page if "pull_request" not in item
+        for page in pages for item in page
+        if "pull_request" not in item and workflow_authored(item)
     }.values()
     for issue in issues:
         marker = f"<!-- dependency-advisory:{issue.key} -->"

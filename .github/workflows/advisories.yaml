@@ -92,6 +92,11 @@ jobs:
     if: always() && !cancelled()
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
+    # Share the lock with Copilot's queue readers/writers, not just other scan runs.
+    concurrency:
+      group: dependency-advisory-state-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       issues: write

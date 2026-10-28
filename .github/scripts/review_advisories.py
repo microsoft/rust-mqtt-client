@@ -9,11 +9,26 @@ from pathlib import Path
 import re
 import sys
 
-from report_advisories import ADVISORY_LABEL, REVIEW_LABEL, gh, review_state
+from report_advisories import ADVISORY_LABEL, REVIEW_LABEL, gh, review_state, workflow_authored
 
 
-WORKFLOW_MARKER = "<!-- gh-aw-workflow-id: advisory-risk-review -->"
+WORKFLOW_ID = "advisory-risk-review"
+LEGACY_WORKFLOW_MARKER = f"<!-- gh-aw-workflow-id: {WORKFLOW_ID} -->"
 MAX_REVIEWS = 5
+
+
+def from_review_workflow(body):
+    if LEGACY_WORKFLOW_MARKER in body:
+        return True
+    for marker in re.findall(r"<!--\s*gh-aw-agentic-workflow:(.*?)-->", body, re.DOTALL):
+        workflow_ids = []
+        for field in marker.split(","):
+            name, separator, value = field.partition(":")
+            if separator and name.strip() == "workflow_id":
+                workflow_ids.append(value.strip())
+        if workflow_ids == [WORKFLOW_ID]:
+            return True
+    return False
 
 
 def completed_review(repository, number, state):
@@ -24,7 +39,7 @@ def completed_review(repository, number, state):
     for page in pages:
         for comment in page:
             body = comment["body"]
-            if comment["user"]["login"] != "github-actions[bot]" or WORKFLOW_MARKER not in body:
+            if not workflow_authored(comment) or not from_review_workflow(body):
                 continue
             for block in re.findall(r"```json\s*\n(.*?)\n```", body, re.DOTALL):
                 try:
@@ -64,7 +79,7 @@ def prepare(repository, output, issue_number="", source_revision=""):
         if (
             "pull_request" in issue
             or issue["state"] != "open"
-            or issue["user"]["login"] != "github-actions[bot]"
+            or not workflow_authored(issue)
             or not {ADVISORY_LABEL, REVIEW_LABEL}.issubset(labels)
         ):
             print(f"Skipping issue #{issue['number']}: not a queued workflow-created finding.")

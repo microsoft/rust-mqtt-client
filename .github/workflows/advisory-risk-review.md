@@ -66,6 +66,10 @@ jobs:
     if: *trusted-trigger
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    concurrency: &advisory-state-lock
+      group: dependency-advisory-state-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       issues: write
@@ -96,6 +100,7 @@ jobs:
     if: needs.prepare.outputs.has_reviews == 'true' && needs.safe_outputs.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    concurrency: *advisory-state-lock
     permissions:
       contents: read
       issues: write
