@@ -53,7 +53,12 @@ def from_review_workflow(body):
 def completed_review(comments, state):
     for comment in comments:
         body = comment["body"]
-        if not workflow_authored(comment) or not from_review_workflow(body):
+        # Warn-mode comments can be published without a successful safety verdict.
+        if (
+            not workflow_authored(comment)
+            or not from_review_workflow(body)
+            or re.search(r"<!--\s*gh-aw-threat-(?:detected|engine-error)\s*-->", body)
+        ):
             continue
         for block in re.findall(r"```json\s*\n(.*?)\n```", body, re.DOTALL):
             try:

@@ -48,7 +48,12 @@ def prepare(repository, output, issue_number="", source_revision=""):
         comments = issue_comments(repository, issue["number"])
         published = current_scan(issue, comments)
         if published is None:
-            raise ValueError(f"Issue #{issue['number']} lacks a bot-owned scan report; rerun the scanner")
+            print(
+                f"Keeping issue #{issue['number']} queued: its bot-owned scan report is missing. "
+                "Rerun the scanner or review the issue manually.",
+                file=sys.stderr,
+            )
+            continue
         state = review_state(published["body"] or "", tracking_key(issue["body"] or ""))
         if state is None:
             raise ValueError(f"Issue #{issue['number']} lacks dependency review metadata")
