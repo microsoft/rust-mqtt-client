@@ -11,6 +11,12 @@
 #
 # Only tooling-hygiene ecosystems are watched here - those aren't exposed to consumers,
 # so pin-rot is pure downside.
+#
+# Updating setup-rust-toolchain updates the installer, not the compiler selected by
+# rust-toolchain.toml or the MSRV declared in Cargo.toml and tested in CI.
+# Major action releases still need review: v2 defaults CARGO_BUILD_WARNINGS to deny
+# for Cargo 1.97+, independently of the rustflags input. Rust workflows explicitly
+# set CARGO_BUILD_WARNINGS=warn so only pinned-toolchain Clippy denies warnings.
 
 version: 2
 updates:

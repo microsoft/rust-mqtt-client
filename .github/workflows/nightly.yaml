@@ -36,6 +36,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Override setup-rust-toolchain v2's Cargo 1.97+ default of deny.
+  # Warning-denial belongs only to pinned-toolchain Clippy (make check).
+  CARGO_BUILD_WARNINGS: warn
 
 jobs:
   # Test across the moving toolchains the PR gate can't hold stable. The MSRV
