@@ -27,8 +27,7 @@ on:
   pull_request:
   # Scoped to the default branch on purpose: `pull_request` already validates
   # every feature branch, so an unrestricted `push` would run each PR twice
-  # (once per event). Keeping `push` on `main` validates the post-merge result
-  # and drives the README build badge (which tracks `main`).
+  # (once per event). Keeping `push` on `main` validates the post-merge result.
   push:
     branches: [main]
 
