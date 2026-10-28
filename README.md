@@ -1,6 +1,6 @@
 # Microsoft MQTT client
 
-[![Build](https://img.shields.io/github/actions/workflow/status/microsoft/rust-mqtt-client/pr.yaml?branch=main&label=build)](https://github.com/microsoft/rust-mqtt-client/actions/workflows/pr.yaml)
+[![Nightly build](https://img.shields.io/github/actions/workflow/status/microsoft/rust-mqtt-client/nightly.yaml?branch=main&label=nightly)](https://github.com/microsoft/rust-mqtt-client/actions/workflows/nightly.yaml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](Cargo.toml)
 
