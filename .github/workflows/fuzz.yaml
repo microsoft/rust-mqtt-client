@@ -34,9 +34,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Override setup-rust-toolchain v2's Cargo 1.97+ default of deny.
-  # Warning-denial belongs only to pinned-toolchain Clippy (make check).
-  CARGO_BUILD_WARNINGS: warn
 
 jobs:
   # Bounded, coverage-guided fuzzing. A crash fails the job (NOT
@@ -61,10 +58,11 @@ jobs:
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
 
     - name: Setup Rust (pinned via rust-toolchain.toml)
-      uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:
         cache: false
         rustflags: ''
+        build-warnings: ''
 
     # cargo-fuzz builds with unstable `-Z sanitizer` + SanitizerCoverage flags,
     # so the instrumented target must be built on nightly (the library still
