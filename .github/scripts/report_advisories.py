@@ -17,6 +17,7 @@ REPORT_START = "<!-- dependency-advisory-report:start -->"
 REPORT_END = "<!-- dependency-advisory-report:end -->"
 RESOLUTIONS = ("latest", "minimal")
 ADVISORY_LABEL = "dependency-advisory"
+ADVISORY_ISSUE_TYPE = "Task"
 REVIEW_LABEL = "copilot-risk-review"
 REVIEW_STATE = re.compile(r"<!-- dependency-advisory-review:(\{[^\n]*\}) -->")
 
@@ -346,10 +347,12 @@ def publish_issues(issues, repository):
             labels.extend(
                 [ADVISORY_LABEL, REVIEW_LABEL] if issue.review else ["infrastructure"]
             )
-            label_arguments = [argument for label in labels for argument in ("--label", label)]
+            creation_arguments = [argument for label in labels for argument in ("--label", label)]
+            if issue.review:
+                creation_arguments.extend(["--type", ADVISORY_ISSUE_TYPE])
             url = gh(
                 "issue", "create", "--repo", repository, "--title", issue.title,
-                *label_arguments,
+                *creation_arguments,
                 "--body-file", "-", body=issue_body(issue, repository),
             )
             print(f"Created {issue.key}: {url.strip()}")
@@ -371,10 +374,12 @@ def publish_issues(issues, repository):
         if current["state"] == "closed":
             gh("issue", "reopen", number, "--repo", repository)
         if issue.review:
-            labels = ["--add-label", ADVISORY_LABEL]
+            updates = ["--add-label", ADVISORY_LABEL]
             if not previous_review or previous_review["fingerprint"] != issue.review["fingerprint"]:
-                labels.extend(["--add-label", REVIEW_LABEL])
-            gh("issue", "edit", number, "--repo", repository, *labels)
+                updates.extend(["--add-label", REVIEW_LABEL])
+            if current.get("type") is None:
+                updates.extend(["--type", ADVISORY_ISSUE_TYPE])
+            gh("issue", "edit", number, "--repo", repository, *updates)
         print(f"Updated {issue.key}: {current['html_url']}")
 
 
