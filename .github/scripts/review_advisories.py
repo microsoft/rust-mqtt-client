@@ -6,54 +6,15 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 import sys
 
-from report_advisories import ADVISORY_LABEL, REVIEW_LABEL, gh, review_state, workflow_authored
+from report_advisories import (
+    ADVISORY_LABEL, REVIEW_LABEL, completed_review, current_scan, gh, issue_comments, review_state,
+    tracking_key, workflow_authored,
+)
 
 
-WORKFLOW_ID = "advisory-risk-review"
-LEGACY_WORKFLOW_MARKER = f"<!-- gh-aw-workflow-id: {WORKFLOW_ID} -->"
 MAX_REVIEWS = 5
-
-
-def from_review_workflow(body):
-    if LEGACY_WORKFLOW_MARKER in body:
-        return True
-    for marker in re.findall(r"<!--\s*gh-aw-agentic-workflow:(.*?)-->", body, re.DOTALL):
-        workflow_ids = []
-        for field in marker.split(","):
-            name, separator, value = field.partition(":")
-            if separator and name.strip() == "workflow_id":
-                workflow_ids.append(value.strip())
-        if workflow_ids == [WORKFLOW_ID]:
-            return True
-    return False
-
-
-def completed_review(repository, number, state):
-    pages = json.loads(gh(
-        "api", "--method", "GET", "--paginate", "--slurp",
-        f"repos/{repository}/issues/{number}/comments", "-f", "per_page=100",
-    ))
-    for page in pages:
-        for comment in page:
-            body = comment["body"]
-            if not workflow_authored(comment) or not from_review_workflow(body):
-                continue
-            for block in re.findall(r"```json\s*\n(.*?)\n```", body, re.DOTALL):
-                try:
-                    data = json.loads(block)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(data, dict) and (
-                    data.get("advisory_key") == state["advisory_key"]
-                    and data.get("fingerprint") == state["fingerprint"]
-                    and isinstance(data.get("source_revision"), str)
-                    and re.fullmatch(r"[0-9a-f]{40}", data["source_revision"])
-                ):
-                    return True
-    return False
 
 
 def clear_queue(repository, number):
@@ -84,23 +45,24 @@ def prepare(repository, output, issue_number="", source_revision=""):
         ):
             print(f"Skipping issue #{issue['number']}: not a queued workflow-created finding.")
             continue
-        state = review_state(issue["body"] or "")
+        comments = issue_comments(repository, issue["number"])
+        published = current_scan(issue, comments)
+        if published is None:
+            raise ValueError(f"Issue #{issue['number']} lacks a bot-owned scan report; rerun the scanner")
+        state = review_state(published["body"] or "", tracking_key(issue["body"] or ""))
         if state is None:
             raise ValueError(f"Issue #{issue['number']} lacks dependency review metadata")
-        marker = f"<!-- dependency-advisory:{state['advisory_key']} -->"
-        if marker not in issue["body"]:
-            raise ValueError(f"Issue #{issue['number']} has inconsistent advisory identity")
         if source_revision and state["source_revision"] != source_revision:
             print(f"Skipping issue #{issue['number']}: its scan has already been superseded.")
             continue
-        if completed_review(repository, issue["number"], state):
+        if completed_review(comments, state):
             clear_queue(repository, issue["number"])
             print(f"Reusing completed assessment for issue #{issue['number']}.")
             continue
         if len(queue) == MAX_REVIEWS:
             print(f"Deferring issue #{issue['number']}: the per-run review limit is {MAX_REVIEWS}.")
             continue
-        queue.append({"issue_number": issue["number"], **state})
+        queue.append({"issue_number": issue["number"], "report_url": published["html_url"], **state})
     with output.open("a") as stream:
         stream.write(f"has_reviews={str(bool(queue)).lower()}\n")
         stream.write("queue=" + json.dumps(queue, separators=(",", ":")) + "\n")
@@ -112,11 +74,19 @@ def finalize(repository, queue):
     for request in queue:
         number = request["issue_number"]
         issue = json.loads(gh("api", f"repos/{repository}/issues/{number}"))
-        current = review_state(issue["body"] or "")
-        if current is None or current["fingerprint"] != request["fingerprint"]:
+        comments = issue_comments(repository, number)
+        published = current_scan(issue, comments)
+        if published is None:
+            incomplete.append(str(number))
+            continue
+        current = review_state(published["body"] or "", tracking_key(issue["body"] or ""))
+        if current is None or (
+            current["advisory_key"] != request["advisory_key"]
+            or current["fingerprint"] != request["fingerprint"]
+        ):
             print(f"Keeping issue #{number} queued: the dependency finding changed during review.")
             continue
-        if not completed_review(repository, number, request):
+        if not completed_review(comments, request):
             incomplete.append(str(number))
             continue
         clear_queue(repository, number)

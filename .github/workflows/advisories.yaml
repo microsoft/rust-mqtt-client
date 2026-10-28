@@ -53,7 +53,7 @@ jobs:
       run: rustup toolchain install nightly --profile minimal
 
     - name: Install cargo-deny
-      uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
       with:
         # The reporter consumes this version's structured diagnostics.
         tool: cargo-deny@0.20.2
@@ -70,8 +70,8 @@ jobs:
       run: |
         cp Cargo.lock "$REPORT_DIR/Cargo.lock"
         set +e
-        cargo deny --format json check advisories \
-          >"$REPORT_DIR/stdout.log" 2>"$REPORT_DIR/diagnostics.jsonl"
+        cargo deny --format json check advisories --audit-compatible-output \
+          >"$REPORT_DIR/advisories.jsonl" 2>"$REPORT_DIR/diagnostics.jsonl"
         status=$?
         set -e
         printf '%s\n' "$status" >"$REPORT_DIR/exit-code.txt"
@@ -80,7 +80,7 @@ jobs:
 
     - name: Upload scan report
       if: always() && !cancelled()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: dependency-advisories-${{ matrix.deps }}
         path: ${{ env.REPORT_DIR }}

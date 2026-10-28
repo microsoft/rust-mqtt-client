@@ -20,6 +20,8 @@ ADVISORY_LABEL = "dependency-advisory"
 ADVISORY_ISSUE_TYPE = "Task"
 REVIEW_LABEL = "copilot-risk-review"
 REVIEW_STATE = re.compile(r"<!-- dependency-advisory-review:(\{[^\n]*\}) -->")
+REVIEW_WORKFLOW_ID = "advisory-risk-review"
+LEGACY_WORKFLOW_MARKER = f"<!-- gh-aw-workflow-id: {REVIEW_WORKFLOW_ID} -->"
 
 
 @dataclass
@@ -34,7 +36,50 @@ def workflow_authored(item):
     return (item.get("user") or {}).get("login") == "github-actions[bot]"
 
 
-def review_state(body):
+def from_review_workflow(body):
+    if LEGACY_WORKFLOW_MARKER in body:
+        return True
+    for marker in re.findall(r"<!--\s*gh-aw-agentic-workflow:(.*?)-->", body, re.DOTALL):
+        workflow_ids = []
+        for field in marker.split(","):
+            name, separator, value = field.partition(":")
+            if separator and name.strip() == "workflow_id":
+                workflow_ids.append(value.strip())
+        if workflow_ids == [REVIEW_WORKFLOW_ID]:
+            return True
+    return False
+
+
+def completed_review(comments, state):
+    for comment in comments:
+        body = comment["body"]
+        if not workflow_authored(comment) or not from_review_workflow(body):
+            continue
+        for block in re.findall(r"```json\s*\n(.*?)\n```", body, re.DOTALL):
+            try:
+                data = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and (
+                data.get("advisory_key") == state["advisory_key"]
+                and data.get("fingerprint") == state["fingerprint"]
+                and isinstance(data.get("source_revision"), str)
+                and re.fullmatch(r"[0-9a-f]{40}", data["source_revision"])
+            ):
+                return True
+    return False
+
+
+def tracking_key(body):
+    match = re.search(r"<!-- dependency-advisory:([^\r\n]+?) -->", body)
+    return match.group(1) if match else None
+
+
+def scan_comment_marker(key):
+    return f"<!-- dependency-advisory-scan:{key} -->"
+
+
+def review_state(body, expected_key=None):
     matches = REVIEW_STATE.findall(body)
     if not matches:
         return None
@@ -47,6 +92,8 @@ def review_state(body):
         raise ValueError("Invalid dependency review source revision")
     if not isinstance(state["advisory_key"], str):
         raise ValueError("Invalid dependency review advisory key")
+    if expected_key is not None and state["advisory_key"] != expected_key:
+        raise ValueError("Dependency review metadata does not match the tracking issue")
     return state
 
 
@@ -117,6 +164,44 @@ def finding_key(fields):
     return advisory["id"]
 
 
+def read_advisories(directory):
+    reports = [
+        json.loads(line)
+        for line in (directory / "advisories.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    if not reports:
+        raise ValueError("Missing complete advisory data from cargo-deny")
+    advisories = {}
+    for report in reports:
+        if not isinstance(report["vulnerabilities"], list) or not isinstance(report["warnings"], dict):
+            raise ValueError("Unsupported cargo-deny 0.20.2 audit report")
+        entries = list(report["vulnerabilities"])
+        for warnings in report["warnings"].values():
+            if not isinstance(warnings, list):
+                raise ValueError("Invalid audit warning collection")
+            entries.extend(warnings)
+        for entry in entries:
+            metadata = entry["advisory"]
+            package = entry["package"]
+            affected = entry["affected"]
+            versions = entry["versions"]
+            if affected is not None and not isinstance(affected, dict):
+                raise ValueError("Invalid advisory affected-data snapshot")
+            if not isinstance(versions, dict) or not all(
+                isinstance(versions[name], list)
+                and all(isinstance(value, str) for value in versions[name])
+                for name in ("patched", "unaffected")
+            ):
+                raise ValueError("Invalid advisory version-range snapshot")
+            snapshot = {"advisory": metadata, "affected": affected, "versions": versions}
+            key = (metadata["id"], package["name"], package["version"])
+            if key in advisories and advisories[key] != snapshot:
+                raise ValueError(f"Conflicting advisory snapshots for {key}")
+            advisories[key] = snapshot
+    return advisories
+
+
 def read_scan(directory):
     status = int((directory / "exit-code.txt").read_text())
     if status not in (0, 1):
@@ -149,6 +234,8 @@ def read_scan(directory):
             raise ValueError(f"Scanner bug: {event['fields']['message']}")
         if event["type"] == "log" and event["fields"]["level"].lower() == "error":
             raise ValueError(f"Scanner error: {event['fields']['message']}")
+    advisories = read_advisories(directory)
+    findings = []
     for fields in diagnostics:
         if fields["code"] not in ADVISORY_CODES | {"yanked"}:
             raise ValueError(f"Scanner diagnostic {fields['code']}: {fields['message']}")
@@ -160,7 +247,23 @@ def read_scan(directory):
         finding_key(fields)
         for graph in fields["graphs"]:
             graph_lines(graph)
-    return diagnostics
+        finding = dict(fields)
+        if fields["code"] in ADVISORY_CODES:
+            package = fields["graphs"][0]["Krate"]
+            key = (fields["advisory"]["id"], package["name"], package["version"])
+            if key not in advisories:
+                raise ValueError(f"Missing complete advisory snapshot for {key}")
+            snapshot = advisories[key]
+            if snapshot["advisory"] != fields["advisory"]:
+                raise ValueError(f"Diagnostic and audit advisory metadata disagree for {key}")
+            finding["applicability"] = {
+                "affected": snapshot["affected"], "versions": snapshot["versions"],
+            }
+            finding["advisory_snapshot"] = hashlib.sha256(
+                json.dumps(snapshot, sort_keys=True).encode()
+            ).hexdigest()
+        findings.append(finding)
+    return findings
 
 
 def collect_scans(root, scan_result):
@@ -237,6 +340,7 @@ def render_finding(key, occurrences, run_url):
             f"- **Advisory date:** {advisory['date']}",
             f"- **Aliases:** {', '.join(advisory.get('aliases', [])) or 'None reported'}",
             f"- **CVSS vector:** {advisory.get('cvss') or 'Not provided by the advisory'}",
+            f"- **Captured advisory payload SHA-256:** `{fields['advisory_snapshot']}`",
         ])
         if advisory.get("url"):
             lines.append(f"- **Upstream announcement/fix:** {advisory['url']}")
@@ -245,6 +349,10 @@ def render_finding(key, occurrences, run_url):
         if references:
             lines.extend(["", "### Upstream references", ""])
             lines.extend(f"- {reference}" for reference in references)
+        lines.extend([
+            "", "### Applicability captured by this scan", "", "```json",
+            bounded(json.dumps(fields["applicability"], sort_keys=True, indent=2)), "```",
+        ])
     lines.extend(["", "### Affected resolutions and dependency paths", ""])
     for resolution, occurrence in occurrences:
         root = occurrence["graphs"][0]["Krate"]
@@ -287,7 +395,12 @@ def render_issues(findings, failures, run_url):
 
 def issue_body(issue, repository):
     marker = f"<!-- dependency-advisory:{issue.key} -->"
-    body = f"{marker}\n{REPORT_START}\n{issue.report}\n{REPORT_END}\n\n"
+    body = (
+        f"{marker}\n"
+        "> Initial scan snapshot. Subsequent scans update a bot-owned comment below; "
+        "this issue body is not rewritten.\n\n"
+        f"{REPORT_START}\n{issue.report}\n{REPORT_END}\n\n"
+    )
     if issue.key == "scan-failure":
         return body + (
             "## Maintainer follow-up\n\n"
@@ -304,7 +417,8 @@ def issue_body(issue, repository):
         "with a specific reason.\n"
         "- [ ] Confirm the expected result in a subsequent scan before closing.\n\n"
         "**Assessment / resolution:**\n\n"
-        "Record findings here; subsequent runs preserve this section.\n\n"
+        "Keep maintainer reasoning here; refreshed automated reports appear in a "
+        "separate bot-owned comment.\n\n"
         "Do not disclose newly discovered vulnerabilities in public comments. "
         f"Follow the [security policy](https://github.com/{repository}/blob/main/SECURITY.md).\n"
     )
@@ -317,6 +431,30 @@ def gh(*arguments, body=None):
     if result.returncode:
         raise RuntimeError(f"GitHub command failed: {result.stderr.strip()}")
     return result.stdout
+
+
+def issue_comments(repository, number):
+    pages = json.loads(gh(
+        "api", "--method", "GET", "--paginate", "--slurp",
+        f"repos/{repository}/issues/{number}/comments", "-f", "per_page=100",
+    ))
+    return list({comment["id"]: comment for page in pages for comment in page}.values())
+
+
+def current_scan(issue, comments):
+    if not workflow_authored(issue):
+        raise ValueError(f"Tracking issue #{issue['number']} is not workflow-authored")
+    key = tracking_key(issue["body"] or "")
+    if key is None:
+        raise ValueError(f"Tracking issue #{issue['number']} lacks an advisory identity")
+    marker = scan_comment_marker(key)
+    reports = [
+        comment for comment in comments
+        if workflow_authored(comment) and (comment["body"] or "").startswith(marker)
+    ]
+    if len(reports) > 1:
+        raise ValueError(f"Multiple automated scan comments match {key}")
+    return reports[0] if reports else None
 
 
 def ensure_review_labels(repository):
@@ -354,8 +492,7 @@ def publish_issues(issues, repository):
         if "pull_request" not in item and workflow_authored(item)
     }.values()
     for issue in issues:
-        marker = f"<!-- dependency-advisory:{issue.key} -->"
-        matches = [item for item in existing if marker in (item["body"] or "")]
+        matches = [item for item in existing if tracking_key(item["body"] or "") == issue.key]
         if len(matches) > 1:
             raise ValueError(f"Multiple tracking issues match {issue.key}")
         if not matches:
@@ -363,38 +500,44 @@ def publish_issues(issues, repository):
             labels.extend(
                 [ADVISORY_LABEL, REVIEW_LABEL] if issue.review else ["infrastructure"]
             )
-            creation_arguments = [argument for label in labels for argument in ("--label", label)]
+            payload = {
+                "title": issue.title, "body": issue_body(issue, repository), "labels": labels,
+            }
             if issue.review:
-                creation_arguments.extend(["--type", ADVISORY_ISSUE_TYPE])
-            url = gh(
-                "issue", "create", "--repo", repository, "--title", issue.title,
-                *creation_arguments,
-                "--body-file", "-", body=issue_body(issue, repository),
-            )
-            print(f"Created {issue.key}: {url.strip()}")
-            continue
-        current = matches[0]
-        body = current["body"]
-        previous_review = review_state(body) if issue.review else None
-        if body.count(REPORT_START) != 1 or body.count(REPORT_END) != 1:
-            raise ValueError(f"Tracking issue #{current['number']} has invalid report markers")
-        start = body.index(REPORT_START)
-        end = body.index(REPORT_END)
-        if end < start:
-            raise ValueError(f"Tracking issue #{current['number']} has reversed report markers")
-        end += len(REPORT_END)
-        updated = body[:start] + f"{REPORT_START}\n{issue.report}\n{REPORT_END}" + body[end:]
+                payload["type"] = ADVISORY_ISSUE_TYPE
+            current = json.loads(gh(
+                "api", "--method", "POST", f"repos/{repository}/issues",
+                "--input", "-", body=json.dumps(payload),
+            ))
+            print(f"Created {issue.key}: {current['html_url']}")
+        else:
+            current = matches[0]
         number = str(current["number"])
+        comments = issue_comments(repository, number)
+        published = current_scan(current, comments)
         # Queue the work before publishing its fingerprint so interrupted updates can retry.
         if issue.review:
             updates = ["--add-label", ADVISORY_LABEL]
-            if not previous_review or previous_review["fingerprint"] != issue.review["fingerprint"]:
+            if not completed_review(comments, issue.review):
                 updates.extend(["--add-label", REVIEW_LABEL])
-            if current.get("type") is None:
-                updates.extend(["--type", ADVISORY_ISSUE_TYPE])
             gh("issue", "edit", number, "--repo", repository, *updates)
-        if updated != body:
-            gh("issue", "edit", number, "--repo", repository, "--body-file", "-", body=updated)
+        comment_body = (
+            f"{scan_comment_marker(issue.key)}\n"
+            "## Latest automated dependency scan\n\n"
+            "This comment is maintained by automation. Keep maintainer notes in the "
+            f"issue description.\n\n{issue.report}"
+        )
+        if published is None:
+            gh(
+                "api", "--method", "POST", f"repos/{repository}/issues/{number}/comments",
+                "--input", "-", body=json.dumps({"body": comment_body}),
+            )
+        elif published["body"] != comment_body:
+            gh(
+                "api", "--method", "PATCH",
+                f"repos/{repository}/issues/comments/{published['id']}",
+                "--input", "-", body=json.dumps({"body": comment_body}),
+            )
         if current["state"] == "closed":
             gh("issue", "reopen", number, "--repo", repository)
         print(f"Updated {issue.key}: {current['html_url']}")
@@ -403,6 +546,9 @@ def publish_issues(issues, repository):
 def report(reports, repository, run_url, scan_result, summary):
     findings, failures = collect_scans(reports, scan_result)
     issues = render_issues(findings, failures, run_url)
+    # Upstream prose must not forge the control markers added below.
+    for issue in issues:
+        issue.report = issue.report.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
     if findings:
         attach_review_state(issues, findings, repository)
     with summary.open("a") as output:
