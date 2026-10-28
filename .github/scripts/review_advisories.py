@@ -57,6 +57,13 @@ def prepare(repository, output, issue_number="", source_revision=""):
         state = review_state(published["body"] or "", tracking_key(issue["body"] or ""))
         if state is None:
             raise ValueError(f"Issue #{issue['number']} lacks dependency review metadata")
+        if not state["report_complete"]:
+            print(
+                f"Keeping issue #{issue['number']} queued: its scan evidence exceeds the report "
+                "size limit. Assess the complete scan artifacts manually.",
+                file=sys.stderr,
+            )
+            continue
         if source_revision and state["source_revision"] != source_revision:
             print(f"Skipping issue #{issue['number']}: its scan has already been superseded.")
             continue
@@ -91,7 +98,7 @@ def finalize(repository, queue):
         ):
             print(f"Keeping issue #{number} queued: the dependency finding changed during review.")
             continue
-        if not completed_review(comments, request):
+        if not current["report_complete"] or not completed_review(comments, request):
             incomplete.append(str(number))
             continue
         clear_queue(repository, number)

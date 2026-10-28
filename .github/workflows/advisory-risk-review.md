@@ -129,6 +129,8 @@ applicability JSON, versions, and advisory-payload digest in the queued report,
 not stale values from that initial snapshot. If the resolutions captured different
 advisory payloads, assess every snapshot and explain any differences. A live
 upstream advisory may have changed since the scan.
+Only complete reports are queued for automation. If the report has since become
+truncated or lacks captured scan evidence, use a no-op instead of posting an assessment.
 Analyze the library source at that entry's exact `source_revision`, using `git show` or GitHub
 file reads at that revision, not an unrelated current branch. Inspect the affected
 resolved dependency versions and direct/transitive callers, relevant Cargo features

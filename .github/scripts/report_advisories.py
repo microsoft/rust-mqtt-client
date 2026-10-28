@@ -15,6 +15,7 @@ import sys
 ADVISORY_CODES = {"vulnerability", "unsound", "unmaintained", "notice"}
 REPORT_START = "<!-- dependency-advisory-report:start -->"
 REPORT_END = "<!-- dependency-advisory-report:end -->"
+REPORT_LIMIT = 50000
 RESOLUTIONS = ("latest", "minimal")
 ADVISORY_LABEL = "dependency-advisory"
 ADVISORY_ISSUE_TYPE = "Task"
@@ -30,6 +31,7 @@ class Issue:
     title: str
     report: str
     review: dict | None = None
+    report_complete: bool = True
 
 
 def workflow_authored(item):
@@ -51,6 +53,8 @@ def from_review_workflow(body):
 
 
 def completed_review(comments, state):
+    if not state["report_complete"]:
+        return False
     for comment in comments:
         body = comment["body"]
         # Warn-mode comments can be published without a successful safety verdict.
@@ -97,6 +101,8 @@ def review_state(body, expected_key=None):
         raise ValueError("Invalid dependency review source revision")
     if not isinstance(state["advisory_key"], str):
         raise ValueError("Invalid dependency review advisory key")
+    if not isinstance(state["report_complete"], bool):
+        raise ValueError("Invalid dependency review report completeness")
     if expected_key is not None and state["advisory_key"] != expected_key:
         raise ValueError("Dependency review metadata does not match the tracking issue")
     return state
@@ -126,6 +132,7 @@ def attach_review_state(issues, findings, repository):
             "advisory_key": issue.key,
             "fingerprint": fingerprint,
             "source_revision": revision,
+            "report_complete": issue.report_complete,
         }
         state = json.dumps(issue.review, sort_keys=True, separators=(",", ":"))
         issue.report = (
@@ -368,14 +375,14 @@ def render_finding(key, occurrences, run_url):
             ])
             if advisory.get("url"):
                 lines.append(f"- **Upstream announcement/fix:** {advisory['url']}")
-            lines.extend(["", f"#### {advisory['title']}", "", bounded(advisory["description"])])
+            lines.extend(["", f"#### {advisory['title']}", "", advisory["description"]])
             references = advisory.get("references", [])
             if references:
                 lines.extend(["", "#### Upstream references", ""])
                 lines.extend(f"- {reference}" for reference in references)
             lines.extend([
                 "", "#### Applicability captured by this scan", "", "```json",
-                bounded(json.dumps(snapshot["applicability"], sort_keys=True, indent=2)), "```",
+                json.dumps(snapshot["applicability"], sort_keys=True, indent=2), "```",
             ])
     lines.extend(["", "### Affected resolutions and dependency paths", ""])
     for resolution, occurrence in occurrences:
@@ -386,7 +393,7 @@ def render_finding(key, occurrences, run_url):
             "Each indented parent depends on the package above it.",
             "",
             "```text",
-            bounded("\n\n".join("\n".join(graph_lines(graph)) for graph in occurrence["graphs"])),
+            "\n\n".join("\n".join(graph_lines(graph)) for graph in occurrence["graphs"]),
             "```",
             "",
         ])
@@ -396,7 +403,7 @@ def render_finding(key, occurrences, run_url):
         "An upstream patched version is remediation guidance, not an automatic "
         "requirement to raise this library's dependency floor."
     )
-    return Issue(key, title, bounded("\n".join(lines), limit=50000))
+    return Issue(key, title, "\n".join(lines))
 
 
 def render_issues(findings, failures, run_url):
@@ -414,6 +421,16 @@ def render_issues(findings, failures, run_url):
             f"[Workflow logs and available artifacts]({run_url})\n\n"
             "```text\n" + bounded("\n".join(failures)) + "\n```",
         ))
+    for issue in issues:
+        # Escape upstream control markers before measuring the published evidence.
+        issue.report = issue.report.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+        issue.report_complete = len(issue.report) <= REPORT_LIMIT
+        if not issue.report_complete:
+            issue.report = (
+                "> **Manual assessment required:** Complete scan evidence exceeds this comment's "
+                "size limit. Automated review is deferred; use the full scan artifacts linked below.\n\n"
+                + bounded(issue.report, limit=REPORT_LIMIT)
+            )
     return issues
 
 
@@ -570,9 +587,6 @@ def publish_issues(issues, repository):
 def report(reports, repository, run_url, scan_result, summary):
     findings, failures = collect_scans(reports, scan_result)
     issues = render_issues(findings, failures, run_url)
-    # Upstream prose must not forge the control markers added below.
-    for issue in issues:
-        issue.report = issue.report.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
     if findings:
         attach_review_state(issues, findings, repository)
     with summary.open("a") as output:
