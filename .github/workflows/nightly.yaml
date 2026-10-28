@@ -116,13 +116,28 @@ jobs:
         set -euo pipefail
         title="Nightly workflow failed"
         body="The scheduled nightly workflow failed. Run: ${RUN_URL}"
+        labels="$(
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/labels?per_page=100" \
+            --jq '.[][] | .name'
+        )"
+        if ! grep -Fxiq -- "ci-failure" <<<"${labels}"; then
+          gh label create "ci-failure" --repo "${GITHUB_REPOSITORY}" \
+            --color "b60205" --description "A CI check failed and needs investigation"
+        fi
+        if ! grep -Fxiq -- "workflow:nightly" <<<"${labels}"; then
+          gh label create "workflow:nightly" --repo "${GITHUB_REPOSITORY}" \
+            --color "1d76db" --description "Failure reported by the Nightly workflow"
+        fi
         number="$(
-          gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+          gh issue list --repo "${GITHUB_REPOSITORY}" --state open --type Bug \
             --json number,title \
             --jq "[.[] | select(.title == \"${title}\")][0].number // empty"
         )"
         if [ -n "${number}" ]; then
+          gh issue edit "${number}" --repo "${GITHUB_REPOSITORY}" \
+            --add-label "ci-failure" --add-label "workflow:nightly"
           gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
         else
-          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}" \
+            --type Bug --label "ci-failure" --label "workflow:nightly"
         fi
