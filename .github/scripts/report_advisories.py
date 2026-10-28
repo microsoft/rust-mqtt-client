@@ -315,7 +315,9 @@ def render_finding(key, occurrences, run_url):
         "",
         f"- **Dependency:** `{package['name']}`",
         f"- **Finding:** `{key}`",
-        f"- **Classification:** {fields['code']}",
+        "- **Classification:** " + ", ".join(sorted({
+            occurrence["code"] for _, occurrence in occurrences
+        })),
         "- **Resolved versions:** " + ", ".join(
             f"{resolution}: `{occurrence['graphs'][0]['Krate']['version']}`"
             for resolution, occurrence in occurrences
@@ -336,28 +338,45 @@ def render_finding(key, occurrences, run_url):
             "for a supported replacement; this is not itself a RustSec advisory.",
         ])
     else:
-        advisory = fields["advisory"]
         title = f"Dependency advisory requires triage: {key} ({package['name']})"
         lines.extend([
             f"- **Advisory:** [{key}](https://rustsec.org/advisories/{key})",
             "- **Database:** [RustSec advisory database]"
             "(https://github.com/RustSec/advisory-db)",
-            f"- **Advisory date:** {advisory['date']}",
-            f"- **Aliases:** {', '.join(advisory.get('aliases', [])) or 'None reported'}",
-            f"- **CVSS vector:** {advisory.get('cvss') or 'Not provided by the advisory'}",
-            f"- **Captured advisory payload SHA-256:** `{fields['advisory_snapshot']}`",
         ])
-        if advisory.get("url"):
-            lines.append(f"- **Upstream announcement/fix:** {advisory['url']}")
-        lines.extend(["", f"### {advisory['title']}", "", bounded(advisory["description"])])
-        references = advisory.get("references", [])
-        if references:
-            lines.extend(["", "### Upstream references", ""])
-            lines.extend(f"- {reference}" for reference in references)
-        lines.extend([
-            "", "### Applicability captured by this scan", "", "```json",
-            bounded(json.dumps(fields["applicability"], sort_keys=True, indent=2)), "```",
-        ])
+        snapshots = {}
+        for resolution, occurrence in occurrences:
+            snapshots.setdefault(occurrence["advisory_snapshot"], []).append((resolution, occurrence))
+        if len(snapshots) > 1:
+            lines.extend([
+                "",
+                "> These resolutions captured different advisory payloads. "
+                "Assess each snapshot below.",
+            ])
+        for captured in snapshots.values():
+            snapshot = captured[0][1]
+            advisory = snapshot["advisory"]
+            lines.extend([
+                "", "### Advisory snapshot: " + ", ".join(sorted({
+                    resolution for resolution, _ in captured
+                })), "",
+                f"- **Classification:** {snapshot['code']}",
+                f"- **Advisory date:** {advisory['date']}",
+                f"- **Aliases:** {', '.join(advisory.get('aliases', [])) or 'None reported'}",
+                f"- **CVSS vector:** {advisory.get('cvss') or 'Not provided by the advisory'}",
+                f"- **Captured advisory payload SHA-256:** `{snapshot['advisory_snapshot']}`",
+            ])
+            if advisory.get("url"):
+                lines.append(f"- **Upstream announcement/fix:** {advisory['url']}")
+            lines.extend(["", f"#### {advisory['title']}", "", bounded(advisory["description"])])
+            references = advisory.get("references", [])
+            if references:
+                lines.extend(["", "#### Upstream references", ""])
+                lines.extend(f"- {reference}" for reference in references)
+            lines.extend([
+                "", "#### Applicability captured by this scan", "", "```json",
+                bounded(json.dumps(snapshot["applicability"], sort_keys=True, indent=2)), "```",
+            ])
     lines.extend(["", "### Affected resolutions and dependency paths", ""])
     for resolution, occurrence in occurrences:
         root = occurrence["graphs"][0]["Krate"]
