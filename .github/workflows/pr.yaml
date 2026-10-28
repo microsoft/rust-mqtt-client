@@ -68,14 +68,14 @@ jobs:
         build-warnings: ''
 
     - name: Cache cargo build artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         shared-key: check
 
     # Install cargo subcommands AFTER the cache restore: Swatinem/rust-cache
     # caches ~/.cargo/bin, so a warm cache makes this a no-op.
     - name: Install cargo tooling
-      uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
       with:
         tool: cargo-machete,cargo-deny
 
@@ -125,7 +125,7 @@ jobs:
         build-warnings: ''
 
     - name: Cache cargo build artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         # `fuzz/` is a separate workspace with its own target/, so point the
         # cache at it explicitly and key it apart from the library builds.
@@ -189,7 +189,7 @@ jobs:
       run: rustup toolchain install ${{ matrix.rust }} --profile minimal
 
     - name: Cache cargo build artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         # `deps` is part of the key: latest and minimal builds produce
         # incompatible target/ artifacts and must not share a cache.
@@ -237,7 +237,7 @@ jobs:
         build-warnings: ''
 
     - name: Cache cargo build artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         # The `__network` feature builds a target the other jobs don't, so keep
         # its target/ separate from theirs.
@@ -277,14 +277,14 @@ jobs:
         build-warnings: ''
 
     - name: Cache cargo build artifacts
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         # Distinct from the `test` keys: instrumented builds must not share
         # target/ with them.
         shared-key: coverage
 
     - name: Install cargo tooling
-      uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
       with:
         tool: cargo-llvm-cov
 
@@ -293,7 +293,7 @@ jobs:
       run: make network-coverage BROKER=mosquitto
 
     - name: Upload coverage report
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: coverage-report
         path: target/llvm-cov/html
