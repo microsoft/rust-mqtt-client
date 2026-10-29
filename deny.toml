@@ -15,7 +15,9 @@ version = 2
 # Reviewed non-applicability exceptions must include a specific reason.
 # This evaluates resolved versions, not every version a consumer might select.
 yanked = "deny"
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2026-0386", reason = "This crate and its integrations do not call the affected Tokio AsyncFd constructors; the finding is a version match, not reachable API usage." },
+]
 
 [licenses]
 version = 2
