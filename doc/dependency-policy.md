@@ -85,21 +85,25 @@ The [automated Copilot assessment](../.github/workflows/advisory-risk-review.md)
 provides evidence and recommendations in an issue comment. It does not decide
 exceptions, change dependencies, or replace maintainer review.
 
-- New issue descriptions contain a short finding summary and space for maintainer
-  reasoning. The full scan report lives in one bot-owned comment, updated in place;
-  automation does not rewrite existing issue descriptions.
-- Use the current bot-owned scan comment, not any older snapshot in an issue
-  description, and inspect library source at the scanned revision. Consider every
-  distinct advisory snapshot captured by the two resolutions; current upstream
-  advisory text may differ from the captured evidence.
+- The initial issue description contains the full advisory report and space for
+  maintainer reasoning. Copilot adds a separate analysis comment; the scanner does
+  not add a comment duplicating the initial report or rewrite existing descriptions.
+- A materially changed finding adds a follow-up scan comment and reapplies the
+  `copilot-risk-review` label. Workflow completion starts the follow-up review,
+  because labels applied with `GITHUB_TOKEN` do not themselves trigger Actions.
+- Use the queued report URL: the initial issue description, or the latest follow-up
+  when the findings have changed. Inspect library source at that report's scanned
+  revision, which may precede the latest run if the relevant inputs are unchanged.
+  Consider every distinct advisory snapshot captured by the two resolutions;
+  current upstream advisory text may differ from the captured evidence.
 - Unchanged library source, resolved findings, and advisory data reuse the existing
   assessment. A new scan date or run link alone does not trigger reassessment.
   When those inputs meaningfully change, the assessment comment is replaced rather
-  than adding another assessment.
+  than adding another assessment. Historical scan-update comments remain intact.
 - Only reports with complete captured evidence are eligible for automated review.
   If evidence exceeds the report size limit, assess the full scan artifacts
   manually rather than accepting an assessment based on truncated evidence.
-- Missing scan comments remain pending for a scanner retry or manual review.
+- Missing generated reports remain pending for a scanner retry or manual review.
   Missing and oversized reports do not prevent other reviewable findings from
   being assessed.
 - Clear pending work only after a matching assessment from the trusted workflow

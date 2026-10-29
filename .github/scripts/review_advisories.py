@@ -21,7 +21,7 @@ def clear_queue(repository, number):
     gh("issue", "edit", str(number), "--repo", repository, "--remove-label", REVIEW_LABEL)
 
 
-def prepare(repository, output, issue_number="", source_revision=""):
+def prepare(repository, output, issue_number=""):
     if issue_number:
         if not issue_number.isdecimal() or int(issue_number) < 1:
             raise ValueError("Invalid issue number")
@@ -49,7 +49,7 @@ def prepare(repository, output, issue_number="", source_revision=""):
         published = current_scan(issue, comments)
         if published is None:
             print(
-                f"Keeping issue #{issue['number']} queued: its bot-owned scan report is missing. "
+                f"Keeping issue #{issue['number']} queued: its generated scan report is missing. "
                 "Rerun the scanner or review the issue manually.",
                 file=sys.stderr,
             )
@@ -63,9 +63,6 @@ def prepare(repository, output, issue_number="", source_revision=""):
                 "size limit. Assess the complete scan artifacts manually.",
                 file=sys.stderr,
             )
-            continue
-        if source_revision and state["source_revision"] != source_revision:
-            print(f"Skipping issue #{issue['number']}: its scan has already been superseded.")
             continue
         if completed_review(comments, state):
             clear_queue(repository, issue["number"])
@@ -115,13 +112,12 @@ def main():
     parser.add_argument("--repository", required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--issue-number", default="")
-    parser.add_argument("--source-revision", default="")
     args = parser.parse_args()
     try:
         if args.operation == "prepare":
             if args.output is None:
                 raise ValueError("--output is required for prepare")
-            prepare(args.repository, args.output, args.issue_number, args.source_revision)
+            prepare(args.repository, args.output, args.issue_number)
         else:
             finalize(args.repository, json.loads(os.environ["REVIEW_QUEUE"]))
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
