@@ -85,6 +85,6 @@ check:
 	cargo machete
 	# Advisories are deliberately excluded here: they depend on the RustSec
 	# database (which updates independently of our code) and so belong in the
-	# scheduled `nightly` workflow, not the deterministic PR gate. bans,
+	# scheduled `Dependency advisories` workflow, not the deterministic PR gate. bans,
 	# licenses, and sources only change when our dependencies do.
 	cargo deny check bans licenses sources

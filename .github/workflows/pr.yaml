@@ -7,7 +7,7 @@
 #      A failure here should always be actionable by the PR author. Anything
 #      that can go red because the *outside world moved* (new compiler
 #      releases, freshly published advisories, dependency drift on unpinned
-#      transitive versions) lives in `nightly.yaml` instead, so it never blocks
+#      transitive versions) lives in `nightly.yaml` or `advisories.yaml`, so it never blocks
 #      an unrelated PR. Concretely: MSRV + stable are gated; beta/nightly
 #      toolchains and advisory-DB scans are not.
 #

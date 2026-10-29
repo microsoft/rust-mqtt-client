@@ -5,19 +5,16 @@
 #   1. Gate vs. nightly. This workflow owns everything that can go red because
 #      the *outside world moved* rather than because our code changed -- so it
 #      must not gate PRs. That includes: toolchains beyond MSRV+stable (beta and
-#      nightly, to get early warning of future breakage), security-advisory
-#      scans (the RustSec DB updates daily, independent of our source), and
-#      external documentation links (third-party sites can change or go down). Since a
-#      scheduled run has no PR to turn red, the `notify` job opens a tracking
-#      issue on failure. Deterministic, code-caused checks belong in the gate,
-#      not here.
+#      nightly, to get early warning of future breakage) and external documentation
+#      links (third-party sites can change or go down). Dependency advisories have
+#      their own workflow (`advisories.yaml`) so triage cannot obscure test failures.
+#      Since a scheduled run has no PR to turn red, the `notify` job opens a tracking
+#      issue on failure. Deterministic, code-caused checks belong in the gate.
 #
 #   2. Static analysis vs. running tests. Same split as the gate: static
 #      analysis is a single-toolchain concern and is NOT re-run per toolchain
 #      here. What this workflow adds is running the tests against *more*
-#      versions than the gate can hold stable -- extra toolchains, plus
-#      advisory scans against both the latest and minimal dependency
-#      resolutions.
+#      versions than the gate can hold stable -- extra toolchains.
 
 name: 'Nightly'
 
@@ -84,54 +81,6 @@ jobs:
         RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
       run: make -j test
 
-  # Re-check the security advisory database against its latest state. The DB
-  # updates daily independent of our code, so this belongs on a schedule rather
-  # than the PR gate.
-  #
-  # Run against both dependency resolutions:
-  # - `latest`  : are the newest compatible versions free of known advisories?
-  # - `minimal` : do our declared *lower bounds* drag a floor-pinning consumer
-  #   onto a version with a known vulnerability? The default (latest) scan
-  #   can't answer this -- it checks the most-likely-patched end of our ranges.
-  advisories:
-    name: Security advisories (${{ matrix.deps }} deps)
-    runs-on: 'ubuntu-24.04'
-    timeout-minutes: 10
-
-    strategy:
-      fail-fast: false
-      matrix:
-        deps: ["latest", "minimal"]
-
-    steps:
-    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
-
-    - name: Setup Rust (pinned via rust-toolchain.toml)
-      uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-      with:
-        cache: false
-        # No global warning-denial (see the `test` job above).
-        rustflags: ''
-        build-warnings: ''
-
-    # Nightly is needed only to run the unstable `-Z direct-minimal-versions`
-    # resolver (minimal leg only); it never compiles code.
-    - name: Install nightly Rust (for the minimal-versions resolver)
-      if: matrix.deps == 'minimal'
-      run: rustup toolchain install nightly --profile minimal
-
-    - name: Install cargo tooling
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
-      with:
-        tool: cargo-deny
-
-    - name: Resolve direct dependencies to their minimum versions
-      if: matrix.deps == 'minimal'
-      run: cargo +nightly generate-lockfile -Z direct-minimal-versions
-
-    - name: Check advisories
-      run: cargo deny check advisories
-
   links:
     name: Documentation links (online)
     runs-on: 'ubuntu-24.04'
@@ -151,7 +100,7 @@ jobs:
   # failures are neutralized by continue-on-error above and won't reach here.
   notify:
     name: Report failure
-    needs: [test, advisories, links]
+    needs: [test, links]
     if: failure()
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
@@ -168,13 +117,28 @@ jobs:
         set -euo pipefail
         title="Nightly workflow failed"
         body="The scheduled nightly workflow failed. Run: ${RUN_URL}"
+        labels="$(
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/labels?per_page=100" \
+            --jq '.[].name'
+        )"
+        if ! grep -Fxiq -- "ci-failure" <<<"${labels}"; then
+          gh label create "ci-failure" --repo "${GITHUB_REPOSITORY}" \
+            --color "b60205" --description "A CI check failed and needs investigation"
+        fi
+        if ! grep -Fxiq -- "workflow:nightly" <<<"${labels}"; then
+          gh label create "workflow:nightly" --repo "${GITHUB_REPOSITORY}" \
+            --color "1d76db" --description "Failure reported by the Nightly workflow"
+        fi
         number="$(
-          gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+          gh issue list --repo "${GITHUB_REPOSITORY}" --state open --type Bug \
             --json number,title \
             --jq "[.[] | select(.title == \"${title}\")][0].number // empty"
         )"
         if [ -n "${number}" ]; then
+          gh issue edit "${number}" --repo "${GITHUB_REPOSITORY}" \
+            --add-label "ci-failure" --add-label "workflow:nightly"
           gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
         else
-          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+          gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}" \
+            --type Bug --label "ci-failure" --label "workflow:nightly"
         fi

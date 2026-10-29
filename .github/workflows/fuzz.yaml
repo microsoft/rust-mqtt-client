@@ -6,7 +6,7 @@
 #     non-deterministic and open-ended (no "pass" state), so it can't gate a PR.
 #     The gate only *compile-checks* the fuzz targets (the `fuzz` job there).
 #   - `nightly.yaml` owns things that go red because the *outside world moved*
-#     (new compilers, freshly-published advisories, dependency drift). A fuzz
+#     (new compilers, dependency drift); `advisories.yaml` owns RustSec triage. A fuzz
 #     crash is the opposite: a bug in OUR decoder, i.e. CODE-caused. It's
 #     scheduled-not-gated only because it's non-deterministic and expensive.
 #
