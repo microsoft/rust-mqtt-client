@@ -720,7 +720,7 @@ pub struct ConnAckProperties {
     pub server_keep_alive: Option<KeepAlive>,
     pub response_information: Option<String>,
     pub server_reference: Option<String>,
-    // pub authentication_info: Option<AuthenticationInfo>, // TODO: Add auth support
+    pub authentication_info: Option<AuthenticationInfo>,
 }
 
 impl Default for ConnAckProperties {
@@ -741,6 +741,7 @@ impl Default for ConnAckProperties {
             server_keep_alive: None,
             response_information: None,
             server_reference: None,
+            authentication_info: None,
         }
     }
 }
@@ -770,6 +771,7 @@ where
             server_keep_alive: value.server_keep_alive,
             response_information: value.response_information.map(|s| s.to_string()),
             server_reference: value.server_reference.map(|s| s.to_string()),
+            authentication_info: value.authentication.map(Into::into),
         }
     }
 }
@@ -777,6 +779,7 @@ where
 impl<S> From<ConnAckProperties> for mqtt_proto::ConnAckOtherProperties<S>
 where
     S: Shared,
+    for<'a> &'a [u8]: Into<BinaryData<S>>,
     for<'a> &'a str: Into<ByteStr<S>>,
 {
     fn from(cap: ConnAckProperties) -> Self {
@@ -796,7 +799,7 @@ where
             server_keep_alive: cap.server_keep_alive,
             response_information: cap.response_information.as_deref().map(Into::into),
             server_reference: cap.server_reference.as_deref().map(Into::into),
-            authentication: None, // TODO: Add auth support
+            authentication: cap.authentication_info.map(Into::into),
         }
     }
 }
@@ -2147,6 +2150,10 @@ mod test {
                 server_keep_alive: Some(KeepAlive::Duration(NonZeroU16::new(30).unwrap())),
                 response_information: Some("response info".to_string()),
                 server_reference: Some("server ref".to_string()),
+                authentication_info: Some(packet::AuthenticationInfo {
+                    method: "authmethod".to_string(),
+                    data: Some("authdata".into()),
+                }),
             },
         },
         mqtt_proto::ConnAck {
@@ -2172,8 +2179,29 @@ mod test {
                 server_keep_alive: Some(KeepAlive::Duration(NonZeroU16::new(30).unwrap())),
                 response_information: Some("response info".into()),
                 server_reference: Some("server ref".into()),
-                authentication: None, // TODO: add support
+                authentication: Some(mqtt_proto::Authentication {
+                    method: "authmethod".into(),
+                    data: Some(b"authdata".into()),
+                }),
             },
+        }
+    );
+
+    test_property_conversions!(
+        connack_authentication_method_only,
+        packet::ConnAckProperties {
+            authentication_info: Some(packet::AuthenticationInfo {
+                method: "authmethod".to_string(),
+                data: None,
+            }),
+            ..Default::default()
+        },
+        mqtt_proto::ConnAckOtherProperties::<Bytes> {
+            authentication: Some(mqtt_proto::Authentication {
+                method: "authmethod".into(),
+                data: None,
+            }),
+            ..Default::default()
         }
     );
 
