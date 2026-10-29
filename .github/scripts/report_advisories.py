@@ -13,8 +13,6 @@ import sys
 
 
 ADVISORY_CODES = {"vulnerability", "unsound", "unmaintained", "notice"}
-REPORT_START = "<!-- dependency-advisory-report:start -->"
-REPORT_END = "<!-- dependency-advisory-report:end -->"
 REPORT_LIMIT = 50000
 RESOLUTIONS = ("latest", "minimal")
 ADVISORY_LABEL = "dependency-advisory"
@@ -436,11 +434,17 @@ def render_issues(findings, failures, run_url):
 
 def issue_body(issue, repository):
     marker = f"<!-- dependency-advisory:{issue.key} -->"
+    summary = (
+        "The dependency advisory scan did not complete successfully."
+        if issue.key == "scan-failure"
+        else f"Dependency finding `{issue.key}` requires applicability review; "
+        "it is not confirmation that this library is exploitable."
+    )
     body = (
-        f"{marker}\n"
-        "> Initial scan snapshot. Subsequent scans update a bot-owned comment below; "
+        f"{marker}\n{summary}\n\n"
+        "The full scan report and workflow artifacts are in the bot-owned comment below. "
+        "Subsequent scans update that comment; "
         "this issue body is not rewritten.\n\n"
-        f"{REPORT_START}\n{issue.report}\n{REPORT_END}\n\n"
     )
     if issue.key == "scan-failure":
         return body + (
