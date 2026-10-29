@@ -438,7 +438,7 @@ def issue_body(issue, repository):
     marker = f"<!-- dependency-advisory:{issue.key} -->"
     body = (
         f"{marker}\n"
-        "> Initial scan snapshot. Subsequent scans update a bot-owned comment below; "
+        "> Initial scan report. Material changes are reported in follow-up comments; "
         "this issue body is not rewritten.\n\n"
         f"{REPORT_START}\n{issue.report}\n{REPORT_END}\n\n"
     )
@@ -458,8 +458,8 @@ def issue_body(issue, repository):
         "with a specific reason.\n"
         "- [ ] Confirm the expected result in a subsequent scan before closing.\n\n"
         "**Assessment / resolution:**\n\n"
-        "Keep maintainer reasoning here; refreshed automated reports appear in a "
-        "separate bot-owned comment.\n\n"
+        "Keep maintainer reasoning here. Changed scan findings and Copilot analysis "
+        "appear in separate comments below.\n\n"
         "Do not disclose newly discovered vulnerabilities in public comments. "
         f"Follow the [security policy](https://github.com/{repository}/blob/main/SECURITY.md).\n"
     )
@@ -493,9 +493,19 @@ def current_scan(issue, comments):
         comment for comment in comments
         if workflow_authored(comment) and (comment["body"] or "").startswith(marker)
     ]
-    if len(reports) > 1:
-        raise ValueError(f"Multiple automated scan comments match {key}")
-    return reports[0] if reports else None
+    published = max(
+        reports, key=lambda comment: (comment["created_at"], comment["id"]),
+    ) if reports else issue
+    body = published["body"] or ""
+    if REPORT_START in body or REPORT_END in body:
+        match = re.search(
+            re.escape(REPORT_START) + r"\n(.*?)\n" + re.escape(REPORT_END),
+            body, re.DOTALL,
+        )
+        if match is None:
+            raise ValueError(f"Invalid generated scan report for {key}")
+        return {**published, "body": match.group(1)}
+    return published if reports else None
 
 
 def ensure_review_labels(repository):
@@ -556,27 +566,29 @@ def publish_issues(issues, repository):
         number = str(current["number"])
         comments = issue_comments(repository, number)
         published = current_scan(current, comments)
+        changed = published is None or published["body"].strip() != issue.report.strip()
+        state = issue.review
+        if issue.review and published is not None:
+            previous = review_state(published["body"], issue.key)
+            changed = previous is None or previous["fingerprint"] != issue.review["fingerprint"]
+            if not changed:
+                state = previous
         # Queue the work before publishing its fingerprint so interrupted updates can retry.
         if issue.review:
             updates = ["--add-label", ADVISORY_LABEL]
-            if not completed_review(comments, issue.review):
+            if changed or not completed_review(comments, state):
                 updates.extend(["--add-label", REVIEW_LABEL])
             gh("issue", "edit", number, "--repo", repository, *updates)
-        comment_body = (
-            f"{scan_comment_marker(issue.key)}\n"
-            "## Latest automated dependency scan\n\n"
-            "This comment is maintained by automation. Keep maintainer notes in the "
-            f"issue description.\n\n{issue.report}"
-        )
-        if published is None:
+        if changed:
+            comment_body = (
+                f"{scan_comment_marker(issue.key)}\n"
+                "## Updated dependency finding\n\n"
+                "This report supersedes the earlier scan details. Keep maintainer "
+                "notes in the issue description.\n\n"
+                f"{REPORT_START}\n{issue.report}\n{REPORT_END}"
+            )
             gh(
                 "api", "--method", "POST", f"repos/{repository}/issues/{number}/comments",
-                "--input", "-", body=json.dumps({"body": comment_body}),
-            )
-        elif published["body"] != comment_body:
-            gh(
-                "api", "--method", "PATCH",
-                f"repos/{repository}/issues/comments/{published['id']}",
                 "--input", "-", body=json.dumps({"body": comment_body}),
             )
         if current["state"] == "closed":
