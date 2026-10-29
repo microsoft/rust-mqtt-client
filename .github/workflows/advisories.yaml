@@ -27,9 +27,6 @@ jobs:
     name: Scan (${{ matrix.deps }} dependencies)
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
-    env:
-      REPORT_DIR: ${{ runner.temp }}/dependency-advisories-${{ matrix.deps }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +34,11 @@ jobs:
 
     steps:
     - name: Prepare report directory
-      run: mkdir -p "$REPORT_DIR"
+      env:
+        REPORT_DIR: ${{ runner.temp }}/dependency-advisories-${{ matrix.deps }}
+      run: |
+        mkdir -p "$REPORT_DIR"
+        printf 'REPORT_DIR=%s\n' "$REPORT_DIR" >> "$GITHUB_ENV"
 
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
 
