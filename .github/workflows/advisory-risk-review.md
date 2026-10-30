@@ -18,6 +18,7 @@ on:
   status-comment: false
 if: &trusted-trigger >-
   (github.event_name == 'workflow_run' &&
+   github.event.workflow_run.event != 'pull_request' &&
    github.event.workflow_run.head_repository.full_name == github.repository &&
    github.event.workflow_run.head_branch == github.event.repository.default_branch &&
    github.event.workflow_run.conclusion != 'cancelled') ||
