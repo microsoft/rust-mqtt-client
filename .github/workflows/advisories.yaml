@@ -119,6 +119,20 @@ jobs:
         echo "cargo-deny exited with status $status; full diagnostics are in the scan artifact."
         exit "$status"
 
+    - name: Verify scan completeness
+      run: |
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+        import sys
+
+        sys.path.insert(0, ".github/scripts")
+        from report_advisories import read_scan
+
+        read_scan(Path(os.environ["REPORT_DIR"]))
+        print("Advisory scan report is complete.")
+        PY
+
     - name: Upload scan report
       if: always() && !cancelled()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -173,8 +187,7 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
-    permissions:
-      contents: read
+    permissions: {}
 
     steps:
     - name: Require the applicable matrix result
@@ -199,36 +212,3 @@ jobs:
             exit 1
             ;;
         esac
-
-    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
-      if: needs.changes.outputs.scan_required == 'true'
-      with:
-        persist-credentials: false
-
-    - name: Download validation reports
-      if: needs.changes.outputs.scan_required == 'true'
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-      with:
-        pattern: dependency-advisories-*
-        path: ${{ runner.temp }}/advisory-validation
-
-    - name: Verify complete clean reports
-      if: needs.changes.outputs.scan_required == 'true'
-      env:
-        REPORTS: ${{ runner.temp }}/advisory-validation
-      run: |
-        python3 - <<'PY'
-        import os
-        from pathlib import Path
-        import sys
-
-        sys.path.insert(0, ".github/scripts")
-        from report_advisories import collect_scans
-
-        findings, failures = collect_scans(Path(os.environ["REPORTS"]), "success")
-        if failures:
-            raise SystemExit("Incomplete advisory validation: " + "; ".join(failures))
-        if findings:
-            raise SystemExit("Unhandled dependency findings: " + ", ".join(sorted(findings)))
-        print("Both scan reports are complete and contain no unhandled findings.")
-        PY

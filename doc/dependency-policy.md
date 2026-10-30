@@ -53,7 +53,8 @@ findings as before.
 
 The final check always runs on PRs. When neither input file changed, it succeeds
 without running the matrix. Otherwise, detection and both matrix legs must
-succeed, and both uploaded reports must pass the existing completeness checks.
+succeed. Each scan verifies its report with the existing completeness checks
+before uploading artifacts; the final check only inspects the job outcomes.
 Skipped, cancelled, failed, or incomplete required scans do not pass validation.
 Before closing an advisory through a remediation or exception PR, link a passing
 run at its latest head; ordinary PR tests or a local latest-only scan are not a
