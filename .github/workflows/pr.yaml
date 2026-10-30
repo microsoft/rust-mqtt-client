@@ -9,7 +9,8 @@
 #      releases, freshly published advisories, dependency drift on unpinned
 #      transitive versions) lives in `nightly.yaml` or `advisories.yaml`, so it never blocks
 #      an unrelated PR. Concretely: MSRV + stable are gated; beta/nightly
-#      toolchains and advisory-DB scans are not.
+#      toolchains are not. `advisories.yaml` gates advisory-DB scans only for
+#      PRs changing Cargo.toml or deny.toml.
 #
 #   2. Static analysis vs. running tests. All static analysis (rustfmt, clippy,
 #      cargo-deny, cargo-machete -- via `make check`) runs on the SINGLE pinned

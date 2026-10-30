@@ -3,14 +3,16 @@
 name: 'Dependency advisories'
 
 on:
+  # Keep a required check present even when no advisory scan is needed.
+  pull_request:
   schedule:
     - cron: '30 11 * * *'   # Daily, staggered after Nightly and before Fuzz.
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}
-  # Let issue creation finish before another run lists existing tracking issues.
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Superseded PRs can stop; issue-reporting runs must finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -23,8 +25,43 @@ defaults:
     shell: bash
 
 jobs:
+  changes:
+    name: Determine advisory scan requirements
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+    outputs:
+      scan_required: ${{ steps.changes.outputs.scan_required }}
+
+    steps:
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Compare advisory inputs
+      id: changes
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          changed_files="$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" -- Cargo.toml deny.toml)"
+          if [ -n "$changed_files" ]; then
+            echo "Full advisory matrix required: $changed_files"
+            echo "scan_required=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Cargo.toml and deny.toml are unchanged; the full matrix is not required."
+            echo "scan_required=false" >> "$GITHUB_OUTPUT"
+          fi
+        else
+          echo "scan_required=true" >> "$GITHUB_OUTPUT"
+        fi
+
   scan:
     name: Scan (${{ matrix.deps }} dependencies)
+    needs: changes
+    if: needs.changes.outputs.scan_required == 'true'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
     strategy:
@@ -41,6 +78,9 @@ jobs:
         printf 'REPORT_DIR=%s\n' "$REPORT_DIR" >> "$GITHUB_ENV"
 
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
 
     - name: Setup Rust (pinned via rust-toolchain.toml)
       uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
@@ -91,7 +131,7 @@ jobs:
   report:
     name: Report dependency findings
     needs: scan
-    if: always() && !cancelled()
+    if: always() && !cancelled() && github.event_name != 'pull_request'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     # Share the lock with Copilot's queue readers/writers, not just other scan runs.
@@ -126,3 +166,69 @@ jobs:
           --run-url "$RUN_URL" \
           --scan-result "$SCAN_RESULT" \
           --summary "$GITHUB_STEP_SUMMARY"
+
+  validation:
+    name: Dependency advisory validation
+    needs: [changes, scan]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+    - name: Require the applicable matrix result
+      env:
+        DETECTION_RESULT: ${{ needs.changes.result }}
+        SCAN_REQUIRED: ${{ needs.changes.outputs.scan_required }}
+        SCAN_RESULT: ${{ needs.scan.result }}
+      run: |
+        if [ "$DETECTION_RESULT" != "success" ]; then
+          echo "::error::Advisory input detection did not succeed."
+          exit 1
+        fi
+        case "$SCAN_REQUIRED:$SCAN_RESULT" in
+          false:skipped)
+            echo "Cargo.toml and deny.toml are unchanged; the full matrix is not required."
+            ;;
+          true:success)
+            echo "Both latest and minimum-direct advisory scans passed."
+            ;;
+          *)
+            echo "::error::Advisory matrix did not pass: required=$SCAN_REQUIRED, result=$SCAN_RESULT."
+            exit 1
+            ;;
+        esac
+
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+      if: needs.changes.outputs.scan_required == 'true'
+      with:
+        persist-credentials: false
+
+    - name: Download validation reports
+      if: needs.changes.outputs.scan_required == 'true'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        pattern: dependency-advisories-*
+        path: ${{ runner.temp }}/advisory-validation
+
+    - name: Verify complete clean reports
+      if: needs.changes.outputs.scan_required == 'true'
+      env:
+        REPORTS: ${{ runner.temp }}/advisory-validation
+      run: |
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+        import sys
+
+        sys.path.insert(0, ".github/scripts")
+        from report_advisories import collect_scans
+
+        findings, failures = collect_scans(Path(os.environ["REPORTS"]), "success")
+        if failures:
+            raise SystemExit("Incomplete advisory validation: " + "; ".join(failures))
+        if findings:
+            raise SystemExit("Unhandled dependency findings: " + ", ".join(sorted(findings)))
+        print("Both scan reports are complete and contain no unhandled findings.")
+        PY
