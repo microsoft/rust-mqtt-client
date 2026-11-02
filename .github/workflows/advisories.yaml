@@ -5,6 +5,7 @@ name: 'Dependency advisories'
 on:
   # Keep a required check present even when no advisory scan is needed.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   schedule:
     - cron: '30 11 * * *'   # Daily, staggered after Nightly and before Fuzz.
   workflow_dispatch:
