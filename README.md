@@ -1,6 +1,7 @@
 # Microsoft MQTT client
 
-[![Build](https://img.shields.io/github/actions/workflow/status/microsoft/rust-mqtt-client/pr.yaml?branch=main&label=build)](https://github.com/microsoft/rust-mqtt-client/actions/workflows/pr.yaml)
+[![Build](https://img.shields.io/github/actions/workflow/status/microsoft/rust-mqtt-client/nightly.yaml?branch=main&event=schedule&label=Build)](https://github.com/microsoft/rust-mqtt-client/actions/workflows/nightly.yaml?query=branch%3Amain+event%3Aschedule)
+[![Interop](https://img.shields.io/github/actions/workflow/status/microsoft/rust-mqtt-client/network.yaml?branch=main&event=schedule&label=Interop)](https://github.com/microsoft/rust-mqtt-client/actions/workflows/network.yaml?query=branch%3Amain+event%3Aschedule)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](Cargo.toml)
 
