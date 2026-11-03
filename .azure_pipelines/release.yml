@@ -6,8 +6,9 @@
 #   below. Define ESRP_SERVICE_CONNECTION, ESRP_KEYVAULT_NAME,
 #   ESRP_SIGN_CERT_NAME, ESRP_CLIENT_ID, ESRP_OWNERS, ESRP_APPROVERS, and
 #   ESRP_DOMAIN_TENANT_ID before creating this pipeline definition.
-# - Production publication is queued from main. The commit must already have a
-#   v<Cargo version> tag (for example, v0.1.0).
+# - Production publication is queued from main or release/*. The commit must
+#   already have a v<Cargo version> tag (for example, v0.1.0 or
+#   v0.2.0-rc.1).
 
 trigger: none
 pr: none
@@ -80,8 +81,8 @@ extends:
                   set -euo pipefail
 
                   source_branch="$(Build.SourceBranch)"
-                  if [[ "$source_branch" != refs/heads/main ]]; then
-                    echo "##vso[task.logissue type=error]Publishing is allowed only from refs/heads/main."
+                  if [[ "$source_branch" != refs/heads/main && "$source_branch" != refs/heads/release/* ]]; then
+                    echo "##vso[task.logissue type=error]Publishing is allowed only from refs/heads/main or refs/heads/release/*."
                     exit 1
                   fi
 
