@@ -94,7 +94,7 @@ jobs:
       run: rustup toolchain install nightly --profile minimal
 
     - name: Install cargo-deny
-      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
       with:
         # The reporter consumes this version's structured diagnostics.
         tool: cargo-deny@0.20.2
@@ -162,7 +162,7 @@ jobs:
       id: checkout
 
     - name: Download scan reports
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         pattern: dependency-advisories-*
         path: ${{ runner.temp }}/advisory-reports
