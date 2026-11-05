@@ -13,10 +13,12 @@ version = 2
 # Unhandled advisories fail the standalone Dependency advisories workflow, not Nightly.
 # A finding requires applicability triage, not an automatic dependency-floor bump.
 # Reviewed non-applicability exceptions must include a specific reason.
+# Exceptions are scoped to advisory IDs, not entire crates.
 # This evaluates resolved versions, not every version a consumer might select.
 yanked = "deny"
 ignore = [
     { id = "RUSTSEC-2026-0386", reason = "This crate and its integrations do not call the affected Tokio AsyncFd constructors; the finding is a version match, not reachable API usage." },
+    { id = "RUSTSEC-2026-0441", reason = "Unmaintained-only advisory for transitive pin-utils via supported futures-util 0.3.31; no vulnerability is described, and newer compatible futures-util releases remove the dependency." },
 ]
 
 [licenses]
