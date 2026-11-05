@@ -55,6 +55,9 @@ jobs:
     steps:
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
 
+    - name: Test GitHub issue synchronization adapter
+      run: python3 -B -m unittest discover -s .github/scripts -p 'test_issue_to_ado.py'
+
     - name: Setup Rust (pinned via rust-toolchain.toml)
       uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:

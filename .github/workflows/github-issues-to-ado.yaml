@@ -1,0 +1,89 @@
+name: 'GitHub Bugs to Azure Boards'
+
+on:
+  issues:
+    types: [opened, edited, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    if: github.event.action != 'opened' || github.event.issue.type.name == 'Bug'
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+    environment: ado-bug-sync
+    concurrency:
+      group: ado-bug-sync-${{ github.event.issue.number }}
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: read
+      id-token: write
+    env:
+      ADO_ORGANIZATION: msazure
+      ADO_PROJECT: One
+      ADO_PARENT_ID: '34702979'
+
+    steps:
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Validate federation configuration
+      env:
+        AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+        AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      run: |
+        if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ]; then
+          echo "::error::Set AZURE_CLIENT_ID and AZURE_TENANT_ID in the ado-bug-sync environment."
+          exit 1
+        fi
+
+    - name: Sign in with workload identity federation
+      uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+      with:
+        client-id: ${{ vars.AZURE_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_TENANT_ID }}
+        allow-no-subscriptions: true
+
+    - name: Acquire Azure DevOps token
+      id: ado-token
+      run: |
+        token="$(az account get-access-token \
+          --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+          --query accessToken --output tsv)"
+        if [ -z "$token" ]; then
+          echo "::error::Azure DevOps token acquisition returned an empty token."
+          exit 1
+        fi
+        printf '::add-mask::%s\n' "$token"
+        printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
+
+    - name: Check synchronization eligibility
+      id: prepare
+      env:
+        ADO_TOKEN: ${{ steps.ado-token.outputs.token }}
+      run: python3 -B .github/scripts/issue_to_ado.py prepare
+
+    - name: Synchronize the Bug
+      if: steps.prepare.outputs.sync == 'true'
+      uses: danhellem/github-actions-issue-to-work-item@70e94b931901465f5550532c7a061b0d103b4b10
+      env:
+        ado_token: ${{ steps.ado-token.outputs.token }}
+        ado_organization: ${{ env.ADO_ORGANIZATION }}
+        ado_project: ${{ env.ADO_PROJECT }}
+        ado_area_path: ${{ steps.prepare.outputs.area_path }}
+        ado_wit: Bug
+        ado_new_state: New
+        ado_close_state: Done
+        log_level: '100'
+
+    - name: Attach the Bug to its parent
+      if: steps.prepare.outputs.sync == 'true'
+      env:
+        ADO_SYNC_CONTEXT: ${{ steps.prepare.outputs.context_path }}
+        ADO_TOKEN: ${{ steps.ado-token.outputs.token }}
+        GH_TOKEN: ${{ github.token }}
+      run: python3 -B .github/scripts/issue_to_ado.py complete
