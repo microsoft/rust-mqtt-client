@@ -155,7 +155,8 @@ pub enum KeepAliveConfig {
     Duration {
         /// Keep-alive interval in seconds, as encoded in the MQTT CONNECT packet.
         ping_after: NonZeroU16,
-        /// Maximum time to wait for PINGRESP before ending the connection.
+        /// Maximum time to wait for PINGRESP after the first unanswered PINGREQ.
+        /// Later PINGREQs do not extend this deadline.
         response_timeout: Duration,
     },
 }
@@ -1076,6 +1077,7 @@ impl Connection {
                     while let Some(packet) = op_packet {
                         if let Packet::PingReq(_) = &packet
                             && let Some(timeout) = self.cfg_pingresp_timeout
+                            && pingresp_timer.is_none()
                         {
                             pingresp_timer = Some(Timer::new(timeout));
                         }
