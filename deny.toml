@@ -19,6 +19,7 @@ yanked = "deny"
 ignore = [
     { id = "RUSTSEC-2026-0386", reason = "This crate and its integrations do not call the affected Tokio AsyncFd constructors; the finding is a version match, not reachable API usage." },
     { id = "RUSTSEC-2026-0441", reason = "Unmaintained-only advisory for transitive pin-utils via supported futures-util 0.3.31; no vulnerability is described, and newer compatible futures-util releases remove the dependency." },
+    { id = "RUSTSEC-2026-0463", reason = "This crate uses OpenSSL only for TLS and Base64 proxy authorization; it does not call openssl::aes::unwrap_key or expose that API, so the vulnerable function is not reachable through this library." },
 ]
 
 [licenses]
