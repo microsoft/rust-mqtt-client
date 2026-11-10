@@ -2,18 +2,23 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import argparse
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-from urllib.error import HTTPError, URLError
+import tempfile
+from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
 PARENT_RELATION = "System.LinkTypes.Hierarchy-Reverse"
+GITHUB_REPOSITORY = "microsoft/rust-mqtt-client"
+GITHUB_REPOSITORY_ID = 1013299075
+ACTION_REPOSITORY = "https://github.com/danhellem/github-actions-issue-to-work-item.git"
+ACTION_REVISION = "70e94b931901465f5550532c7a061b0d103b4b10"
+SUPPORTED_ACTIONS = {"opened", "edited", "closed"}
 
 
 class AzureDevOps:
@@ -46,16 +51,59 @@ class AzureDevOps:
 
 
 def load_issue(event):
-    result = subprocess.run(
-        [
-            "gh", "api",
-            f"repos/{event['repository']['full_name']}/issues/{event['issue']['number']}",
-        ],
-        check=True,
-        stdout=subprocess.PIPE,
-        text=True,
+    number = event["issue"]["number"]
+    request = Request(
+        f"https://api.github.com/repos/{GITHUB_REPOSITORY}/issues/{number}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "rust-mqtt-client-issue-sync",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
     )
-    return json.loads(result.stdout)
+    try:
+        with urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except HTTPError as error:
+        raise RuntimeError(
+            f"GitHub issue #{number} refresh failed: HTTP {error.code} {error.reason}. "
+            "Resolve API access or rate limiting before retrying the pipeline."
+        ) from error
+
+
+def validate_repository(event):
+    repository = event.get("repository")
+    if not isinstance(repository, dict) or (
+        repository.get("id") != GITHUB_REPOSITORY_ID
+        or repository.get("full_name") != GITHUB_REPOSITORY
+        or repository.get("name") != GITHUB_REPOSITORY.split("/")[1]
+    ):
+        raise ValueError("The webhook must come from the expected immutable GitHub repository")
+
+
+def webhook_event():
+    repository = os.environ["WEBHOOK_REPOSITORY"]
+    owner, name = repository.split("/")
+    event = {
+        "repository": {
+            "id": int(os.environ["WEBHOOK_REPOSITORY_ID"]),
+            "name": name,
+            "full_name": repository,
+            "html_url": f"https://github.com/{repository}",
+            "owner": {"login": owner},
+        },
+        "sender": {"login": os.environ["WEBHOOK_SENDER"]},
+    }
+    validate_repository(event)
+    if os.environ.get("WEBHOOK_PING_ID") and not os.environ["WEBHOOK_ACTION"]:
+        return None
+    number = int(os.environ["WEBHOOK_ISSUE_NUMBER"])
+    event["action"] = os.environ["WEBHOOK_ACTION"]
+    event["issue"] = {
+        "number": number,
+        "html_url": f"https://github.com/{repository}/issues/{number}",
+        "type": {"name": os.environ["WEBHOOK_ISSUE_TYPE"]},
+    }
+    return event
 
 
 def find_item(ado, event):
@@ -103,13 +151,21 @@ def has_parent(item, parent_id):
 
 
 def prepare(ado, event, parent_id):
+    validate_repository(event)
     action = event["action"]
-    if action not in {"opened", "edited", "closed"}:
-        raise ValueError(f"Unsupported issue action: {action}")
+    if not isinstance(action, str) or not isinstance(event.get("issue"), dict):
+        raise ValueError("The webhook must contain an issue object and an action string")
+    if action not in SUPPORTED_ACTIONS:
+        print(f"Ignoring issue action {action!r}; no work items modified.")
+        return None
     if "pull_request" in event["issue"]:
         raise ValueError("Pull requests must not be synchronized as Bugs")
-    if action == "opened" and (event["issue"].get("type") or {}).get("name") != "Bug":
-        return None
+    if action == "opened":
+        issue_type = event["issue"].get("type")
+        if issue_type is not None and not isinstance(issue_type, dict):
+            raise ValueError("The GitHub issue type must be an object or null")
+        if (issue_type or {}).get("name") != "Bug":
+            return None
 
     item = find_item(ado, event)
     # The upstream action creates missing items even for edits and closures.
@@ -125,10 +181,30 @@ def prepare(ado, event, parent_id):
     if not isinstance(area, str) or not area or "\n" in area or "\r" in area:
         raise ValueError("The parent must have a valid area path")
 
+    issue = load_issue(event)
+    if not isinstance(issue, dict):
+        raise ValueError("The GitHub API must return an issue object")
+    if (
+        issue["number"] != event["issue"]["number"]
+        or issue["html_url"] != event["issue"]["html_url"]
+        or "pull_request" in issue
+        or issue["state"] not in {"open", "closed"}
+        or not isinstance(issue["title"], str)
+        or not issue["title"]
+        or (issue["body"] is not None and not isinstance(issue["body"], str))
+    ):
+        raise ValueError("The refreshed GitHub issue does not match the event")
+    if issue["body"] is None:
+        issue["body"] = ""
+    prepared_event = dict(event, issue=issue)
+    if action == "opened":
+        # Refresh after acquiring the stage lock: edits/closure may arrive before creation.
+        prepared_event["action"] = "closed" if issue["state"] == "closed" else "edited"
     return {
         "existing_id": item["id"] if item is not None else None,
         "parent_id": parent_id,
         "area_path": area,
+        "event": prepared_event,
     }
 
 
@@ -156,19 +232,10 @@ def complete(ado, event, context):
         expected_state = "Done"
         if item["fields"]["System.State"] != "Done":
             raise RuntimeError("The upstream action did not transition the ADO Bug to Done")
-    elif event["action"] == "opened":
-        issue = load_issue(event)
-        if (
-            issue["number"] != event["issue"]["number"]
-            or issue["html_url"] != event["issue"]["html_url"]
-            or issue["state"] not in {"open", "closed"}
-        ):
-            raise ValueError("The refreshed GitHub issue does not match the event")
-        # A close can precede creation; retries must not reset an existing manual state.
-        expected_state = "Done" if issue["state"] == "closed" else (
-            "New" if context["existing_id"] is None else None
-        )
-        if expected_state is not None and item["fields"]["System.State"] != expected_state:
+    elif context["existing_id"] is None:
+        expected_state = "New"
+        # The upstream action accepts ado_new_state but does not apply it at creation.
+        if item["fields"]["System.State"] != expected_state:
             patch.append({"op": "add", "path": "/fields/System.State", "value": expected_state})
     if patch:
         item = ado.request(
@@ -182,38 +249,85 @@ def complete(ado, event, context):
     return item["id"]
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Guard and parent-link the upstream issue sync action")
-    parser.add_argument("phase", choices=("prepare", "complete"))
-    args = parser.parse_args()
-    try:
-        ado = AzureDevOps(
-            os.environ["ADO_ORGANIZATION"], os.environ["ADO_PROJECT"], os.environ["ADO_TOKEN"],
+def run_action(ado, context):
+    with tempfile.TemporaryDirectory(prefix="github-issue-sync-") as directory:
+        root = Path(directory)
+        action_directory = root / "action"
+        subprocess.run(["git", "init", "--quiet", str(action_directory)], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(action_directory), "-c", "credential.helper=",
+                "fetch", "--quiet", "--depth=1", ACTION_REPOSITORY, ACTION_REVISION,
+            ],
+            check=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
-        event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-        if args.phase == "prepare":
-            parent_id = int(os.environ["ADO_PARENT_ID"])
-            if parent_id <= 0:
-                raise ValueError("ADO_PARENT_ID must be positive")
-            prepared = prepare(ado, event, parent_id)
-            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-                output.write(f"sync={'true' if prepared is not None else 'false'}\n")
-                if prepared is not None:
-                    path = Path(os.environ["RUNNER_TEMP"]) / "ado-bug-context.json"
-                    path.write_text(json.dumps(prepared))
-                    output.write(f"context_path={path}\n")
-                    output.write(f"area_path={prepared['area_path']}\n")
-        else:
-            context = json.loads(Path(os.environ["ADO_SYNC_CONTEXT"]).read_text())
-            item_id = complete(ado, event, context)
-            print(f"Synchronized ADO Bug {item_id} under parent {context['parent_id']}.")
-            with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
-                summary.write(
-                    f"ADO Bug: https://dev.azure.com/{ado.organization}/"
-                    f"{quote(ado.project, safe='')}/_workitems/edit/{item_id}\n"
-                )
-    except (KeyError, ValueError, RuntimeError, URLError, subprocess.CalledProcessError) as error:
-        print(f"::error::{error}", file=sys.stderr)
+        subprocess.run(
+            ["git", "-C", str(action_directory), "checkout", "--quiet", "--detach", "FETCH_HEAD"],
+            check=True,
+        )
+        event_path = root / "event.json"
+        event_path.write_text(json.dumps(context["event"]))
+        environment = {
+            **os.environ,
+            "GITHUB_EVENT_PATH": str(event_path),
+            "ado_token": ado.token,
+            "ado_organization": ado.organization,
+            "ado_project": ado.project,
+            "ado_area_path": context["area_path"],
+            "ado_wit": "Bug",
+            "ado_new_state": "New",
+            "ado_close_state": "Done",
+            "github_token": "",
+            "log_level": "100",
+        }
+        environment.pop("ado_bypassrules", None)
+        print(f"Running upstream issue synchronization action at {ACTION_REVISION}.", flush=True)
+        # The pinned action includes its node_modules; no npm install is needed.
+        subprocess.run(
+            ["node", str(action_directory / "index.js")],
+            check=True,
+            cwd=action_directory,
+            env=environment,
+        )
+
+
+def main():
+    try:
+        if os.environ.get("BUILD_REASON") == "Manual" and not os.environ.get("WEBHOOK_REPOSITORY"):
+            print("Manual initialization without a webhook; no work items modified.")
+            return 0
+        if os.environ["BUILD_SOURCEBRANCH"] != "refs/heads/main":
+            raise ValueError("Issue synchronization must run from trusted refs/heads/main")
+        if os.environ["BUILD_REASON"] != "ResourceTrigger":
+            raise ValueError("Issue synchronization requires an incoming webhook resource trigger")
+        event = webhook_event()
+        if event is None:
+            print("GitHub webhook ping received; no work items modified.")
+            return 0
+        token = os.environ["ADO_TOKEN"]
+        if not token:
+            raise ValueError("ADO_TOKEN must contain the pipeline job access token")
+        ado = AzureDevOps(
+            os.environ["ADO_ORGANIZATION"], os.environ["ADO_PROJECT"], token,
+        )
+        parent_id = int(os.environ["ADO_PARENT_ID"])
+        if parent_id <= 0:
+            raise ValueError("ADO_PARENT_ID must be positive")
+        context = prepare(ado, event, parent_id)
+        if context is None:
+            return 0
+        run_action(ado, context)
+        item_id = complete(ado, context["event"], context)
+        print(
+            f"Synchronized ADO Bug https://dev.azure.com/{ado.organization}/"
+            f"{quote(ado.project, safe='')}/_workitems/edit/{item_id} under parent {parent_id}."
+        )
+    except (
+        KeyError, ValueError, RuntimeError, OSError, subprocess.CalledProcessError,
+    ) as error:
+        message = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"##vso[task.logissue type=error]{message}", file=sys.stderr)
         return 1
     return 0
 

@@ -6,7 +6,6 @@ import io
 import json
 import os
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -21,10 +20,17 @@ ISSUE_URL = "https://github.com/microsoft/rust-mqtt-client/issues/200"
 def event(action="opened", issue_type="Bug"):
     return {
         "action": action,
-        "repository": {"name": "rust-mqtt-client", "full_name": "microsoft/rust-mqtt-client"},
+        "repository": {
+            "id": sync.GITHUB_REPOSITORY_ID, "name": "rust-mqtt-client",
+            "full_name": sync.GITHUB_REPOSITORY,
+            "html_url": f"https://github.com/{sync.GITHUB_REPOSITORY}",
+            "owner": {"login": "microsoft"},
+        },
+        "sender": {"login": "reporter"},
         "issue": {
             "number": 200, "html_url": ISSUE_URL, "title": "Original title",
             "body": "Original description", "state": "open", "type": {"name": issue_type},
+            "user": {"login": "reporter"}, "closed_at": None,
         },
     }
 
@@ -48,6 +54,7 @@ def bug(state="New", parent_id=PARENT_ID):
 class FakeAzureDevOps:
     organization = "msazure"
     project = "One"
+    token = "test-token"
 
     def __init__(self, item=None):
         self.item = item
@@ -85,17 +92,21 @@ class IssueSyncTests(unittest.TestCase):
         self.latest = event()["issue"]
         self.latest["title"] = "Current title"
         self.latest["body"] = "Current description"
-        self.load = patch("issue_to_ado.load_issue", return_value=self.latest).start()
+        self.load_patch = patch("issue_to_ado.load_issue", return_value=self.latest)
+        self.load = self.load_patch.start()
         self.addCleanup(patch.stopall)
 
-    def test_new_bug_uses_parent_area_without_rewriting_the_event(self):
+    def test_new_bug_uses_parent_area_and_refreshes_stale_content(self):
         source = event()
         prepared = sync.prepare(FakeAzureDevOps(), source, PARENT_ID)
         self.assertEqual(source, event())
-        self.assertEqual(prepared, {
+        self.assertEqual({key: value for key, value in prepared.items() if key != "event"}, {
             "existing_id": None, "parent_id": PARENT_ID, "area_path": "One\\SDKs\\MqttClient",
         })
-        self.load.assert_not_called()
+        self.assertEqual(prepared["event"]["issue"]["title"], "Current title")
+        self.assertEqual(prepared["event"]["issue"]["body"], "Current description")
+        self.assertEqual(prepared["event"]["action"], "edited")
+        self.load.assert_called_once_with(source)
 
     def test_only_new_native_bugs_are_eligible_for_creation(self):
         for issue_type in ("Task", "Feature", None):
@@ -116,11 +127,11 @@ class IssueSyncTests(unittest.TestCase):
                 self.assertEqual([call[0] for call in ado.calls], ["POST"])
         self.load.assert_not_called()
 
-    def test_unsupported_events_and_pull_requests_fail(self):
+    def test_unsubscribed_actions_are_ignored_and_pull_requests_fail(self):
         for action in ("reopened", "typed", "created", "assigned"):
             with self.subTest(action=action):
-                with self.assertRaisesRegex(ValueError, "Unsupported"):
-                    sync.prepare(FakeAzureDevOps(), event(action), PARENT_ID)
+                self.assertIsNone(sync.prepare(FakeAzureDevOps(), event(action), PARENT_ID))
+        self.load.assert_not_called()
         source = event()
         source["issue"]["pull_request"] = {}
         with self.assertRaisesRegex(ValueError, "Pull requests"):
@@ -177,7 +188,7 @@ class IssueSyncTests(unittest.TestCase):
                 ado = FakeAzureDevOps(bug(state="Active"))
                 source = event(action)
                 prepared = sync.prepare(ado, source, PARENT_ID)
-                self.assertEqual(sync.complete(ado, source, prepared), 123)
+                self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
                 self.assertEqual(ado.item["fields"]["System.State"], "Active")
                 self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
 
@@ -186,17 +197,18 @@ class IssueSyncTests(unittest.TestCase):
         source = event("closed")
         prepared = sync.prepare(ado, source, PARENT_ID)
         with self.assertRaisesRegex(RuntimeError, "transition.*Done"):
-            sync.complete(ado, source, prepared)
+            sync.complete(ado, prepared["event"], prepared)
         ado.item["fields"]["System.State"] = "Done"
-        self.assertEqual(sync.complete(ado, source, prepared), 123)
+        self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
 
     def test_issue_closed_during_initial_creation_finishes_done(self):
         self.latest["state"] = "closed"
         ado = FakeAzureDevOps()
         prepared = sync.prepare(ado, event(), PARENT_ID)
-        ado.item = bug(parent_id=None)
+        self.assertEqual(prepared["event"]["action"], "closed")
+        ado.item = bug(state="Done", parent_id=None)
         ado.matches = [{"id": 123}]
-        self.assertEqual(sync.complete(ado, event(), prepared), 123)
+        self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
         self.assertEqual(ado.item["fields"]["System.State"], "Done")
         self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
 
@@ -205,7 +217,7 @@ class IssueSyncTests(unittest.TestCase):
         prepared = sync.prepare(ado, event(), PARENT_ID)
         ado.item = bug(state="Approved", parent_id=None)
         ado.matches = [{"id": 123}]
-        self.assertEqual(sync.complete(ado, event(), prepared), 123)
+        self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
         self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
         self.assertEqual(ado.item["fields"]["System.State"], "New")
         mutations = [call for call in ado.calls if call[0] == "PATCH"]
@@ -218,7 +230,7 @@ class IssueSyncTests(unittest.TestCase):
     def test_retry_can_recover_missing_parent_without_resetting_state(self):
         ado = FakeAzureDevOps(bug(state="Active", parent_id=None))
         prepared = sync.prepare(ado, event(), PARENT_ID)
-        self.assertEqual(sync.complete(ado, event(), prepared), 123)
+        self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
         self.assertEqual(ado.item["fields"]["System.State"], "Active")
         self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
 
@@ -226,21 +238,19 @@ class IssueSyncTests(unittest.TestCase):
         ado = FakeAzureDevOps()
         prepared = sync.prepare(ado, event(), PARENT_ID)
         with self.assertRaisesRegex(RuntimeError, "did not create"):
-            sync.complete(ado, event(), prepared)
+            sync.complete(ado, prepared["event"], prepared)
         prepared["existing_id"] = 456
         ado.item = bug()
         ado.matches = [{"id": 123}]
         with self.assertRaisesRegex(RuntimeError, "different ADO Bug"):
-            sync.complete(ado, event(), prepared)
+            sync.complete(ado, prepared["event"], prepared)
 
     def test_mismatched_refreshed_issue_fails(self):
         ado = FakeAzureDevOps()
-        prepared = sync.prepare(ado, event(), PARENT_ID)
-        ado.item = bug(parent_id=None)
-        ado.matches = [{"id": 123}]
         self.latest["number"] = 201
         with self.assertRaisesRegex(ValueError, "does not match"):
-            sync.complete(ado, event(), prepared)
+            sync.prepare(ado, event(), PARENT_ID)
+        self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
 
     def test_http_request_uses_bearer_auth_patch_type_and_api_version(self):
         ado = sync.AzureDevOps("msazure", "Project name", "test-token")
@@ -268,55 +278,182 @@ class IssueSyncTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, f"HTTP {status}"):
                         ado.request("POST", "wiql", {"query": "SELECT [System.Id] FROM WorkItems"})
 
-    def test_cli_passes_separate_context_without_overriding_the_webhook(self):
+    def test_pipeline_runs_action_and_verifies_parent_link(self):
         ado = FakeAzureDevOps()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "github-event.json"
-            source.write_text(json.dumps(event()))
-            output = root / "output"
-            summary = root / "summary"
-            environment = {
-                "ADO_ORGANIZATION": "msazure", "ADO_PROJECT": "One",
-                "ADO_TOKEN": "test-token", "ADO_PARENT_ID": str(PARENT_ID),
-                "GITHUB_EVENT_PATH": str(source), "GITHUB_OUTPUT": str(output),
-                "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": str(root),
-            }
-            with patch.dict(os.environ, environment), patch(
-                "issue_to_ado.AzureDevOps", return_value=ado,
-            ):
-                with patch("sys.argv", ["issue_to_ado.py", "prepare"]):
-                    self.assertEqual(sync.main(), 0)
-                outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                self.assertEqual(outputs["sync"], "true")
-                self.assertEqual(outputs["area_path"], "One\\SDKs\\MqttClient")
-                self.assertNotIn("event_path", outputs)
-                self.assertEqual(json.loads(source.read_text()), event())
-                context = Path(outputs["context_path"])
-                self.assertEqual(set(json.loads(context.read_text())), {
-                    "existing_id", "parent_id", "area_path",
-                })
 
-                ado.item = bug(parent_id=None)
-                ado.matches = [{"id": 123}]
-                with patch.dict(os.environ, {"ADO_SYNC_CONTEXT": str(context)}), patch(
-                    "sys.argv", ["issue_to_ado.py", "complete"],
-                ):
-                    self.assertEqual(sync.main(), 0)
-                self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
-                self.assertIn(
-                    "https://dev.azure.com/msazure/One/_workitems/edit/123", summary.read_text(),
-                )
+        def action(client, context):
+            self.assertIs(client, ado)
+            self.assertEqual(context["event"]["issue"]["title"], "Current title")
+            self.assertEqual(context["event"]["action"], "edited")
+            ado.item = bug(parent_id=None)
+            ado.matches = [{"id": 123}]
+
+        with patch.dict(os.environ, self.pipeline_environment()), patch(
+            "issue_to_ado.AzureDevOps", return_value=ado,
+        ), patch("issue_to_ado.run_action", side_effect=action) as run:
+            self.assertEqual(sync.main(), 0)
+        run.assert_called_once()
+        self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
+
+    @staticmethod
+    def pipeline_environment():
+        return {
+            "ADO_ORGANIZATION": "msazure", "ADO_PROJECT": "One",
+            "ADO_TOKEN": "test-token", "ADO_PARENT_ID": str(PARENT_ID),
+            "WEBHOOK_REPOSITORY_ID": str(sync.GITHUB_REPOSITORY_ID),
+            "WEBHOOK_REPOSITORY": sync.GITHUB_REPOSITORY,
+            "WEBHOOK_ACTION": "opened", "WEBHOOK_ISSUE_NUMBER": "200",
+            "WEBHOOK_ISSUE_TYPE": "Bug", "WEBHOOK_SENDER": "reporter", "WEBHOOK_PING_ID": "",
+            "BUILD_SOURCEBRANCH": "refs/heads/main", "BUILD_REASON": "ResourceTrigger",
+        }
 
     def test_cli_missing_credentials_fails_explicitly(self):
-        with patch.dict(os.environ, {
-            "ADO_ORGANIZATION": "msazure", "ADO_PROJECT": "One",
-        }, clear=True), patch("sys.argv", ["issue_to_ado.py", "prepare"]), patch(
+        environment = self.pipeline_environment()
+        del environment["ADO_TOKEN"]
+        with patch.dict(os.environ, environment, clear=True), patch(
             "sys.stderr", new_callable=io.StringIO,
         ) as errors:
             self.assertEqual(sync.main(), 1)
-        self.assertIn("::error::", errors.getvalue())
+        self.assertIn("##vso[task.logissue type=error]", errors.getvalue())
         self.assertIn("ADO_TOKEN", errors.getvalue())
+
+    def test_downloads_only_pinned_action_and_passes_data_without_shell_expansion(self):
+        ado = FakeAzureDevOps()
+        prepared = sync.prepare(ado, event(), PARENT_ID)
+        prepared["event"]["issue"]["body"] = '$(touch /tmp/not-executed)\n##vso[task.setvariable]x'
+        captured = {}
+
+        def execute(command, **kwargs):
+            self.assertTrue(kwargs["check"])
+            self.assertNotIn("shell", kwargs)
+            if command[0] == "node":
+                environment = kwargs["env"]
+                captured["event_path"] = Path(environment["GITHUB_EVENT_PATH"])
+                captured["event"] = json.loads(captured["event_path"].read_text())
+                captured["environment"] = environment
+
+        with patch.dict(os.environ, {
+            "github_token": "must-not-write-to-github", "ado_bypassrules": "true",
+        }), patch("issue_to_ado.subprocess.run", side_effect=execute) as run:
+            sync.run_action(ado, prepared)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(len(commands), 4)
+        self.assertEqual(commands[1][-4:], [
+            "--quiet", "--depth=1", sync.ACTION_REPOSITORY, sync.ACTION_REVISION,
+        ])
+        self.assertEqual(commands[2][-2:], ["--detach", "FETCH_HEAD"])
+        self.assertEqual(captured["event"], prepared["event"])
+        self.assertFalse(captured["event_path"].exists())
+        self.assertEqual(captured["environment"]["ado_token"], "test-token")
+        self.assertEqual(captured["environment"]["ado_wit"], "Bug")
+        self.assertEqual(captured["environment"]["ado_close_state"], "Done")
+        self.assertEqual(captured["environment"]["github_token"], "")
+        self.assertNotIn("ado_bypassrules", captured["environment"])
+
+    def test_large_unicode_issue_body_is_a_file_not_a_process_environment_value(self):
+        prepared = sync.prepare(FakeAzureDevOps(), event(), PARENT_ID)
+        body = "\U0001f600" * 65536
+        prepared["event"]["issue"]["body"] = body
+
+        def execute(command, **kwargs):
+            if command[0] == "node":
+                environment = kwargs["env"]
+                path = Path(environment["GITHUB_EVENT_PATH"])
+                self.assertGreater(path.stat().st_size, 128 * 1024)
+                self.assertEqual(json.loads(path.read_text())["issue"]["body"], body)
+                self.assertNotIn(body, environment.values())
+
+        with patch("issue_to_ado.subprocess.run", side_effect=execute):
+            sync.run_action(FakeAzureDevOps(), prepared)
+
+    def test_repository_identity_is_checked_before_any_api_call(self):
+        for field, value in (("id", 1), ("full_name", "other/repo"), ("name", "other")):
+            with self.subTest(field=field):
+                source = event()
+                source["repository"][field] = value
+                ado = FakeAzureDevOps()
+                with self.assertRaisesRegex(ValueError, "immutable GitHub repository"):
+                    sync.prepare(ado, source, PARENT_ID)
+                self.assertEqual(ado.calls, [])
+        self.load.assert_not_called()
+
+    def test_null_body_is_normalized_for_the_upstream_action(self):
+        self.latest["body"] = None
+        prepared = sync.prepare(FakeAzureDevOps(), event(), PARENT_ID)
+        self.assertEqual(prepared["event"]["issue"]["body"], "")
+
+    def test_empty_token_and_manual_event_injection_fail_explicitly(self):
+        for field, value in (("ADO_TOKEN", ""), ("BUILD_REASON", "Manual")):
+            with self.subTest(field=field):
+                environment = {**self.pipeline_environment(), field: value}
+                with patch.dict(os.environ, environment), patch(
+                    "issue_to_ado.run_action",
+                ) as run, patch("sys.stderr", new_callable=io.StringIO) as errors:
+                    self.assertEqual(sync.main(), 1)
+                run.assert_not_called()
+                self.assertIn("##vso[task.logissue type=error]", errors.getvalue())
+
+    def test_malformed_metadata_fails_explicitly(self):
+        for field, value in (
+            ("WEBHOOK_REPOSITORY", "not-a-repository"),
+            ("WEBHOOK_REPOSITORY_ID", "not-an-id"),
+            ("WEBHOOK_ISSUE_NUMBER", "not-an-id"),
+            ("WEBHOOK_ISSUE_NUMBER", "-1"),
+        ):
+            with self.subTest(field=field, value=value):
+                environment = {**self.pipeline_environment(), field: value}
+                with patch.dict(os.environ, environment), patch(
+                    "sys.stderr", new_callable=io.StringIO,
+                ) as errors:
+                    self.assertEqual(sync.main(), 1)
+                self.assertIn("##vso[task.logissue type=error]", errors.getvalue())
+
+    def test_non_main_event_cannot_run_the_action(self):
+        environment = {
+            **self.pipeline_environment(), "BUILD_SOURCEBRANCH": "refs/heads/untrusted",
+        }
+        with patch.dict(os.environ, environment), patch(
+            "issue_to_ado.run_action",
+        ) as run, patch("sys.stderr", new_callable=io.StringIO) as errors:
+            self.assertEqual(sync.main(), 1)
+        run.assert_not_called()
+        self.assertIn("trusted refs/heads/main", errors.getvalue())
+
+    def test_manual_initialization_and_webhook_ping_do_not_modify_work_items(self):
+        for reason in ("Manual", "ResourceTrigger"):
+            with self.subTest(reason=reason):
+                environment = {
+                    **self.pipeline_environment(),
+                    "BUILD_REASON": reason, "WEBHOOK_ISSUE_NUMBER": "", "WEBHOOK_ACTION": "",
+                    "WEBHOOK_PING_ID": "1" if reason == "ResourceTrigger" else "",
+                    "WEBHOOK_REPOSITORY": sync.GITHUB_REPOSITORY if reason == "ResourceTrigger" else "",
+                }
+                with patch.dict(os.environ, environment), patch("issue_to_ado.AzureDevOps") as client:
+                    self.assertEqual(sync.main(), 0)
+                client.assert_not_called()
+        self.load.assert_not_called()
+
+    def test_public_issue_refresh_does_not_send_the_ado_token_to_github(self):
+        self.load_patch.stop()
+        with patch("issue_to_ado.urlopen") as send:
+            send.return_value.__enter__.return_value = io.StringIO(json.dumps(self.latest))
+            self.assertEqual(sync.load_issue(event()), self.latest)
+        request = send.call_args.args[0]
+        self.assertEqual(request.full_url, f"https://api.github.com/repos/{sync.GITHUB_REPOSITORY}/issues/200")
+        self.assertNotIn("Authorization", request.headers)
+        self.assertEqual(send.call_args.kwargs["timeout"], 30)
+
+    def test_public_issue_rate_limits_fail_before_upstream_mutations(self):
+        self.load_patch.stop()
+        error = HTTPError("https://api.github.com", 403, "Rate limited", {}, None)
+        with patch.dict(os.environ, self.pipeline_environment()), patch(
+            "issue_to_ado.AzureDevOps", return_value=FakeAzureDevOps(),
+        ), patch("issue_to_ado.urlopen", side_effect=error), patch(
+            "issue_to_ado.run_action",
+        ) as run, patch("sys.stderr", new_callable=io.StringIO) as errors:
+            self.assertEqual(sync.main(), 1)
+        run.assert_not_called()
+        self.assertIn("rate limiting", errors.getvalue())
 
 
 if __name__ == "__main__":
