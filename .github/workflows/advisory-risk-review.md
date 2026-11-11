@@ -1,5 +1,6 @@
 ---
-# Regenerate with gh-aw v0.93.5: gh aw compile advisory-risk-review
+# Regenerate with gh-aw v0.93.5, preserving the setup action's v1.2.0 pin:
+# gh aw compile advisory-risk-review --action-mode action --action-tag 4607d462dc213dbe54d02f77ec31215776fd5554
 name: Dependency advisory risk review
 on:
   workflow_run:
@@ -80,6 +81,7 @@ jobs:
       issues: write
     outputs:
       has_reviews: ${{ steps.queue.outputs.has_reviews }}
+      has_more_reviews: ${{ steps.queue.outputs.has_more_reviews }}
       queue: ${{ steps.queue.outputs.queue }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,6 +107,7 @@ jobs:
     timeout-minutes: 5
     concurrency: *advisory-state-lock
     permissions:
+      actions: write
       contents: read
       issues: write
     steps:
@@ -113,6 +116,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REVIEW_QUEUE: ${{ needs.prepare.outputs.queue }}
+          REVIEW_CONTINUATION_REF: ${{ needs.prepare.outputs.has_more_reviews == 'true' && github.event.repository.default_branch || '' }}
         run: python3 .github/scripts/review_advisories.py finalize --repository "$GITHUB_REPOSITORY"
 ---
 
