@@ -102,6 +102,29 @@ class IgnoredAdvisoriesTests(unittest.TestCase):
         self.write_scan("minimal")
         validate_ignored_advisories(self.reports)
 
+    def test_configuration_warnings_do_not_affect_advisory_count(self):
+        self.write_scan("latest")
+        directory = self.write_scan("minimal")
+        path = directory / "diagnostics.jsonl"
+        warnings = [
+            {
+                "type": "diagnostic",
+                "fields": {"severity": "warning", "message": "duplicate items detected"},
+            },
+            {
+                "type": "diagnostic",
+                "fields": {
+                    "severity": "warning",
+                    "code": "deprecated",
+                    "message": "deprecated configuration field",
+                },
+            },
+        ]
+        path.write_text(
+            "".join(json.dumps(event) + "\n" for event in warnings) + path.read_text()
+        )
+        validate_ignored_advisories(self.reports)
+
     def test_missing_scan_does_not_pass_when_other_has_no_unused_ignores(self):
         self.write_scan("latest")
         with self.assertRaises(FileNotFoundError):
@@ -120,6 +143,20 @@ class IgnoredAdvisoriesTests(unittest.TestCase):
         directory = self.write_scan("minimal", unused=(FIRST,))
         path = directory / "diagnostics.jsonl"
         path.write_text(path.read_text().splitlines()[-1] + "\n")
+        with self.assertRaisesRegex(ValueError, "warning summary and diagnostics disagree"):
+            validate_ignored_advisories(self.reports)
+
+    def test_configuration_warning_cannot_hide_missing_advisory_warning(self):
+        self.write_scan("latest")
+        directory = self.write_scan("minimal", unused=(FIRST,))
+        path = directory / "diagnostics.jsonl"
+        warning = {
+            "type": "diagnostic",
+            "fields": {"severity": "warning", "message": "duplicate items detected"},
+        }
+        path.write_text(
+            json.dumps(warning) + "\n" + path.read_text().splitlines()[-1] + "\n"
+        )
         with self.assertRaisesRegex(ValueError, "warning summary and diagnostics disagree"):
             validate_ignored_advisories(self.reports)
 

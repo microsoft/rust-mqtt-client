@@ -13,6 +13,16 @@ import sys
 
 
 ADVISORY_CODES = {"vulnerability", "unsound", "unmaintained", "notice"}
+ADVISORY_CHECK_CODES = ADVISORY_CODES | {
+    "yanked",
+    "advisory-ignored",
+    "yanked-ignored",
+    "index-failure",
+    "index-cache-load-failure",
+    "advisory-not-detected",
+    "yanked-not-detected",
+    "unknown-advisory",
+}
 REPORT_START = "<!-- dependency-advisory-report:start -->"
 REPORT_END = "<!-- dependency-advisory-report:end -->"
 REPORT_LIMIT = 50000
@@ -247,8 +257,11 @@ def read_scan(directory):
     warnings = summaries[0]["advisories"]["warnings"]
     if type(warnings) is not int or warnings < 0:
         raise ValueError("Invalid scanner warning count")
+    # Configuration warnings share this stream but are not in the check summary.
     if warnings != sum(
-        event["type"] == "diagnostic" and event["fields"]["severity"] == "warning"
+        event["type"] == "diagnostic"
+        and event["fields"]["severity"] == "warning"
+        and event["fields"].get("code") in ADVISORY_CHECK_CODES
         for event in events
     ):
         raise ValueError("Scanner warning summary and diagnostics disagree")
