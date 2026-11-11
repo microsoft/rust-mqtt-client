@@ -1,6 +1,6 @@
 ---
-# Regenerate with gh-aw v0.93.5, preserving the setup action's v1.0.1 pin:
-# gh aw compile advisory-risk-review --action-mode action --action-tag 221ba4f4319de6b8e809d1a15528b3ae6a818aa5
+# Regenerate with gh-aw v0.93.5, preserving the setup action's v1.2.0 pin:
+# gh aw compile advisory-risk-review --action-mode action --action-tag 4607d462dc213dbe54d02f77ec31215776fd5554
 name: Dependency advisory risk review
 on:
   workflow_run:
