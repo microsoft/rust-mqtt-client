@@ -20,6 +20,15 @@ ignore = [
     { id = "RUSTSEC-2026-0386", reason = "This crate and its integrations do not call the affected Tokio AsyncFd constructors; the finding is a version match, not reachable API usage." },
     { id = "RUSTSEC-2026-0441", reason = "Unmaintained-only advisory for transitive pin-utils via supported futures-util 0.3.31; no vulnerability is described, and newer compatible futures-util releases remove the dependency." },
     { id = "RUSTSEC-2026-0463", reason = "This crate uses OpenSSL only for TLS and Base64 proxy authorization; it does not call openssl::aes::unwrap_key or expose that API, so the vulnerable function is not reachable through this library." },
+    # Reassess these TLS-path exceptions if integrations or callback handling change.
+    # Independent OpenSSL API use in application-supplied callbacks is not covered.
+    { id = "RUSTSEC-2026-0473", reason = "TLS key exchange stays inside native OpenSSL; neither this crate nor tokio-openssl calls the Rust Deriver::derive or PkeyCtxRef::derive APIs with caller-supplied output buffers." },
+    { id = "RUSTSEC-2026-0474", reason = "Built-in certificate verification does not call X509Ref::ocsp_responders or convert OCSP URLs to Rust strings; calling this API in an application-supplied verification callback is independent consumer API usage." },
+    { id = "RUSTSEC-2026-0475", reason = "TLS hashing stays inside native OpenSSL, and WebSocket handshake hashing uses RustCrypto SHA-1; neither this crate nor its integrations calls MdCtxRef::digest_final." },
+    { id = "RUSTSEC-2026-0476", reason = "TLS record encryption does not use the Rust CipherCtx/Crypter AES key-wrap-with-padding APIs; neither this crate nor its integrations performs that key wrapping." },
+    { id = "RUSTSEC-2026-0477", reason = "Neither this crate nor its integrations calls CipherCtxRef::cipher_update_inplace; TLS record encryption stays inside native OpenSSL and does not use Rust AES key-wrap-with-padding wrappers." },
+    { id = "RUSTSEC-2026-0478", reason = "Built-in TLS configurations install no PSK or cookie callbacks and use client handshakes; PSK callbacks retained in application-supplied SslConnectorBuilder values must obey the callback buffer bounds." },
+    { id = "RUSTSEC-2026-0479", reason = "Built-in PEM key loading uses PKey::private_key_from_pem without a Rust password callback; callback-based key loading is application-owned configuration, not a broker-triggered path." },
 ]
 
 [licenses]
