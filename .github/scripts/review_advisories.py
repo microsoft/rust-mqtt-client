@@ -9,8 +9,8 @@ from pathlib import Path
 import sys
 
 from report_advisories import (
-    ADVISORY_LABEL, REVIEW_LABEL, completed_review, current_scan, gh, issue_comments, review_state,
-    tracking_key, workflow_authored,
+    ADVISORY_LABEL, REVIEW_LABEL, REVIEW_WORKFLOW_ID, completed_review, current_scan, gh,
+    issue_comments, review_state, tracking_key, workflow_authored,
 )
 
 
@@ -34,6 +34,7 @@ def prepare(repository, output, issue_number=""):
         ))
         issues = [issue for page in pages for issue in page]
     queue = []
+    has_more_reviews = False
     unique_issues = {issue["number"]: issue for issue in issues}
     for issue in sorted(unique_issues.values(), key=lambda item: item["number"]):
         labels = {label["name"].casefold() for label in issue["labels"]}
@@ -69,17 +70,20 @@ def prepare(repository, output, issue_number=""):
             print(f"Reusing completed assessment for issue #{issue['number']}.")
             continue
         if len(queue) == MAX_REVIEWS:
+            has_more_reviews = True
             print(f"Deferring issue #{issue['number']}: the per-run review limit is {MAX_REVIEWS}.")
             continue
         queue.append({"issue_number": issue["number"], "report_url": published["html_url"], **state})
     with output.open("a") as stream:
         stream.write(f"has_reviews={str(bool(queue)).lower()}\n")
+        stream.write(f"has_more_reviews={str(has_more_reviews).lower()}\n")
         stream.write("queue=" + json.dumps(queue, separators=(",", ":")) + "\n")
     print(f"Queued {len(queue)} dependency risk assessment(s).")
 
 
-def finalize(repository, queue):
+def finalize(repository, queue, continuation_ref=""):
     incomplete = []
+    completed = 0
     for request in queue:
         number = request["issue_number"]
         issue = json.loads(gh("api", f"repos/{repository}/issues/{number}"))
@@ -99,11 +103,18 @@ def finalize(repository, queue):
             incomplete.append(str(number))
             continue
         clear_queue(repository, number)
+        completed += 1
         print(f"Completed dependency risk assessment for issue #{number}.")
     if incomplete:
         raise ValueError(
             "No matching Copilot assessment was published for issue(s): " + ", ".join(incomplete)
         )
+    if continuation_ref and queue and completed == len(queue):
+        gh(
+            "workflow", "run", f"{REVIEW_WORKFLOW_ID}.lock.yml",
+            "--repo", repository, "--ref", continuation_ref,
+        )
+        print("Dispatched the next batch of queued dependency risk assessments.")
 
 
 def main():
@@ -119,7 +130,10 @@ def main():
                 raise ValueError("--output is required for prepare")
             prepare(args.repository, args.output, args.issue_number)
         else:
-            finalize(args.repository, json.loads(os.environ["REVIEW_QUEUE"]))
+            finalize(
+                args.repository, json.loads(os.environ["REVIEW_QUEUE"]),
+                continuation_ref=os.environ.get("REVIEW_CONTINUATION_REF", ""),
+            )
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
         print(f"Dependency risk review failed: {error}", file=sys.stderr)
         return 1

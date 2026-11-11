@@ -134,6 +134,16 @@ exceptions, change dependencies, or replace maintainer review.
   assessment. A new scan date or run link alone does not trigger reassessment.
   When those inputs meaningfully change, the assessment comment is replaced rather
   than adding another assessment. Historical scan-update comments remain intact.
+- Each run reviews at most five findings within its existing time and AI-credit
+  budgets. If eligible findings remain beyond that batch, successful finalization
+  automatically dispatches the next run on the default branch. The deterministic
+  finalizer alone receives `actions: write` for this dispatch; Copilot stays
+  read-only apart from its assessment comments.
+- Automatic continuation requires every selected assessment to be verified and
+  cleared from the queue. Failed, missing, unsafe, or changed findings stop the
+  chain rather than causing automatic retries. Remaining findings retain their
+  queue labels for a later scan or manual workflow run. Runs targeting a specific
+  issue remain scoped to that issue.
 - Only reports with complete captured evidence are eligible for automated review.
   If evidence exceeds the report size limit, assess the full scan artifacts
   manually rather than accepting an assessment based on truncated evidence.

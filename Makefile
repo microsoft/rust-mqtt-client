@@ -70,6 +70,7 @@ network-coverage:
 
 .PHONY: check
 check:
+	python3 -B -m unittest discover -s .github/scripts -p 'test_*.py'
 	cargo fmt --verbose --all --check
 # `__network` is enabled here (and nowhere in `test`) so the live network suites
 # are compiled and linted on every check, without ever being run.
