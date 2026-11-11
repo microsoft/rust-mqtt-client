@@ -54,7 +54,12 @@ findings as before.
 The final check always runs on PRs. When neither input file changed, it succeeds
 without running the matrix. Otherwise, detection and both matrix legs must
 succeed. Each scan verifies its report with the existing completeness checks
-before uploading artifacts; the final check only inspects the job outcomes.
+before uploading artifacts. The final check also reads both reports and rejects
+any advisory ignore that cargo-deny reports as unused in **both** resolutions,
+listing the advisory IDs to remove from [deny.toml](../deny.toml). An ignore needed
+by either resolution remains valid, even if the other graph is already patched.
+This is deterministic for the two captured graphs, not exhaustive validation of
+every version a consumer could select.
 Skipped, cancelled, failed, or incomplete required scans do not pass validation.
 Before closing an advisory through a remediation or exception PR, link a passing
 run at its latest head; ordinary PR tests or a local latest-only scan are not a
@@ -102,7 +107,9 @@ A reviewed non-applicability exception in [deny.toml](../deny.toml) requires a
 specific reason explaining why it does not apply. An assessment link is not
 required. If evidence is insufficient, keep the finding unresolved rather than
 assuming the library is unaffected. Consider compatibility and MSRV effects when
-changing dependency requirements.
+changing dependency requirements. Remove exceptions that are no longer needed
+after a dependency is upgraded, removed, or replaced; dependency-update PRs must
+pass the unused-ignore check described above.
 
 ## Separate advisory triage from test failures
 
