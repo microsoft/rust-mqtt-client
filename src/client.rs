@@ -1075,6 +1075,7 @@ impl Connection {
                     let mut op_packet = Some(packet);
                     while let Some(packet) = op_packet {
                         if let Packet::PingReq(_) = &packet
+                            && pingresp_timer.is_none()
                             && let Some(timeout) = self.cfg_pingresp_timeout
                         {
                             pingresp_timer = Some(Timer::new(timeout));
