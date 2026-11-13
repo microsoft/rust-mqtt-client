@@ -13,6 +13,16 @@ import sys
 
 
 ADVISORY_CODES = {"vulnerability", "unsound", "unmaintained", "notice"}
+ADVISORY_CHECK_CODES = ADVISORY_CODES | {
+    "yanked",
+    "advisory-ignored",
+    "yanked-ignored",
+    "index-failure",
+    "index-cache-load-failure",
+    "advisory-not-detected",
+    "yanked-not-detected",
+    "unknown-advisory",
+}
 REPORT_START = "<!-- dependency-advisory-report:start -->"
 REPORT_END = "<!-- dependency-advisory-report:end -->"
 REPORT_LIMIT = 50000
@@ -32,6 +42,12 @@ class Issue:
     report: str
     review: dict | None = None
     report_complete: bool = True
+
+
+@dataclass
+class Scan:
+    findings: list[dict]
+    unused_ignores: set[str]
 
 
 def workflow_authored(item):
@@ -238,7 +254,19 @@ def read_scan(directory):
         raise ValueError("Invalid scanner error count")
     if errors != len(diagnostics) or status != int(errors > 0):
         raise ValueError("Scanner status, summary, and diagnostics disagree")
+    warnings = summaries[0]["advisories"]["warnings"]
+    if type(warnings) is not int or warnings < 0:
+        raise ValueError("Invalid scanner warning count")
+    # Configuration warnings share this stream but are not in the check summary.
+    if warnings != sum(
+        event["type"] == "diagnostic"
+        and event["fields"]["severity"] == "warning"
+        and event["fields"].get("code") in ADVISORY_CHECK_CODES
+        for event in events
+    ):
+        raise ValueError("Scanner warning summary and diagnostics disagree")
 
+    unused_ignores = set()
     for event in events:
         if event["type"] == "diagnostic" and event["fields"].get("code") == "index-failure":
             raise ValueError(f"Scanner index failure: {event['fields']['message']}")
@@ -246,6 +274,11 @@ def read_scan(directory):
             raise ValueError(f"Scanner bug: {event['fields']['message']}")
         if event["type"] == "log" and event["fields"]["level"].lower() == "error":
             raise ValueError(f"Scanner error: {event['fields']['message']}")
+        if event["type"] == "diagnostic" and event["fields"].get("code") == "advisory-not-detected":
+            advisory = event["fields"]["labels"][0]["span"]
+            if not isinstance(advisory, str) or not re.fullmatch(r"RUSTSEC-\d{4}-\d{4,}", advisory):
+                raise ValueError(f"Invalid unused advisory identifier: {advisory}")
+            unused_ignores.add(advisory)
     advisories = read_advisories(directory)
     findings = []
     for fields in diagnostics:
@@ -275,7 +308,20 @@ def read_scan(directory):
                 json.dumps(snapshot, sort_keys=True).encode()
             ).hexdigest()
         findings.append(finding)
-    return findings
+    return Scan(findings, unused_ignores)
+
+
+def validate_ignored_advisories(root):
+    scans = [
+        read_scan(root / f"dependency-advisories-{resolution}")
+        for resolution in RESOLUTIONS
+    ]
+    unused = set.intersection(*(scan.unused_ignores for scan in scans))
+    if unused:
+        raise ValueError(
+            "Remove unused deny.toml advisory ignores; neither the latest nor "
+            "minimum-direct dependency graph needs them: " + ", ".join(sorted(unused))
+        )
 
 
 def collect_scans(root, scan_result):
@@ -283,8 +329,8 @@ def collect_scans(root, scan_result):
     failures = []
     for resolution in RESOLUTIONS:
         try:
-            diagnostics = read_scan(root / f"dependency-advisories-{resolution}")
-            for fields in diagnostics:
+            scan = read_scan(root / f"dependency-advisories-{resolution}")
+            for fields in scan.findings:
                 findings.setdefault(finding_key(fields), []).append((resolution, fields))
         except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
             failures.append(f"{resolution}: {error}")

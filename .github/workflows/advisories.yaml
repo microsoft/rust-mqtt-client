@@ -187,7 +187,8 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      contents: read
 
     steps:
     - name: Require the applicable matrix result
@@ -212,3 +213,31 @@ jobs:
             exit 1
             ;;
         esac
+
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+      if: needs.changes.outputs.scan_required == 'true'
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        persist-credentials: false
+
+    - name: Download scan reports
+      if: needs.changes.outputs.scan_required == 'true'
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: dependency-advisories-*
+        path: ${{ runner.temp }}/advisory-reports
+
+    - name: Require removal of unused advisory ignores
+      if: needs.changes.outputs.scan_required == 'true'
+      run: |
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+        import sys
+
+        sys.path.insert(0, ".github/scripts")
+        from report_advisories import validate_ignored_advisories
+
+        validate_ignored_advisories(Path(os.environ["RUNNER_TEMP"]) / "advisory-reports")
+        print("No advisory ignore is unused by both dependency resolutions.")
+        PY
