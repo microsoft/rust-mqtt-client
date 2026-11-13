@@ -1,0 +1,42 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Manual source analysis in private Azure DevOps; reports remain private.
+trigger: none
+pr: none
+
+resources:
+  repositories:
+    - repository: 1esPipelines
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1esPipelines
+  parameters:
+    pool:
+      name: 1es-ms-mqtt-client-west-us
+      image: windows-image
+      os: windows
+
+    sdl:
+      # This checkout-only pipeline needs no CodeQL build database; GitHub scans remain unchanged.
+      codeql:
+        compiled:
+          enabled: false
+      policheck:
+        enabled: true
+        break: true
+
+    stages:
+      - stage: Source
+        displayName: Declare source for SDL analysis
+        jobs:
+          - job: Checkout
+            displayName: Checkout source
+            steps:
+              # A declared checkout makes 1ES inject its source-analysis job.
+              - checkout: self
+                clean: true
+                persistCredentials: false
