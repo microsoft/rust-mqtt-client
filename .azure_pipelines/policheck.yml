@@ -1,9 +1,17 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Manual source analysis in private Azure DevOps; reports remain private.
+# Weekly and manual source analysis in private Azure DevOps; reports remain private.
 trigger: none
 pr: none
+
+schedules:
+  - cron: '0 11 * * 1'
+    displayName: Weekly PoliCheck
+    branches:
+      include:
+        - main
+    always: true
 
 resources:
   repositories:
