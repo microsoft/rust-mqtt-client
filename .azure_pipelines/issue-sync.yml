@@ -1,0 +1,82 @@
+# Create this separate pipeline through StartRight; keep its default branch at main.
+# No Entra app, GitHub OIDC exemption, PAT, or ESRP credentials are used.
+#
+# Before enabling GitHub deliveries:
+# - Create an Incoming WebHook service connection named ms-mqtt-client-issues.
+#   Use the same WebHook Name, a strong shared secret, and header X-Hub-Signature.
+#   Authorize only this pipeline to use the connection.
+# - In the GitHub repository's Webhooks settings, subscribe to Issues only,
+#   use application/json, enable SSL verification, and configure the same secret.
+#   URL: https://dev.azure.com/msazure/_apis/public/distributedtask/webhooks/ms-mqtt-client-issues?api-version=6.0-preview
+# - Use project-scoped job authorization. Grant One Build Service (msazure)
+#   project access and View/Edit work items in the parent feature's area.
+#   Allow Create tag definition if the action's tags do not already exist.
+# - Validate a signed delivery and rejection of an invalid signature before use.
+#   Native Incoming WebHook verification uses HMAC-SHA1, not SHA256.
+#
+# A manual initialization run without a webhook does not modify work items.
+# Existing issues are never imported by edits/closures; there is no schedule.
+# Keep the upstream title suffix and repository tags used to identify each Bug.
+# Issue content is refreshed through the public GitHub API; rate limits fail the job.
+
+trigger: none
+pr: none
+
+resources:
+  repositories:
+    - repository: 1esPipelines
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+  webhooks:
+    - webhook: GitHubIssues
+      connection: ms-mqtt-client-issues
+      filters:
+        - path: repository.full_name
+          value: microsoft/rust-mqtt-client
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1esPipelines
+  parameters:
+    pool:
+      name: 1es-ms-mqtt-client-west-us
+      image: linux-image
+      os: linux
+    sdl:
+      sourceAnalysisPool:
+        name: 1es-ms-mqtt-client-west-us
+        image: windows-image
+        os: windows
+    stages:
+      - stage: Sync
+        displayName: Synchronize GitHub Bugs
+        lockBehavior: sequential
+        jobs:
+          - job: SyncBugs
+            displayName: Create or update the mirrored ADO Bug
+            timeoutInMinutes: '10'
+            steps:
+              - checkout: self
+                clean: 'true'
+                fetchDepth: '1'
+                persistCredentials: 'false'
+
+              - task: NodeTool@0
+                displayName: Install Node.js for the pinned upstream action
+                inputs:
+                  versionSpec: 24.x
+
+              - bash: python3 -B .github/scripts/issue_to_ado.py
+                displayName: Synchronize the issue and parent link
+                env:
+                  ADO_ORGANIZATION: msazure
+                  ADO_PROJECT: One
+                  ADO_PARENT_ID: '34702979'
+                  ADO_TOKEN: $(System.AccessToken)
+                  WEBHOOK_REPOSITORY_ID: ${{ parameters.GitHubIssues.repository.id }}
+                  WEBHOOK_REPOSITORY: ${{ parameters.GitHubIssues.repository.full_name }}
+                  WEBHOOK_ACTION: ${{ parameters.GitHubIssues.action }}
+                  WEBHOOK_ISSUE_NUMBER: ${{ parameters.GitHubIssues.issue.number }}
+                  WEBHOOK_ISSUE_TYPE: ${{ parameters.GitHubIssues.issue.type.name }}
+                  WEBHOOK_SENDER: ${{ parameters.GitHubIssues.sender.login }}
+                  WEBHOOK_PING_ID: ${{ parameters.GitHubIssues.hook_id }}
