@@ -317,6 +317,23 @@ class IssueSyncTests(unittest.TestCase):
         self.assertIn("##vso[task.logissue type=error]", errors.getvalue())
         self.assertIn("ADO_TOKEN", errors.getvalue())
 
+    def test_missing_private_routing_fails_before_api_access(self):
+        for name in ("ADO_ORGANIZATION", "ADO_PROJECT", "ADO_PARENT_ID"):
+            for value in (None, "", " ", f"$({name})"):
+                with self.subTest(name=name, value=value):
+                    environment = self.pipeline_environment()
+                    if value is None:
+                        del environment[name]
+                    else:
+                        environment[name] = value
+                    with patch.dict(os.environ, environment, clear=True), patch(
+                        "issue_to_ado.AzureDevOps",
+                    ) as client, patch("sys.stderr", new_callable=io.StringIO) as errors:
+                        self.assertEqual(sync.main(), 1)
+                    client.assert_not_called()
+                    self.assertIn("##vso[task.logissue type=error]", errors.getvalue())
+                    self.assertIn(name, errors.getvalue())
+
     def test_downloads_only_pinned_action_and_passes_data_without_shell_expansion(self):
         ado = FakeAzureDevOps()
         prepared = sync.prepare(ado, event(), PARENT_ID)

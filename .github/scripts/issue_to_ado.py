@@ -307,7 +307,11 @@ def main():
             return 0
         token = os.environ["ADO_TOKEN"]
         if not token:
-            raise ValueError("ADO_TOKEN must contain the pipeline job access token")
+            raise ValueError("ADO_TOKEN must contain an Azure DevOps access token")
+        for name in ("ADO_ORGANIZATION", "ADO_PROJECT", "ADO_PARENT_ID"):
+            value = os.environ[name]
+            if not value.strip() or value.startswith("$("):
+                raise ValueError(f"{name} must be configured in private pipeline variables")
         ado = AzureDevOps(
             os.environ["ADO_ORGANIZATION"], os.environ["ADO_PROJECT"], token,
         )
