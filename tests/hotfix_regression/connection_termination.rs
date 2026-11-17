@@ -376,6 +376,150 @@ pub(crate) fn expire_session_on_disconnect() -> DisconnectProperties {
     }
 }
 
+#[test_matrix([false, true])]
+#[tokio::test]
+async fn invalid_incoming_publish_returns_protocol_error(qos2: bool) {
+    let (_client, connect_handle, mut receiver) = new_client(ClientOptions {
+        client_id: Some("security-test".into()),
+        ..Default::default()
+    });
+    let mut connection = TestConnection::connect(connect_handle, false, None).await;
+    let packet_identifier = PacketIdentifier::new(1).unwrap();
+    let publish = mqtt_proto::Publish {
+        topic_name: mqtt_proto::topic("a"),
+        packet_identifier_dup_qos: if qos2 {
+            PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false)
+        } else {
+            PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, false)
+        },
+        retain: false,
+        payload: Bytes::new(),
+        other_properties: Default::default(),
+    };
+    connection
+        .incoming_packets_tx
+        .send(Packet::Publish(publish.clone()))
+        .unwrap();
+    if !qos2 {
+        connection
+            .incoming_packets_tx
+            .send(Packet::Publish(publish))
+            .unwrap();
+    }
+    let (_, event) = tokio::time::timeout(Duration::from_secs(1), &mut connection.driver)
+        .await
+        .unwrap();
+    assert_matches!(event, DisconnectedEvent::ProtocolError(err)
+        if err.to_string().contains(if qos2 { "QoS 2" } else { "outstanding packet identifier" }));
+    if !qos2 {
+        let (_publish, _token) = receiver.recv().await.unwrap();
+        assert!(receiver.recv().await.is_none());
+    }
+}
+
+#[tokio::test]
+async fn full_incoming_queue_disconnects_without_acknowledging_overflow() {
+    let (_client, connect_handle, mut receiver) = new_client(ClientOptions {
+        client_id: Some("security-test".into()),
+        incoming_publish_queue_size: std::num::NonZeroUsize::new(1).unwrap(),
+        ..Default::default()
+    });
+    let mut connection = TestConnection::connect(connect_handle, false, None).await;
+    for pkid in [None, Some(PacketIdentifier::new(1).unwrap())] {
+        connection
+            .incoming_packets_tx
+            .send(Packet::Publish(mqtt_proto::Publish {
+                topic_name: mqtt_proto::topic("a"),
+                packet_identifier_dup_qos: pkid.map_or(PacketIdentifierDupQoS::AtMostOnce, |id| {
+                    PacketIdentifierDupQoS::AtLeastOnce(id, false)
+                }),
+                retain: false,
+                payload: Bytes::from_static(b"first"),
+                other_properties: Default::default(),
+            }))
+            .unwrap();
+    }
+    let (_handle, event) = tokio::time::timeout(Duration::from_secs(1), &mut connection.driver)
+        .await
+        .unwrap();
+    assert_matches!(event, DisconnectedEvent::ProtocolError(err)
+        if err.to_string().contains("queue is full"));
+    let (publish, _) = receiver.recv().await.unwrap();
+    assert_eq!(publish.payload, Bytes::from_static(b"first"));
+    assert!(receiver.recv().now_or_never().is_none());
+    assert_matches!(
+        connection.outgoing_packets_rx.try_recv(),
+        Err(TryRecvError::Empty | TryRecvError::Disconnected)
+    );
+}
+
+#[test_matrix([false, true], [false, true])]
+#[tokio::test]
+async fn packet_limit_applies_before_connack(enhanced: bool, smaller_connect_limit: bool) {
+    let (_client, connect_handle, _receiver) = new_client(ClientOptions {
+        maximum_packet_size: std::num::NonZeroU32::new(if smaller_connect_limit { 64 } else { 32 })
+            .unwrap(),
+        ..Default::default()
+    });
+    let (transport, _incoming, mut outgoing) = test_transport(mqtt_proto::ConnAck {
+        reason_code: ConnectReasonCode::Success {
+            session_present: false,
+        },
+        other_properties: mqtt_proto::ConnAckOtherProperties {
+            reason_string: Some("a".repeat(64).as_str().into()),
+            ..Default::default()
+        },
+    });
+    let properties = ConnectProperties {
+        maximum_packet_size: std::num::NonZeroU32::new(if smaller_connect_limit { 32 } else { 64 })
+            .unwrap(),
+        ..Default::default()
+    };
+    let error = if enhanced {
+        match connect_handle
+            .connect_enhanced_auth(
+                transport,
+                true,
+                KeepAliveConfig::Infinite,
+                None,
+                None,
+                None,
+                properties,
+                AuthenticationInfo {
+                    method: "method".into(),
+                    data: None,
+                },
+                None,
+            )
+            .await
+        {
+            ConnectEnhancedAuthResult::Failure(_, err) => err,
+            _ => panic!("oversized initial response was accepted"),
+        }
+    } else {
+        match connect_handle
+            .connect(
+                transport,
+                true,
+                KeepAliveConfig::Infinite,
+                None,
+                None,
+                None,
+                properties,
+                None,
+            )
+            .await
+        {
+            ConnectResult::Failure(_, err) => err,
+            ConnectResult::Success(..) => panic!("oversized initial response was accepted"),
+        }
+    };
+    assert_matches!(error, ms_mqtt_client::error::ConnectError::Io(err)
+        if err.kind() == std::io::ErrorKind::InvalidData);
+    assert_matches!(outgoing.try_recv(), Ok(Packet::Connect(connect))
+        if connect.other_properties.maximum_packet_size.get() == 32);
+}
+
 #[test_matrix([
     Termination::ReadEof,
     Termination::WriteFailure,

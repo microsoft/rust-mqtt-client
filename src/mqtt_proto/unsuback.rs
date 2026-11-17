@@ -244,9 +244,6 @@ mod tests {
         version: ProtocolVersion,
     ) {
         let encoding = BinaryData::<Bytes>::from(encoding);
-        let mut buffer = encoding.clone().into_shared();
-        buffer.drain(std::mem::size_of::<u16>());
-
         let packet = Packet::UnsubAck(UnsubAck {
             packet_identifier: PacketIdentifier::new(0x1234).unwrap(),
             reason_codes: vec![reason],

@@ -1013,6 +1013,10 @@ pub enum DecodeError {
 #[derive(Debug, thiserror::Error)]
 pub enum EncodeError {
     // Common
+    #[error(transparent)]
+    BufferPool(#[from] buffer_pool::Error),
+    #[error("invalid MQTT string: {0}")]
+    InvalidString(DecodeError),
     #[error("insufficient buffer")]
     InsufficientBuffer,
     #[error("I/O error: {0}")]

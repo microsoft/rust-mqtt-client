@@ -3,7 +3,7 @@
 
 use std::mem::size_of;
 
-use bytes::{BufMut as _, Bytes, BytesMut};
+use bytes::Bytes;
 
 use crate::buffer_pool::{self, BytesAccumulator, Owned, Shared};
 use crate::mqtt_proto::{DecodeError, EncodeError};
@@ -12,6 +12,9 @@ use crate::mqtt_proto::{DecodeError, EncodeError};
 /// with a two-byte big-endian length.
 ///
 /// Ref: 1.5.6 Binary data
+///
+/// The backing buffer contains data only. The encoder validates the byte length
+/// and writes the two-byte prefix, so infallible conversions cannot truncate it.
 #[derive(Clone, Debug)]
 pub struct BinaryData<S>(pub(crate) S)
 where
@@ -21,58 +24,36 @@ impl<S> BinaryData<S>
 where
     S: Shared,
 {
+    /// Wire encoding of an empty value, including its length prefix.
     pub const EMPTY: &'static [u8] = b"\x00\x00";
 
-    pub fn new<O>(owned: &mut O, s: impl AsRef<[u8]>) -> Result<Self, buffer_pool::Error>
+    pub fn new<O>(owned: &mut O, s: impl AsRef<[u8]>) -> Result<Self, EncodeError>
     where
         O: Owned<Shared = S>,
     {
         let s = s.as_ref();
 
-        assert!(owned.filled_is_empty());
-
         let len = s.len();
-
-        owned.reserve(len + U16_SIZE)?;
-
-        // SAFETY: Requirements of `unfilled_mut` and `fill` are upheld.
-        unsafe {
-            let len: u16 = len.try_into().expect("len is too big for u16");
-            let len = len.to_be_bytes();
-            let buf = owned.unfilled_mut();
-            buffer_pool::maybe_uninit_copy_from_slice(&mut buf[..U16_SIZE], &len);
-            owned.fill(U16_SIZE);
+        if len > usize::from(u16::MAX) {
+            return Err(EncodeError::BinaryDataTooLarge(len));
         }
-
-        // SAFETY: Requirements of `unfilled_mut` and `fill` are upheld.
-        unsafe {
-            let buf = owned.unfilled_mut();
-            buffer_pool::maybe_uninit_copy_from_slice(&mut buf[..len], s);
-            owned.fill(len);
-        }
-
-        let filled_len = owned.filled_len();
-        let shared = owned.split_to(filled_len).freeze();
-        Ok(BinaryData(shared))
+        Ok(BinaryData(Shared::new(owned, s)?))
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        self.0
-            .as_ref()
-            .get(size_of::<u16>()..)
-            .expect("self.0 has length prefix")
+        self.0.as_ref()
     }
 
     pub fn len(&self) -> usize {
-        // self.0 has a length prefix, so the data is 2 bytes shorter
-        self.0.len() - size_of::<u16>()
+        self.0.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.as_ref() == Self::EMPTY
+        self.0.is_empty()
     }
 
-    pub fn into_shared(self) -> S {
+    /// Returns the data bytes without a wire-format length prefix.
+    pub fn into_bytes(self) -> S {
         self.0
     }
 
@@ -96,7 +77,8 @@ where
             return None;
         }
 
-        let s = src.split_to(size_of::<u16>() + len);
+        src.drain(size_of::<u16>());
+        let s = src.split_to(len);
 
         Some(BinaryData(s))
     }
@@ -123,6 +105,12 @@ where
     where
         B: BytesAccumulator<Shared = S>,
     {
+        let len = self
+            .len()
+            .try_into()
+            .map_err(|_| EncodeError::BinaryDataTooLarge(self.len()))?;
+        dst.try_put_u16_be(len)
+            .ok_or(EncodeError::InsufficientBuffer)?;
         dst.put_shared(self.0.clone());
         Ok(())
     }
@@ -237,10 +225,7 @@ where
 
 impl From<&[u8]> for BinaryData<Bytes> {
     fn from(s: &[u8]) -> Self {
-        let mut result = BytesMut::with_capacity(U16_SIZE + s.len());
-        result.put(&u16::try_from(s.len()).unwrap().to_be_bytes()[..]);
-        result.put(s);
-        Self(result.freeze())
+        Self(Bytes::copy_from_slice(s))
     }
 }
 
@@ -249,8 +234,6 @@ impl<const N: usize> From<&[u8; N]> for BinaryData<Bytes> {
         s[..].into()
     }
 }
-
-const U16_SIZE: usize = size_of::<u16>();
 
 #[cfg(test)]
 mod tests {
@@ -267,6 +250,31 @@ mod tests {
     use crate::buffer_pool::{BufferPool as _, Shared as _};
 
     use super::{BinaryData, DecodeError};
+
+    #[test_case(65_535, true)]
+    #[test_case(65_536, false)]
+    fn binary_length_boundaries(len: usize, accepted: bool) {
+        let input = vec![0x41; len];
+        let data = BinaryData::from(input.as_slice());
+        let mut encoded = crate::buffer_pool::SingleAccumulator::<Bytes>::new();
+        match data.encode(&mut encoded) {
+            Ok(()) => {
+                assert!(accepted);
+                assert_eq!(&encoded.as_ref()[..2], &[0xff, 0xff]);
+                let mut src = Bytes::copy_from_slice(encoded.as_ref());
+                assert_eq!(BinaryData::decode(&mut src).unwrap().as_bytes(), input);
+                assert!(src.is_empty());
+            }
+            Err(super::EncodeError::BinaryDataTooLarge(actual)) => {
+                assert!(!accepted);
+                assert_eq!(actual, len);
+                assert!(encoded.as_ref().is_empty());
+            }
+            Err(err) => panic!("unexpected encoding error: {err}"),
+        }
+        let mut owned = crate::buffer_pool::BytesPool.take_empty_owned();
+        assert_eq!(BinaryData::new(&mut owned, input).is_ok(), accepted);
+    }
 
     #[test_case(b"cats", b"cats", true)]
     #[test_case(b"cats", b"dogs", false)]

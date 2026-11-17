@@ -86,9 +86,8 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
     // and the fallback Drop implementation cannot await channel capacity without spawning many tasks/threads
     // in a way which severely affects performance.
     let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel();
-    // NOTE: We use an unbounded channel for incoming publishes, as messages read off the network must go
-    // somewhere.
-    let (i_pub_tx, i_pub_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (i_pub_tx, i_pub_rx) =
+        tokio::sync::mpsc::channel(options.incoming_publish_queue_size.get());
     let client = Client {
         pub_qos0_tx: o_pub_q0_tx,
         pub_qos12_tx: o_pub_q12_tx,
@@ -116,6 +115,7 @@ pub fn new_client(options: ClientOptions) -> (Client, ConnectHandle, Receiver) {
         reader_pool,
         writer_pool,
         cfg_client_id: options.client_id,
+        cfg_maximum_packet_size: options.maximum_packet_size,
     };
     let receiver = Receiver { rx: i_pub_rx };
     (client, connect_handle, receiver)
@@ -131,6 +131,14 @@ pub struct ClientOptions {
     pub publish_qos0_queue_size: usize,
     /// Maximum size of the outgoing queue for QoS 1 and 2 PUBLISH packets.
     pub publish_qos1_qos2_queue_size: usize,
+    /// Maximum total size in bytes of an incoming MQTT packet, including its fixed header.
+    /// CONNECT advertises the smaller of this limit and `ConnectProperties::maximum_packet_size`.
+    /// Oversized packets are rejected before reserving their bodies. Defaults to 1 MiB.
+    pub maximum_packet_size: std::num::NonZeroU32,
+    /// Maximum number of incoming publications waiting for the receiver. Defaults to 100.
+    /// Overflow ends the connection with an explicit error rather than dropping messages
+    /// silently or blocking MQTT control traffic. Application-owned messages need separate limits.
+    pub incoming_publish_queue_size: std::num::NonZeroUsize,
     // TODO: Consider using a Builder pattern?
 }
 
@@ -141,6 +149,8 @@ impl Default for ClientOptions {
             max_packet_identifier: PacketIdentifier::MAX,
             publish_qos0_queue_size: 100,
             publish_qos1_qos2_queue_size: 100,
+            maximum_packet_size: std::num::NonZeroU32::new(1024 * 1024).unwrap(),
+            incoming_publish_queue_size: std::num::NonZeroUsize::new(100).unwrap(),
         }
     }
 }
@@ -365,7 +375,7 @@ impl Client {
 /// Receives incoming Application Messages as `Publish`es.
 pub struct Receiver {
     /// Channel for receiving incoming PUBLISH packets
-    rx: tokio::sync::mpsc::UnboundedReceiver<IncomingPublishAndToken<Bytes>>,
+    rx: tokio::sync::mpsc::Receiver<IncomingPublishAndToken<Bytes>>,
 }
 
 impl Receiver {
@@ -432,6 +442,7 @@ pub struct ConnectHandle {
     reader_pool: BytesPool,
     writer_pool: BytesPool,
     cfg_client_id: Option<String>,
+    cfg_maximum_packet_size: std::num::NonZeroU32,
 }
 
 impl ConnectHandle {
@@ -503,10 +514,16 @@ impl ConnectHandle {
         will: Option<Will>,
         username: Option<String>,
         password: Option<Bytes>,
-        properties: ConnectProperties,
+        mut properties: ConnectProperties,
         response_timeout: Option<Duration>,
     ) -> ConnectResult {
-        let (mut reader, mut writer) = match self.transport_connect(connection_transport).await {
+        properties.maximum_packet_size = properties
+            .maximum_packet_size
+            .min(self.cfg_maximum_packet_size);
+        let (mut reader, mut writer) = match self
+            .transport_connect(connection_transport, properties.maximum_packet_size)
+            .await
+        {
             Ok(streams) => streams,
             Err(err) => {
                 return ConnectResult::Failure(self, err.into());
@@ -571,6 +588,7 @@ impl ConnectHandle {
                 reader,
                 writer,
                 cfg_client_id: self.cfg_client_id,
+                cfg_maximum_packet_size: self.cfg_maximum_packet_size,
                 cfg_pingresp_timeout,
             },
             connack.into(),
@@ -678,12 +696,18 @@ impl ConnectHandle {
         will: Option<Will>,
         username: Option<String>,
         password: Option<Bytes>,
-        properties: ConnectProperties,
+        mut properties: ConnectProperties,
         authentication_info: AuthenticationInfo,
         response_timeout: Option<Duration>,
     ) -> ConnectEnhancedAuthResult {
+        properties.maximum_packet_size = properties
+            .maximum_packet_size
+            .min(self.cfg_maximum_packet_size);
         let auth_method = authentication_info.method.clone();
-        let (reader, mut writer) = match self.transport_connect(connection_transport).await {
+        let (reader, mut writer) = match self
+            .transport_connect(connection_transport, properties.maximum_packet_size)
+            .await
+        {
             Ok(streams) => streams,
             Err(err) => return ConnectEnhancedAuthResult::Failure(self, err.into()),
         };
@@ -712,6 +736,7 @@ impl ConnectHandle {
             writer,
             auth_method,
             cfg_client_id: self.cfg_client_id,
+            cfg_maximum_packet_size: self.cfg_maximum_packet_size,
             cfg_keep_alive: keep_alive,
             cfg_session_expiry_interval: session_expiry_interval,
         };
@@ -721,6 +746,7 @@ impl ConnectHandle {
     async fn transport_connect(
         &self,
         transport_config: ConnectionTransportConfig,
+        maximum_packet_size: std::num::NonZeroU32,
     ) -> io::Result<(Reader<BytesPool>, Writer<BytesPool>)> {
         let ConnectionTransportConfig {
             transport_type,
@@ -728,7 +754,9 @@ impl ConnectHandle {
             proxy,
             tcp_nodelay,
         } = transport_config;
-        Ok(match transport_type {
+        let maximum_packet_size =
+            usize::try_from(maximum_packet_size.get()).expect("usize is at least u32");
+        let (mut reader, writer) = match transport_type {
             ConnectionTransportType::Tcp { hostname, port } => {
                 maybe_timeout(
                     timeout,
@@ -777,6 +805,7 @@ impl ConnectHandle {
                         proxy,
                         tcp_nodelay,
                         &self.reader_pool,
+                        maximum_packet_size,
                     ),
                 )
                 .await??
@@ -792,7 +821,9 @@ impl ConnectHandle {
                 &self.reader_pool,
                 &self.writer_pool,
             ),
-        })
+        };
+        reader.set_maximum_packet_size(maximum_packet_size);
+        Ok((reader, writer))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -842,6 +873,7 @@ pub struct EnhancedAuthHandle {
     writer: Writer<BytesPool>,
     auth_method: String,
     cfg_client_id: Option<String>,
+    cfg_maximum_packet_size: std::num::NonZeroU32,
     cfg_keep_alive: KeepAliveConfig,
     cfg_session_expiry_interval: SessionExpiryInterval,
 }
@@ -928,6 +960,7 @@ impl EnhancedAuthHandle {
                         reader: self.reader,
                         writer: self.writer,
                         cfg_client_id: self.cfg_client_id,
+                        cfg_maximum_packet_size: self.cfg_maximum_packet_size,
                         cfg_pingresp_timeout,
                     };
                     ConnectEnhancedAuthResult::Success(
@@ -981,6 +1014,7 @@ impl EnhancedAuthHandle {
             reader_pool: self.reader_pool,
             writer_pool: self.writer_pool,
             cfg_client_id: self.cfg_client_id,
+            cfg_maximum_packet_size: self.cfg_maximum_packet_size,
         }
     }
 }
@@ -993,6 +1027,7 @@ pub struct Connection {
     reader: Reader<BytesPool>,
     writer: Writer<BytesPool>,
     cfg_client_id: Option<String>,
+    cfg_maximum_packet_size: std::num::NonZeroU32,
     cfg_pingresp_timeout: Option<Duration>,
 }
 
@@ -1034,6 +1069,7 @@ impl Connection {
             reader_pool: self.reader_pool,
             writer_pool: self.writer_pool,
             cfg_client_id: self.cfg_client_id,
+            cfg_maximum_packet_size: self.cfg_maximum_packet_size,
         };
         // NOTE: By returning here, we implicitly drop the `reader` and `writer` stored on the
         // `Connection`, implicitly closing the underlying transport.
@@ -1115,7 +1151,7 @@ impl Connection {
                         return Ok(InnerDisconnect::Server(disconnect));
                     }
 
-                    Packet::Publish(publish) => self.session.incoming_publish(publish),
+                    Packet::Publish(publish) => self.session.incoming_publish(publish)?,
 
                     Packet::PingResp(_) => {
                         // Remove ping response timer as we have successfully received a PINGRESP.

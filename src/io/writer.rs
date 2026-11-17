@@ -175,6 +175,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oversized_public_properties_fail_before_writing() {
+        let pool = BytesPool;
+        let mut writer = Writer::new(
+            Box::new(MockWritableStream {
+                expected_writes: VecDeque::new(),
+            }),
+            EitherAccumulator::<BytesPool>::Iovecs(pool.take_empty_owned().into()),
+        );
+        for binary in [false, true] {
+            let properties = crate::packet::PublishProperties {
+                correlation_data: binary.then(|| Bytes::from(vec![0; 65_536])),
+                content_type: (!binary).then(|| "x".repeat(65_536)),
+                ..Default::default()
+            };
+            let publish = Packet::Publish(crate::mqtt_proto::Publish {
+                topic_name: crate::mqtt_proto::topic("a"),
+                packet_identifier_dup_qos: crate::mqtt_proto::PacketIdentifierDupQoS::AtMostOnce,
+                retain: false,
+                payload: Bytes::new(),
+                other_properties: properties.into(),
+            });
+            let err = writer
+                .write(&publish, ProtocolVersion::V5)
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                err.get_ref()
+                    .and_then(|err| err.downcast_ref::<crate::mqtt_proto::EncodeError>()),
+                Some(
+                    crate::mqtt_proto::EncodeError::BinaryDataTooLarge(65_536)
+                        | crate::mqtt_proto::EncodeError::StringTooLarge(65_536)
+                )
+            ));
+        }
+        writer.flush().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn it_works() {
         let p1 = Packet::<Bytes>::Connect(Connect {
             username: None,
@@ -202,10 +240,10 @@ mod tests {
             expected_writes: [vec![
                 // CONNECT
                 &b"\x10\x0d\x00\x04\x4d\x51\x54\x54\x05\x02\x00\x00\x00\x00\x00"[..],
-                // Start of SUBSCRIBE
-                &b"\x82\x09\x00\x01\x00"[..],
+                // Start of SUBSCRIBE, including the topic filter length
+                &b"\x82\x09\x00\x01\x00\x00\x03"[..],
                 // SUBSCRIBE topic filter string
-                &b"\x00\x03\x66\x6f\x6f"[..],
+                &b"\x66\x6f\x6f"[..],
                 // End of SUBSCRIBE
                 &b"\x09"[..],
             ]]

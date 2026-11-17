@@ -9,6 +9,7 @@ use derive_where::derive_where;
 use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
 use indexmap::IndexMap;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 use tokio::time::{Duration, Instant};
 
@@ -80,7 +81,7 @@ where
         ack_rx: UnboundedReceiver<AcknowledgementRequest<O::Shared>>,
         auth_rx: Receiver<ReauthRequest<O::Shared>>,
         ping_rx: Receiver<PingRequest>,
-        i_pub_tx: UnboundedSender<IncomingPublishAndToken<O::Shared>>,
+        i_pub_tx: Sender<IncomingPublishAndToken<O::Shared>>,
         ack_tx: UnboundedSender<AcknowledgementRequest<O::Shared>>,
         auth_tx: Sender<ReauthRequest<O::Shared>>,
         max_pkid: PacketIdentifier,
@@ -578,20 +579,33 @@ where
     }
 
     /// An incoming PUBLISH packet has been received from the server
-    pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
+    pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) -> Result<(), ProtocolError> {
+        if matches!(
+            publish.packet_identifier_dup_qos,
+            PacketIdentifierDupQoS::ExactlyOnce(..)
+        ) {
+            return Err(ProtocolErrorRepr::UnsupportedPublishQoS.into());
+        }
+        let permit = match self.ch.i_pub_tx.try_reserve() {
+            Ok(permit) => Some(permit),
+            Err(TrySendError::Closed(())) => None,
+            Err(TrySendError::Full(())) => {
+                return Err(ProtocolErrorRepr::IncomingPublishQueueFull.into());
+            }
+        };
         let incoming = match publish.packet_identifier_dup_qos {
             PacketIdentifierDupQoS::AtMostOnce => IncomingPublishAndToken::QoS0(publish),
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
-                let r = self
+                if self
                     .in_application
                     .publishes
+                    .contains_key(&packet_identifier)
+                {
+                    return Err(ProtocolErrorRepr::DuplicatePublishIdentifier.into());
+                }
+                self.in_application
+                    .publishes
                     .insert(packet_identifier, PendingAcknowledgement::NotReady);
-                // TODO: How to handle if the pkid already exists? What should the error
-                // story / experience be precisely?
-                assert!(
-                    r.is_none(),
-                    "TODO: Handle the case where pkid already exists"
-                );
                 IncomingPublishAndToken::QoS1(
                     publish,
                     PubAckToken::new(
@@ -601,18 +615,16 @@ where
                     ),
                 )
             }
-            PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
-                self.in_application
-                    .publishes
-                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
-                todo!()
-            }
+            PacketIdentifierDupQoS::ExactlyOnce(..) => unreachable!("QoS 2 rejected above"),
         };
 
         // Ignore error from sending to incoming PUBLISH receiver.
         // If there is an error, it's because the application dropped the incoming PUBLISH receiver,
         // in which case `incoming` will be dropped here and will auto-ack it via dropping the ack token.
-        _ = self.ch.i_pub_tx.send(incoming);
+        if let Some(permit) = permit {
+            permit.send(incoming);
+        }
+        Ok(())
     }
 
     /// An incoming AUTH packet has been received from the server as part of a reauthentication process
@@ -818,7 +830,7 @@ where
     /// Channel for receiving outgoing PINGREQ requests
     ping_rx: Receiver<PingRequest>,
     /// Channel for sending incoming PUBLISHes and associated acknowledgement tokens
-    i_pub_tx: UnboundedSender<IncomingPublishAndToken<S>>,
+    i_pub_tx: Sender<IncomingPublishAndToken<S>>,
 
     // --- Channels stored here to be cloned, and should not be used directly ---
     // TODO: Is this really the correct place for these?
@@ -1081,7 +1093,7 @@ mod tests {
         let (ack_tx, ack_rx) = unbounded_channel();
         let (auth_tx, auth_rx) = channel(1);
         let (_ping_tx, ping_rx) = channel(1);
-        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let (incoming_publish_tx, _incoming_publish_rx) = channel(100);
         let mut session = Session::new(
             sub_rx,
             publish_qos0_rx,
@@ -1125,7 +1137,7 @@ mod tests {
         let (ack_tx, ack_rx) = unbounded_channel();
         let (auth_tx, auth_rx) = channel(1);
         let (ping_tx, ping_rx) = channel(1);
-        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let (incoming_publish_tx, _incoming_publish_rx) = channel(100);
         let mut session = Session::new(
             sub_rx,
             publish_qos0_rx,
@@ -1182,7 +1194,7 @@ mod tests {
         let (ack_tx, ack_rx) = unbounded_channel();
         let (auth_tx, auth_rx) = channel(1);
         let (ping_tx, ping_rx) = channel(1);
-        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let (incoming_publish_tx, _incoming_publish_rx) = channel(100);
         let mut session = Session::new(
             sub_rx,
             publish_qos0_rx,
@@ -1251,7 +1263,7 @@ mod tests {
         let (ack_tx, ack_rx) = unbounded_channel();
         let (auth_tx, auth_rx) = channel(1);
         let (_ping_tx, ping_rx) = channel(1);
-        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let (incoming_publish_tx, _incoming_publish_rx) = channel(100);
         let mut session = Session::new(
             sub_rx,
             publish_qos0_rx,
@@ -1307,7 +1319,7 @@ mod tests {
         let (ack_tx, ack_rx) = unbounded_channel();
         let (auth_tx, auth_rx) = channel(1);
         let (_ping_tx, ping_rx) = channel(1);
-        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let (incoming_publish_tx, _incoming_publish_rx) = channel(100);
         let mut session = Session::new(
             sub_rx,
             publish_qos0_rx,
@@ -1370,7 +1382,7 @@ mod tests {
         let (ack_tx, ack_rx) = unbounded_channel();
         let (auth_tx, auth_rx) = channel(1);
         let (_ping_tx, ping_rx) = channel(1);
-        let (incoming_publish_tx, _incoming_publish_rx) = unbounded_channel();
+        let (incoming_publish_tx, _incoming_publish_rx) = channel(100);
         let mut session = Session::new(
             sub_rx,
             publish_qos0_rx,

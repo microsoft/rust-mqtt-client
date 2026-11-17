@@ -58,11 +58,13 @@ where
 {
     pub const EMPTY: &'static [u8] = BinaryData::<S>::EMPTY;
 
+    /// Copies UTF-8 bytes; MQTT length and character constraints are checked on encoding.
     pub fn new<O>(owned: &mut O, s: impl AsRef<str>) -> Result<Self, buffer_pool::Error>
     where
         O: Owned<Shared = S>,
     {
-        Ok(Self(BinaryData::new(owned, s.as_ref().as_bytes())?))
+        let s = s.as_ref();
+        Ok(Self(BinaryData(Shared::new(owned, s.as_bytes())?)))
     }
 
     pub fn len(&self) -> usize {
@@ -122,6 +124,10 @@ where
     where
         B: BytesAccumulator<Shared = S>,
     {
+        if self.len() > usize::from(u16::MAX) {
+            return Err(EncodeError::StringTooLarge(self.len()));
+        }
+        validate_mqtt_string(self.0.as_bytes()).map_err(EncodeError::InvalidString)?;
         self.0.encode(dst)
     }
 
@@ -261,6 +267,51 @@ mod tests {
 
     use super::*;
 
+    #[test_case(65_535, true)]
+    #[test_case(65_536, false)]
+    fn string_length_boundaries(len: usize, accepted: bool) {
+        let input = "a".repeat(len);
+        let value = ByteStr::<bytes::Bytes>::from(input.as_str());
+        let mut encoded = crate::buffer_pool::SingleAccumulator::new();
+        match value.encode(&mut encoded) {
+            Ok(()) => {
+                assert!(accepted);
+                let mut src = bytes::Bytes::copy_from_slice(encoded.as_ref());
+                assert_eq!(ByteStr::decode(&mut src).unwrap().unwrap().as_ref(), input);
+            }
+            Err(EncodeError::StringTooLarge(actual)) => {
+                assert!(!accepted);
+                assert_eq!(actual, len);
+                assert!(encoded.as_ref().is_empty());
+            }
+            Err(err) => panic!("unexpected encoding error: {err}"),
+        }
+    }
+
+    #[test_case("embedded\0nul")]
+    #[test_case("control\u{1f}")]
+    fn invalid_outgoing_strings_return_errors(input: &str) {
+        let value = ByteStr::<bytes::Bytes>::from(input);
+        let mut encoded = crate::buffer_pool::SingleAccumulator::new();
+        assert!(matches!(
+            value.encode(&mut encoded),
+            Err(EncodeError::InvalidString(_))
+        ));
+        assert!(encoded.as_ref().is_empty());
+    }
+
+    #[test]
+    fn string_limit_counts_utf8_bytes_not_characters() {
+        let input = "\u{00e9}".repeat(32_768);
+        let value = ByteStr::<bytes::Bytes>::from(input.as_str());
+        let mut encoded = crate::buffer_pool::SingleAccumulator::new();
+        assert!(matches!(
+            value.encode(&mut encoded),
+            Err(EncodeError::StringTooLarge(65_536))
+        ));
+        assert!(encoded.as_ref().is_empty());
+    }
+
     #[test]
     fn new() {
         let mut buffer = BytesPool.take_empty_owned();
@@ -292,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn into_shared_and_from_utf8_shared() {
+    fn encoded_string_from_utf8_shared() {
         let mut buffer = BytesPool.take_empty_owned();
 
         // when 398 (len) is encoded as firs two bytes,
@@ -302,7 +353,9 @@ mod tests {
 
         let val = ByteStr::new(&mut buffer, &test_string).unwrap();
 
-        let src = val.0.into_shared();
+        let mut encoded = crate::buffer_pool::SingleAccumulator::<bytes::Bytes>::new();
+        val.encode(&mut encoded).unwrap();
+        let src = bytes::Bytes::copy_from_slice(encoded.as_ref());
 
         let new_val = ByteStr::from_utf8_shared(src).unwrap();
 
@@ -312,7 +365,11 @@ mod tests {
     #[test_case("abc")]
     #[test_case("A𪛔")]
     fn decode_unicode_ok(input: &str) {
-        let mut src = BinaryData::from(input.as_bytes()).into_shared();
+        let mut encoded = crate::buffer_pool::SingleAccumulator::<bytes::Bytes>::new();
+        BinaryData::from(input.as_bytes())
+            .encode(&mut encoded)
+            .unwrap();
+        let mut src = bytes::Bytes::copy_from_slice(encoded.as_ref());
 
         let actual = ByteStr::decode(&mut src).unwrap().unwrap();
         assert_eq!(actual.as_ref(), input);
@@ -327,7 +384,11 @@ mod tests {
             let input: char = input.try_into().unwrap();
             let input = input.to_string();
 
-            let mut src = BinaryData::from(input.as_bytes()).into_shared();
+            let mut encoded = crate::buffer_pool::SingleAccumulator::<bytes::Bytes>::new();
+            BinaryData::from(input.as_bytes())
+                .encode(&mut encoded)
+                .unwrap();
+            let mut src = bytes::Bytes::copy_from_slice(encoded.as_ref());
 
             _ = ByteStr::decode(&mut src).unwrap_err();
         }

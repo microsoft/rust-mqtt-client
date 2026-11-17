@@ -100,8 +100,7 @@ where
             let retain = connect_flags & CONNECT_FLAGS_WILL_RETAIN != 0;
 
             let payload = BinaryData::decode(src).ok_or(DecodeError::IncompletePacket)?;
-            let mut payload = payload.into_shared();
-            payload.drain(std::mem::size_of::<u16>());
+            let payload = payload.into_bytes();
 
             Some(Box::new((
                 Publication {
@@ -209,8 +208,7 @@ where
             let retain = connect_flags & CONNECT_FLAGS_WILL_RETAIN != 0;
 
             let payload = BinaryData::decode(src).ok_or(DecodeError::IncompletePacket)?;
-            let mut payload = payload.into_shared();
-            payload.drain(std::mem::size_of::<u16>());
+            let payload = payload.into_bytes();
 
             Some(Box::new((
                 Publication {
@@ -779,8 +777,7 @@ mod tests {
     )]
     fn will_properties_flags_set_but_not_will_flag(encoding: &[u8], version: ProtocolVersion) {
         let encoding = BinaryData::<Bytes>::from(encoding);
-        let mut buffer = encoding.into_shared();
-        buffer.drain(std::mem::size_of::<u16>());
+        let mut buffer = encoding.into_bytes();
 
         assert_matches!(
             Packet::decode_full(&mut buffer, version),
@@ -847,8 +844,7 @@ mod tests {
 
         // Decode test
 
-        let mut buffer = encoding.clone().into_shared();
-        buffer.drain(std::mem::size_of::<u16>());
+        let mut buffer = encoding.clone().into_bytes();
 
         let actual_packet = Packet::decode_full(&mut buffer, version);
 

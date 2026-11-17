@@ -60,3 +60,48 @@ fuzz coverage beyond packet decoding to streaming and session transitions.
 Re-run latest and minimum-direct dependency advisory checks, and verify deployed
 native TLS dependencies. Application-owned message retention and processing
 still need their own resource budgets.
+
+## Remediation
+
+- Incoming QoS 2 and duplicate outstanding QoS 1 identifiers now return protocol
+  errors through the normal connection shutdown path instead of panicking.
+- Incoming MQTT packets are capped before body reservation, including initial
+  authentication. CONNECT advertises the smaller of the configured local limit
+  and the requested MQTT Maximum Packet Size. The same limit bounds WebSocket
+  frames and complete messages.
+- Incoming publication queue capacity is configurable and bounded. Overflow
+  reports a receive-limit error and closes the connection without acknowledging
+  the overflowing publication. A deliberately dropped receiver retains its
+  existing automatic acknowledgement behavior.
+- Binary/string storage no longer eagerly serializes length prefixes during
+  infallible conversions. Encoding checks byte lengths and MQTT string rules and
+  returns typed encoding errors; the writer's sizing pass rejects invalid fields
+  before adding packet bytes to its output buffer. High-level encoding failures
+  are reported as connection I/O errors, not successful delivery.
+- The default limits are 1 MiB per inbound packet and 100 queued publications.
+  Larger workloads must explicitly configure larger limits. Messages held by
+  application code are outside the queue budget.
+- The OpenSSL wrapper minimum is raised to 0.10.80, which includes fixes for all
+  eight OpenSSL advisories previously ignored. Those exceptions are removed.
+  async-tungstenite is upgraded to 0.35 and development-only env_logger to 0.11.
+
+### Compatibility notes
+
+`ClientOptions` has new nonzero packet-size and incoming-queue capacity fields.
+Use `..Default::default()` in struct literals where appropriate.
+Oversized packets and slow-consumer queue overflow now intentionally disconnect.
+WebSocket limits apply to an entire frame/message, even if it carries multiple
+MQTT packets.
+
+For low-level users, `BinaryData::new` now returns `EncodeError`.
+`BinaryData::into_bytes` replaces `into_shared` and returns data without the wire
+length prefix. Use `encode` to produce the wire representation. Infallible string
+and binary conversions remain available; their encoding is fallible.
+
+### Post-change dependency scan
+
+An unfiltered cargo-audit 0.23.0 scan of the upgraded local 81-package lockfile
+reported zero vulnerabilities and zero warnings, including yanked-package
+checks, against the 2026-11-15 RustSec database. This result is for the local
+resolution, not every permitted downstream resolution or the deployed native
+OpenSSL library.

@@ -59,6 +59,31 @@ brew install pkg-config openssl@3
 
 TCP and TLS transports are available by default. WebSocket transports are available through the `websockets` feature.
 
+### Input limits
+
+`ClientOptions` defaults to a 1 MiB maximum incoming MQTT packet (including its fixed
+header) and 100 queued incoming publications. Configure `maximum_packet_size` and
+`incoming_publish_queue_size` for larger workloads. The smaller of the local packet
+limit and `ConnectProperties::maximum_packet_size` is advertised in CONNECT and
+enforced before body allocation, including during authentication. WebSocket frames
+and complete messages are capped at the same size, even if a message contains
+multiple MQTT packets.
+
+An oversized packet ends the connection with an I/O error. Queue overflow,
+unsupported incoming QoS 2, and reuse of an outstanding QoS 1 identifier produce
+protocol/receive-limit errors rather than panics or silent drops. Queue overflow
+does not acknowledge the overflowing publication. Reconnection and recovery remain
+application decisions; bound application-owned messages separately.
+
+Outbound strings and binary properties must fit their MQTT two-byte length fields
+(65,535 bytes). Encoding rejects oversized fields and disallowed MQTT string
+characters with explicit errors. Such encoding failures surface as connection
+errors, not successful delivery; keep driving the connection and observe its result.
+
+For low-level buffer users, `BinaryData::new` now returns an encoding error for
+oversized data. `BinaryData::into_bytes` replaces `into_shared` and returns only
+the data, without the wire length prefix. Use `encode` to produce the wire format.
+
 ### Simple Connect and Publish
 
 ```rust
