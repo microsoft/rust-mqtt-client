@@ -75,7 +75,7 @@ jobs:
     # Install cargo subcommands AFTER the cache restore: Swatinem/rust-cache
     # caches ~/.cargo/bin, so a warm cache makes this a no-op.
     - name: Install cargo tooling
-      uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+      uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
       with:
         tool: cargo-machete,cargo-deny
 
@@ -284,7 +284,7 @@ jobs:
         shared-key: coverage
 
     - name: Install cargo tooling
-      uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+      uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
       with:
         tool: cargo-llvm-cov
 
