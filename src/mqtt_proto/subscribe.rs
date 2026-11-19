@@ -402,8 +402,7 @@ mod tests {
     #[test_case(b"\x82!\0\x02\r\x0b\x01&\0\x03cat\0\x03dog\0\x0e$share/foo/bar-")]
     fn no_local_for_shared_subscription(encoding: &[u8]) {
         let encoding = BinaryData::<Bytes>::from(encoding);
-        let mut buffer = encoding.into_shared();
-        buffer.drain(std::mem::size_of::<u16>());
+        let mut buffer = encoding.into_bytes();
 
         assert_matches!(
             Packet::decode_full(&mut buffer, ProtocolVersion::V5,),

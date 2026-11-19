@@ -50,7 +50,7 @@ pub enum ConnectError {
     ResponseTimeout,
 }
 
-/// Indicates a protocol violation of the MQTT specification
+/// Indicates a protocol violation or an exceeded incoming publication limit.
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct ProtocolError(#[from] ProtocolErrorRepr);
@@ -67,4 +67,10 @@ pub(crate) enum ProtocolErrorRepr {
     UnexpectedPacket,
     #[error("protocol violation: missing or mismatched authentication method")]
     AuthenticationMethodMismatch,
+    #[error("protocol violation: QoS 2 PUBLISH is not supported")]
+    UnsupportedPublishQoS,
+    #[error("protocol violation: incoming PUBLISH reuses an outstanding packet identifier")]
+    DuplicatePublishIdentifier,
+    #[error("incoming publication queue is full")]
+    IncomingPublishQueueFull,
 }

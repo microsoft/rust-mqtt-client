@@ -7,6 +7,8 @@ use crate::buffer_pool::{BufferPool, Owned};
 use crate::io::ReadableStream;
 use crate::mqtt_proto;
 
+pub(crate) const DEFAULT_MAXIMUM_PACKET_SIZE: usize = 1024 * 1024;
+
 /// This type wraps a readable network stream and provides API to read from it
 /// into a given [`Owned`].
 pub struct Reader<BP>
@@ -15,6 +17,7 @@ where
 {
     inner: Box<dyn ReadableStream + Send>,
     buf: BP::Owned,
+    maximum_packet_size: usize,
 }
 
 #[derive(Debug)]
@@ -28,7 +31,15 @@ where
     BP: BufferPool,
 {
     pub(crate) fn new(inner: Box<dyn ReadableStream + Send>, buf: BP::Owned) -> Self {
-        Self { inner, buf }
+        Self {
+            inner,
+            buf,
+            maximum_packet_size: DEFAULT_MAXIMUM_PACKET_SIZE,
+        }
+    }
+
+    pub(crate) fn set_maximum_packet_size(&mut self, maximum_packet_size: usize) {
+        self.maximum_packet_size = maximum_packet_size;
     }
 
     /// Receives and decodes an MQTT packet from the underlying network stream.
@@ -36,7 +47,8 @@ where
     /// # Errors
     ///
     /// Returns an IO error if the underlying network stream read produced an error,
-    /// or an `UnexpectedEof` if 0 bytes were read.
+    /// an `UnexpectedEof` if 0 bytes were read, or `InvalidData` if the packet
+    /// exceeds the configured total size limit.
     pub async fn read(&mut self) -> io::Result<RawPacket<BP::Shared>> {
         let (fixed_header_len, first_byte, remaining_length) = loop {
             let mut filled = self.buf.filled();
@@ -61,6 +73,13 @@ where
                 }
             }
         };
+
+        if fixed_header_len + remaining_length > self.maximum_packet_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "incoming MQTT packet exceeds maximum packet size",
+            ));
+        }
 
         if let Some(remaining) =
             (fixed_header_len + remaining_length).checked_sub(self.buf.filled_len())
@@ -170,6 +189,40 @@ mod tests {
                 self.reads.is_empty(),
                 "MockReadableStream dropped before all expected reads occurred"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_header_is_rejected_before_body_allocation() {
+        let pool = BytesPool;
+        let mut reader = Reader::<BytesPool>::new(
+            Box::new(Cursor::new(&b"\x30\xff\xff\xff\x7f"[..])),
+            pool.take_empty_owned(),
+        );
+        let err = reader.read().await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(reader.buf.capacity() < 1024);
+    }
+
+    #[test_case::test_case(6, false; "one byte over limit")]
+    #[test_case::test_case(7, true; "exact limit")]
+    #[tokio::test]
+    async fn packet_limit_includes_fixed_header(limit: usize, accepted: bool) {
+        let pool = BytesPool;
+        let mut reader = Reader::<BytesPool>::new(
+            Box::new(Cursor::new(&b"\x30\x05\x00\x01a\x00x"[..])),
+            pool.take_empty_owned(),
+        );
+        reader.set_maximum_packet_size(limit);
+        match reader.read().await {
+            Ok(packet) => {
+                assert!(accepted);
+                assert_eq!(packet.rest, b"\x00\x01a\x00x"[..]);
+            }
+            Err(err) => {
+                assert!(!accepted);
+                assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+            }
         }
     }
 

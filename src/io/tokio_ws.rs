@@ -29,6 +29,7 @@ pub async fn connect<BP>(
     proxy: Option<Proxy>,
     tcp_nodelay: bool,
     reader_pool: &BP,
+    maximum_packet_size: usize,
 ) -> io::Result<(Reader<BP>, Writer<BP>)>
 where
     BP: BufferPool,
@@ -81,11 +82,18 @@ where
         Either::Left(stream)
     };
 
+    let websocket_config = tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(maximum_packet_size))
+        .max_frame_size(Some(maximum_packet_size));
     match stream {
         Either::Left(stream) => {
-            let (stream, _response) = async_tungstenite::tokio::client_async(request, stream)
-                .await
-                .map_err(tungstenite_err_to_io_err)?;
+            let (stream, _response) = async_tungstenite::tokio::client_async_with_config(
+                request,
+                stream,
+                Some(websocket_config),
+            )
+            .await
+            .map_err(tungstenite_err_to_io_err)?;
             let stream = WebSocketStream {
                 inner: stream,
                 next_read: Default::default(),
@@ -100,9 +108,13 @@ where
         }
 
         Either::Right(stream) => {
-            let (stream, _response) = async_tungstenite::tokio::client_async(request, stream)
-                .await
-                .map_err(tungstenite_err_to_io_err)?;
+            let (stream, _response) = async_tungstenite::tokio::client_async_with_config(
+                request,
+                stream,
+                Some(websocket_config),
+            )
+            .await
+            .map_err(tungstenite_err_to_io_err)?;
             let stream = WebSocketStream {
                 inner: stream,
                 next_read: Default::default(),
@@ -328,9 +340,16 @@ mod tests {
             }
         });
 
-        let (reader, _writer) = connect(format!("ws://{addr}/mqtt"), None, None, false, &BytesPool)
-            .await
-            .unwrap();
+        let (reader, _writer) = connect(
+            format!("ws://{addr}/mqtt"),
+            None,
+            None,
+            false,
+            &BytesPool,
+            1024 * 1024,
+        )
+        .await
+        .unwrap();
         (reader, server)
     }
 
@@ -357,6 +376,15 @@ mod tests {
         let (mut reader, server) = websocket_reader(vec![Message::Text(text.into())]).await;
 
         assert_matches!(reader.read().await, Err(err) if err.kind() == std::io::ErrorKind::InvalidData);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_websocket_messages_are_rejected() {
+        let (mut reader, server) =
+            websocket_reader(vec![Message::Binary(vec![0; 1024 * 1024 + 1].into())]).await;
+        let err = reader.read().await.unwrap_err();
+        assert!(err.to_string().contains("Space limit exceeded"));
         server.await.unwrap();
     }
 }

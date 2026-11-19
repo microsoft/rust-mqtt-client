@@ -27,7 +27,7 @@ communicating with a server.
 | --- | --- | --- |
 | QoS 0 publish and receive | ✓ | At-most-once delivery; there is no server acknowledgement. |
 | QoS 1 publish and receive | ✓ | At-least-once delivery is supported in both directions. |
-| QoS 2 publish and receive | ✗ | Public types reserve a future API, but QoS 2 methods and receive paths are not implemented and can panic. |
+| QoS 2 publish and receive | ✗ | Public types reserve a future API. QoS 2 operation methods can panic; incoming QoS 2 PUBLISH packets are rejected with a protocol error. |
 | Publication acknowledgement outcomes | ✓ | Supported acknowledgement flows allow received publications to be accepted or rejected using MQTT 5 reason codes and properties. |
 | In-flight retransmission after session resume | ✓ | Supported QoS flows retransmit unacknowledged PUBLISH and PUBREL packets with their original packet identifiers when the server resumes the MQTT session, setting DUP on retransmitted PUBLISH packets. |
 | Packet ordering | ✓ | The session preserves original PUBLISH order during retransmission and emits PUBACK packets in incoming PUBLISH order, even when the application acknowledges publications out of order. |
@@ -55,7 +55,7 @@ communicating with a server.
 | Topic aliases | ✗ | Alias fields are exposed, but the client does not maintain per-connection mappings or support alias-only PUBLISH packets in either direction. Leave `ConnectProperties::topic_alias_maximum` at `0` and `PublishProperties::topic_alias` unset. |
 | Protocol validation and constraint enforcement | Partial | Malformed encodings, topic and filter syntax, and several packet-local constraints are validated. Some direction-, cross-field-, and session-dependent rules are not enforced; see [Limitations](limitations.md#protocol-validation). |
 | Server-advertised capability enforcement | ✗ | Maximum QoS, Retain Available, and wildcard/shared/subscription-identifier availability are exposed, but client operations do not prevent prohibited PUBLISH or SUBSCRIBE packets. Applications must inspect CONNACK and avoid prohibited operations. |
-| Peer-advertised limit enforcement | ✗ | Receive Maximum, Maximum Packet Size, and Topic Alias Maximum are encoded, decoded, and exposed, but their directional limits are not enforced. Applications must enforce outgoing limits and must not rely on the client to reject incoming violations. |
+| Peer-advertised limit enforcement | Partial | The incoming Maximum Packet Size advertised in CONNECT is enforced, bounded by the local client limit. Receive Maximum, Topic Alias Maximum, and outgoing server limits are not enforced. |
 
 ## Client Features
 
@@ -76,6 +76,7 @@ These are library-specific APIs, runtime behaviors, and transport capabilities p
 | SOCKS5 proxies | ✗ | SOCKS5 proxying, including its separate authentication-method negotiation, is not implemented. |
 | Transport establishment timeout | ✓ | Covers TCP, proxy, TLS, and WebSocket establishment separately from the MQTT CONNECT response timeout. |
 | In-memory queueing while disconnected | ✓ | PUBLISH, SUBSCRIBE, and UNSUBSCRIBE requests can wait in bounded channels until a connection is driven. PUBLISH queue capacities are configurable, and submission waits when a queue is full. |
+| Incoming resource limits | ✓ | Incoming packets default to 1 MiB and the incoming publication queue defaults to 100 entries. Both limits are configurable; queue overflow reports a disconnect without silently dropping or acknowledging the overflowing publication. WebSocket frames and messages share the packet size cap. |
 | Tiered operation results | ✓ | The API distinguishes client acceptance, operation completion, and the server's MQTT reason code. |
 | Application-controlled acknowledgement timing | ✓ | Incoming QoS 1 publications include a control token so the application can delay PUBACK until the desired processing point. Dropping an unused control attempts a successful default acknowledgement. |
 | Topic validation and local matching | ✓ | `TopicName` and `TopicFilter` validate MQTT syntax and can match names against filters locally. |
