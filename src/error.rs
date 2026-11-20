@@ -65,6 +65,8 @@ pub(crate) enum ProtocolErrorRepr {
     ),
     #[error("protocol violation: unexpected packet")]
     UnexpectedPacket,
+    #[error("protocol violation: incoming PUBLISH packet identifier {0} is already in use")]
+    PacketIdentifierInUse(crate::mqtt_proto::PacketIdentifier),
     #[error("protocol violation: missing or mismatched authentication method")]
     AuthenticationMethodMismatch,
 }
