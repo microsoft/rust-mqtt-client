@@ -1115,7 +1115,7 @@ impl Connection {
                         return Ok(InnerDisconnect::Server(disconnect));
                     }
 
-                    Packet::Publish(publish) => self.session.incoming_publish(publish),
+                    Packet::Publish(publish) => self.session.incoming_publish(publish)?,
 
                     Packet::PingResp(_) => {
                         // Remove ping response timer as we have successfully received a PINGRESP.

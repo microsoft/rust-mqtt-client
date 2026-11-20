@@ -387,3 +387,82 @@ async fn incoming_puback_reset_preserves_outbound_session_state() {
     connection.expect_pubacks(&[]);
     assert_matches!(outgoing_completion.now_or_never(), Some(Ok(ack)) if ack.is_success());
 }
+
+#[test_matrix([false, true], [false, true])]
+#[tokio::test(start_paused = true)]
+async fn same_connection_identifier_collision_reports_protocol_error(dup: bool, buffered: bool) {
+    let (_client, connect_handle, mut receiver) = new_client(ClientOptions {
+        client_id: Some("persistent-client".to_string()),
+        ..Default::default()
+    });
+    let mut connection = TestConnection::connect(connect_handle, false).await;
+    let first_token = connection.receive_qos1(&mut receiver, 5, false).await;
+    let (packet_identifier, buffered_completion) = if buffered {
+        let token = connection.receive_qos1(&mut receiver, 6, false).await;
+        let mut completion = token.accept(Default::default()).await.unwrap();
+        connection.drive().await;
+        connection.expect_pubacks(&[]);
+        assert_matches!((&mut completion).now_or_never(), None);
+        (6, Some(completion))
+    } else {
+        (5, None)
+    };
+    connection
+        .incoming_packets_tx
+        .send(Packet::Publish(mqtt_proto::Publish {
+            topic_name: topic("foo"),
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
+                PacketIdentifier::new(packet_identifier).unwrap(),
+                dup,
+            ),
+            retain: false,
+            payload: Bytes::from_static(b"conflicting"),
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+
+    let (connect_handle, event) =
+        tokio::time::timeout(Duration::from_secs(1), &mut connection.driver)
+            .await
+            .expect("protocol-error disconnect timed out");
+    assert_matches!(
+        event,
+        DisconnectedEvent::ProtocolError(err)
+            if err.to_string()
+                == format!("protocol violation: incoming PUBLISH packet identifier {packet_identifier} is already in use")
+    );
+    assert!(connection.incoming_packets_tx.is_closed());
+    assert!(receiver.recv().now_or_never().is_none());
+    if let Some(completion) = buffered_completion {
+        assert_matches!(completion.now_or_never(), Some(Err(_)));
+    }
+
+    let mut connection = TestConnection::connect(connect_handle, true).await;
+    drop(first_token);
+    connection.drive().await;
+    connection.expect_pubacks(&[]);
+    let token = connection
+        .receive_qos1(&mut receiver, packet_identifier, true)
+        .await;
+    let completion = token.accept(Default::default()).await.unwrap();
+    connection.drive().await;
+    connection.expect_pubacks(&[packet_identifier]);
+    assert_matches!(completion.now_or_never(), Some(Ok(())));
+}
+
+#[test_matrix([false, true])]
+#[tokio::test(start_paused = true)]
+async fn same_connection_identifier_reuse_after_puback_is_accepted(dup: bool) {
+    let (_client, connect_handle, mut receiver) = new_client(ClientOptions {
+        client_id: Some("persistent-client".to_string()),
+        ..Default::default()
+    });
+    let mut connection = TestConnection::connect(connect_handle, false).await;
+    for dup in [false, dup] {
+        let token = connection.receive_qos1(&mut receiver, 5, dup).await;
+        let completion = token.accept(Default::default()).await.unwrap();
+        connection.drive().await;
+        connection.expect_pubacks(&[5]);
+        assert_matches!(completion.now_or_never(), Some(Ok(())));
+    }
+}

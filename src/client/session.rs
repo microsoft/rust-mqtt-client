@@ -8,7 +8,7 @@ use std::task::Poll;
 use derive_where::derive_where;
 use futures_util::future::FutureExt as _;
 use futures_util::stream::{Peekable, Stream, StreamExt as _};
-use indexmap::IndexMap;
+use indexmap::{IndexMap, map::Entry};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 use tokio::time::{Duration, Instant};
 
@@ -578,20 +578,19 @@ where
     }
 
     /// An incoming PUBLISH packet has been received from the server
-    pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) {
+    ///
+    /// Rejects QoS 1 identifiers that are still awaiting acknowledgement on this connection.
+    pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) -> Result<(), ProtocolError> {
         let incoming = match publish.packet_identifier_dup_qos {
             PacketIdentifierDupQoS::AtMostOnce => IncomingPublishAndToken::QoS0(publish),
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
-                let r = self
-                    .in_application
-                    .publishes
-                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
-                // TODO: How to handle if the pkid already exists? What should the error
-                // story / experience be precisely?
-                assert!(
-                    r.is_none(),
-                    "TODO: Handle the case where pkid already exists"
-                );
+                let Entry::Vacant(entry) = self.in_application.publishes.entry(packet_identifier)
+                else {
+                    // MQTT 5.0 section 3.4.2.1 also allows reporting this with PUBACK 0x91.
+                    // Close instead to leave the original delivery unacknowledged.
+                    return Err(ProtocolErrorRepr::PacketIdentifierInUse(packet_identifier))?;
+                };
+                entry.insert(PendingAcknowledgement::NotReady);
                 IncomingPublishAndToken::QoS1(
                     publish,
                     PubAckToken::new(
@@ -613,6 +612,7 @@ where
         // If there is an error, it's because the application dropped the incoming PUBLISH receiver,
         // in which case `incoming` will be dropped here and will auto-ack it via dropping the ack token.
         _ = self.ch.i_pub_tx.send(incoming);
+        Ok(())
     }
 
     /// An incoming AUTH packet has been received from the server as part of a reauthentication process
@@ -1057,21 +1057,102 @@ mod tests {
     use std::num::NonZeroU16;
     use std::time::Duration;
 
-    use bytes::BytesMut;
+    use bytes::{Bytes, BytesMut};
     use futures_util::future::FutureExt as _;
+    use test_case::test_matrix;
     use tokio::sync::mpsc::{channel, unbounded_channel};
 
-    use super::{OutgoingPacketRequest, Session};
+    use super::{OutgoingPacketRequest, PendingAcknowledgement, Session};
     #[cfg(feature = "__allow_omitted_auth_method")]
     use crate::client::buffered::ReauthResult;
-    use crate::client::channel_data::{AcknowledgementRequest, PingRequest};
+    use crate::client::channel_data::{
+        AcknowledgementRequest, IncomingPublishAndToken, PingRequest,
+    };
     use crate::client::token::completion::{CompletionError, buffered::completion_pair};
     #[cfg(feature = "__allow_omitted_auth_method")]
     use crate::mqtt_proto::{Auth, AuthenticateReasonCode};
     use crate::mqtt_proto::{
         Authentication, ConnAck, ConnAckOtherProperties, ConnectReasonCode, KeepAlive, Packet,
-        PacketIdentifier, PingReq, PubComp, PubCompReasonCode, SessionExpiryInterval,
+        PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubComp, PubCompReasonCode, Publish,
+        SessionExpiryInterval, topic,
     };
+
+    #[test_matrix([false, true])]
+    #[tokio::test]
+    async fn incoming_qos1_collision_preserves_pending_acknowledgement(ready: bool) {
+        let (_sub_tx, sub_rx) = channel(1);
+        let (_publish_qos0_tx, publish_qos0_rx) = channel(1);
+        let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
+        let (ack_tx, ack_rx) = unbounded_channel();
+        let (auth_tx, auth_rx) = channel(1);
+        let (_ping_tx, ping_rx) = channel(1);
+        let (incoming_publish_tx, mut incoming_publish_rx) = unbounded_channel();
+        let mut session = Session::new(
+            sub_rx,
+            publish_qos0_rx,
+            publish_qos12_rx,
+            ack_rx,
+            auth_rx,
+            ping_rx,
+            incoming_publish_tx,
+            ack_tx,
+            auth_tx,
+            PacketIdentifier::new(u16::MAX).unwrap(),
+            BytesMut::new(),
+        );
+        let packet_identifier = PacketIdentifier::new(5).unwrap();
+        let publish = Publish {
+            topic_name: topic("foo"),
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
+                packet_identifier,
+                false,
+            ),
+            retain: false,
+            payload: Bytes::from_static(b"payload"),
+            other_properties: Default::default(),
+        };
+        session.incoming_publish(publish.clone()).unwrap();
+        let IncomingPublishAndToken::QoS1(_, token) = incoming_publish_rx.try_recv().unwrap()
+        else {
+            panic!("expected QoS 1 delivery");
+        };
+        let mut token = Some(token);
+        let completion = if ready {
+            let completion = token
+                .take()
+                .unwrap()
+                .accept(Default::default())
+                .await
+                .unwrap();
+            let ack_request = session.ch.ack_rx.try_recv().unwrap();
+            *session
+                .in_application
+                .publishes
+                .get_mut(&packet_identifier)
+                .unwrap() = PendingAcknowledgement::Ready(ack_request);
+            Some(completion)
+        } else {
+            None
+        };
+
+        session.incoming_publish(publish).unwrap_err();
+        assert_eq!(session.in_application.publishes.len(), 1);
+        assert!(matches!(
+            (
+                ready,
+                session.in_application.publishes.get(&packet_identifier)
+            ),
+            (false, Some(PendingAcknowledgement::NotReady))
+                | (true, Some(PendingAcknowledgement::Ready(_)))
+        ));
+        assert!(matches!(
+            incoming_publish_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        if let Some(mut completion) = completion {
+            assert!((&mut completion).now_or_never().is_none());
+        }
+    }
 
     #[tokio::test]
     async fn pubcomp_bypasses_publish_acknowledgement_ordering() {
