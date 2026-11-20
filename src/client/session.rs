@@ -586,6 +586,8 @@ where
             PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) => {
                 let Entry::Vacant(entry) = self.in_application.publishes.entry(packet_identifier)
                 else {
+                    // MQTT 5.0 section 3.4.2.1 also allows reporting this with PUBACK 0x91.
+                    // Close instead to leave the original delivery unacknowledged.
                     return Err(ProtocolErrorRepr::PacketIdentifierInUse(packet_identifier))?;
                 };
                 entry.insert(PendingAcknowledgement::NotReady);

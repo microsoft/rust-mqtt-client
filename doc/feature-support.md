@@ -26,7 +26,7 @@ communicating with a server.
 | Feature | Status | Notes |
 | --- | --- | --- |
 | QoS 0 publish and receive | ✓ | At-most-once delivery; there is no server acknowledgement. |
-| QoS 1 publish and receive | ✓ | At-least-once delivery is supported in both directions. Reusing an outstanding incoming identifier on the same connection closes it with a reported [`DisconnectedEvent::ProtocolError`](../src/client.rs); valid retransmissions after reconnect remain supported. |
+| QoS 1 publish and receive | ✓ | At-least-once delivery is supported in both directions. |
 | QoS 2 publish and receive | ✗ | Public types reserve a future API, but QoS 2 methods and receive paths are not implemented and can panic. |
 | Publication acknowledgement outcomes | ✓ | Supported acknowledgement flows allow received publications to be accepted or rejected using MQTT 5 reason codes and properties. |
 | In-flight retransmission after session resume | ✓ | Supported QoS flows retransmit unacknowledged PUBLISH and PUBREL packets with their original packet identifiers when the server resumes the MQTT session, setting DUP on retransmitted PUBLISH packets. |
