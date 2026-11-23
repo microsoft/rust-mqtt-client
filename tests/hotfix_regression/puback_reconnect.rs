@@ -388,9 +388,9 @@ async fn incoming_puback_reset_preserves_outbound_session_state() {
     assert_matches!(outgoing_completion.now_or_never(), Some(Ok(ack)) if ack.is_success());
 }
 
-#[test_matrix([false, true])]
+#[test_matrix([false, true], ["sensors/temperature", "alerts/critical"])]
 #[tokio::test(start_paused = true)]
-async fn incoming_qos2_reports_protocol_error_without_acknowledgement(dup: bool) {
+async fn incoming_qos2_reports_protocol_error_without_acknowledgement(dup: bool, topic_name: &str) {
     let (_client, connect_handle, mut receiver) = new_client(ClientOptions {
         client_id: Some("persistent-client".to_string()),
         ..Default::default()
@@ -400,7 +400,7 @@ async fn incoming_qos2_reports_protocol_error_without_acknowledgement(dup: bool)
     connection
         .incoming_packets_tx
         .send(Packet::Publish(mqtt_proto::Publish {
-            topic_name: topic("foo"),
+            topic_name: topic(topic_name),
             packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
                 PacketIdentifier::new(6).unwrap(),
                 dup,
@@ -419,7 +419,7 @@ async fn incoming_qos2_reports_protocol_error_without_acknowledgement(dup: bool)
         event,
         DisconnectedEvent::ProtocolError(err)
             if err.to_string()
-                == "protocol violation: incoming PUBLISH QoS 2 exceeds maximum permitted QoS 1"
+                == format!("protocol violation: incoming PUBLISH QoS 2 exceeds maximum permitted QoS 1 for topic {topic_name}")
     );
     assert!(connection.incoming_packets_tx.is_closed());
     assert!(receiver.recv().now_or_never().is_none());

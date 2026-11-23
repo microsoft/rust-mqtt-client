@@ -604,6 +604,7 @@ where
                 // Temporary blanket QoS 2 rejection while subscriptions are capped at QoS 1.
                 // Replace with validation against matching subscription grants (GitHub issue #214).
                 return Err(ProtocolErrorRepr::IncomingPublishQoSExceedsMaximum {
+                    topic: publish.topic_name.to_owned().into(),
                     received: QoS::ExactlyOnce,
                     maximum: QoS::AtLeastOnce,
                 })?;

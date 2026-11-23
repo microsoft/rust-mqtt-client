@@ -25,7 +25,8 @@ The client does not track and validate the applicable subscription grants. A QoS
 above every matching subscription's maximum QoS 0 is therefore not detected.
 
 Incoming QoS 2 PUBLISH is temporarily rejected with a [`ProtocolError`](../src/error.rs) before
-delivery or acknowledgement-state mutation. The existing error path closes the transport without
+delivery or acknowledgement-state mutation. The error retains the publication's topic name and
+reports the received and maximum permitted QoS. The existing error path closes the transport without
 sending an MQTT DISCONNECT. This blanket guard reflects the public subscription API's current
 QoS 0/1 restriction; it is not general subscription-QoS validation. Sessions with pre-existing
 QoS 2 subscriptions or deliveries are unsupported and also reach this guard.

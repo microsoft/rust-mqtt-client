@@ -55,7 +55,7 @@ communicating with a server.
 | Topic aliases | ✗ | Alias fields are exposed, but the client does not maintain per-connection mappings or support alias-only PUBLISH packets in either direction. Leave `ConnectProperties::topic_alias_maximum` at `0` and `PublishProperties::topic_alias` unset. |
 | Protocol validation and constraint enforcement | Partial | Malformed encodings, topic and filter syntax, and several packet-local constraints are validated. Some direction-, cross-field-, and session-dependent rules are not enforced; see [Limitations](limitations.md#protocol-validation). |
 | Server-advertised capability enforcement | ✗ | Maximum QoS, Retain Available, and wildcard/shared/subscription-identifier availability are exposed, but client operations do not prevent prohibited PUBLISH or SUBSCRIBE packets. Applications must inspect CONNACK and avoid prohibited operations. |
-| Peer-advertised limit enforcement | ✗ | Receive Maximum, Maximum Packet Size, and Topic Alias Maximum are encoded, decoded, and exposed, but their directional limits are not enforced. Applications must enforce outgoing limits and must not rely on the client to reject incoming violations. |
+| Peer-advertised limit enforcement | ✗ | Receive Maximum, Maximum Packet Size, Topic Alias Maximum, and server-advertised Maximum QoS are encoded, decoded, and exposed, but their directional limits are not enforced. Maximum QoS limits client-to-server publishing. Applications must enforce outgoing limits and must not rely on the client to reject incoming violations. |
 
 ## Client Features
 
