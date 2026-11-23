@@ -15,6 +15,25 @@ Some rules cannot be checked from one encoded property or packet alone. They dep
 direction, relationships between fields, the original CONNECT, or locally retained session state.
 The following contextual checks are not currently enforced.
 
+### Incoming PUBLISH QoS versus subscription grants
+
+MQTT sections 3.3.4 and 3.8.4 require the server to respect the granted QoS of matching
+subscriptions. With overlapping filters, a lower-QoS subscription does not override another
+matching subscription that permits a higher delivery QoS.
+
+The client does not track and validate the applicable subscription grants. A QoS 1 delivery
+above every matching subscription's maximum QoS 0 is therefore not detected.
+
+Incoming QoS 2 PUBLISH is temporarily rejected with a [`ProtocolError`](../src/error.rs) before
+delivery or acknowledgement-state mutation. The existing error path closes the transport without
+sending an MQTT DISCONNECT. This blanket guard reflects the public subscription API's current
+QoS 0/1 restriction; it is not general subscription-QoS validation. Sessions with pre-existing
+QoS 2 subscriptions or deliveries are unsupported and also reach this guard.
+
+The general validation work is tracked in
+[GitHub issue #214](https://github.com/microsoft/rust-mqtt-client/issues/214). Once QoS 2 is supported,
+the blanket rejection must be replaced by validation against the applicable subscription grants.
+
 ### Subscription Identifier on an outgoing PUBLISH
 
 MQTT section 3.3.4, [MQTT-3.3.4-6], says that a client-to-server PUBLISH MUST NOT contain a

@@ -34,8 +34,8 @@ use crate::error::{ProtocolError, ProtocolErrorRepr};
 use crate::mqtt_proto::{
     Auth, AuthenticateReasonCode, Authentication, ByteStr, ConnAck, ConnectReasonCode, Disconnect,
     KeepAlive, Packet, PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubAck, PubComp, PubRec,
-    PubRel, Publish, PublishOtherProperties, SessionExpiryInterval, SubAck, Subscribe, SubscribeTo,
-    Topic, UnsubAck, Unsubscribe,
+    PubRel, Publish, PublishOtherProperties, QoS, SessionExpiryInterval, SubAck, Subscribe,
+    SubscribeTo, Topic, UnsubAck, Unsubscribe,
 };
 
 mod pkid;
@@ -579,7 +579,7 @@ where
 
     /// An incoming PUBLISH packet has been received from the server
     ///
-    /// Rejects QoS 1 identifiers that are still awaiting acknowledgement on this connection.
+    /// Rejects QoS 2 and reuse of QoS 1 identifiers still awaiting acknowledgement.
     pub fn incoming_publish(&mut self, publish: Publish<O::Shared>) -> Result<(), ProtocolError> {
         let incoming = match publish.packet_identifier_dup_qos {
             PacketIdentifierDupQoS::AtMostOnce => IncomingPublishAndToken::QoS0(publish),
@@ -600,11 +600,13 @@ where
                     ),
                 )
             }
-            PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
-                self.in_application
-                    .publishes
-                    .insert(packet_identifier, PendingAcknowledgement::NotReady);
-                todo!()
+            PacketIdentifierDupQoS::ExactlyOnce(_, _) => {
+                // Temporary blanket QoS 2 rejection while subscriptions are capped at QoS 1.
+                // Replace with validation against matching subscription grants (GitHub issue #214).
+                return Err(ProtocolErrorRepr::IncomingPublishQoSExceedsMaximum {
+                    received: QoS::ExactlyOnce,
+                    maximum: QoS::AtLeastOnce,
+                })?;
             }
         };
 
@@ -1074,12 +1076,12 @@ mod tests {
     use crate::mqtt_proto::{
         Authentication, ConnAck, ConnAckOtherProperties, ConnectReasonCode, KeepAlive, Packet,
         PacketIdentifier, PacketIdentifierDupQoS, PingReq, PubComp, PubCompReasonCode, Publish,
-        SessionExpiryInterval, topic,
+        QoS, SessionExpiryInterval, topic,
     };
 
-    #[test_matrix([false, true])]
+    #[test_matrix([false, true], [QoS::AtLeastOnce, QoS::ExactlyOnce])]
     #[tokio::test]
-    async fn incoming_qos1_collision_preserves_pending_acknowledgement(ready: bool) {
+    async fn incoming_rejected_publish_preserves_pending_acknowledgement(ready: bool, qos: QoS) {
         let (_sub_tx, sub_rx) = channel(1);
         let (_publish_qos0_tx, publish_qos0_rx) = channel(1);
         let (_publish_qos12_tx, publish_qos12_rx) = channel(1);
@@ -1101,7 +1103,7 @@ mod tests {
             BytesMut::new(),
         );
         let packet_identifier = PacketIdentifier::new(5).unwrap();
-        let publish = Publish {
+        let mut publish = Publish {
             topic_name: topic("foo"),
             packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(
                 packet_identifier,
@@ -1135,6 +1137,10 @@ mod tests {
             None
         };
 
+        if qos == QoS::ExactlyOnce {
+            publish.packet_identifier_dup_qos =
+                PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false);
+        }
         session.incoming_publish(publish).unwrap_err();
         assert_eq!(session.in_application.publishes.len(), 1);
         assert!(matches!(

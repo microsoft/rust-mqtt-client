@@ -27,7 +27,7 @@ communicating with a server.
 | --- | --- | --- |
 | QoS 0 publish and receive | ✓ | At-most-once delivery; there is no server acknowledgement. |
 | QoS 1 publish and receive | ✓ | At-least-once delivery is supported in both directions. |
-| QoS 2 publish and receive | ✗ | Public types reserve a future API, but QoS 2 methods and receive paths are not implemented and can panic. |
+| QoS 2 publish and receive | ✗ | Public types reserve a future API. QoS 2 APIs remain unimplemented and can panic; incoming QoS 2 PUBLISH reports a protocol error and closes the transport. |
 | Publication acknowledgement outcomes | ✓ | Supported acknowledgement flows allow received publications to be accepted or rejected using MQTT 5 reason codes and properties. |
 | In-flight retransmission after session resume | ✓ | Supported QoS flows retransmit unacknowledged PUBLISH and PUBREL packets with their original packet identifiers when the server resumes the MQTT session, setting DUP on retransmitted PUBLISH packets. |
 | Packet ordering | ✓ | The session preserves original PUBLISH order during retransmission and emits PUBACK packets in incoming PUBLISH order, even when the application acknowledges publications out of order. |

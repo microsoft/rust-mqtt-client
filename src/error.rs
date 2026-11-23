@@ -67,6 +67,15 @@ pub(crate) enum ProtocolErrorRepr {
     UnexpectedPacket,
     #[error("protocol violation: incoming PUBLISH packet identifier {0} is already in use")]
     PacketIdentifierInUse(crate::mqtt_proto::PacketIdentifier),
+    #[error(
+        "protocol violation: incoming PUBLISH QoS {} exceeds maximum permitted QoS {}",
+        u8::from(*.received),
+        u8::from(*.maximum)
+    )]
+    IncomingPublishQoSExceedsMaximum {
+        received: crate::mqtt_proto::QoS,
+        maximum: crate::mqtt_proto::QoS,
+    },
     #[error("protocol violation: missing or mismatched authentication method")]
     AuthenticationMethodMismatch,
 }

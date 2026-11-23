@@ -388,6 +388,57 @@ async fn incoming_puback_reset_preserves_outbound_session_state() {
     assert_matches!(outgoing_completion.now_or_never(), Some(Ok(ack)) if ack.is_success());
 }
 
+#[test_matrix([false, true])]
+#[tokio::test(start_paused = true)]
+async fn incoming_qos2_reports_protocol_error_without_acknowledgement(dup: bool) {
+    let (_client, connect_handle, mut receiver) = new_client(ClientOptions {
+        client_id: Some("persistent-client".to_string()),
+        ..Default::default()
+    });
+    let mut connection = TestConnection::connect(connect_handle, false).await;
+    let old_token = connection.receive_qos1(&mut receiver, 5, false).await;
+    connection
+        .incoming_packets_tx
+        .send(Packet::Publish(mqtt_proto::Publish {
+            topic_name: topic("foo"),
+            packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(
+                PacketIdentifier::new(6).unwrap(),
+                dup,
+            ),
+            retain: false,
+            payload: Bytes::from_static(b"unsupported"),
+            other_properties: Default::default(),
+        }))
+        .unwrap();
+
+    let (connect_handle, event) =
+        tokio::time::timeout(Duration::from_secs(1), &mut connection.driver)
+            .await
+            .expect("QoS 2 protocol-error disconnect timed out");
+    assert_matches!(
+        event,
+        DisconnectedEvent::ProtocolError(err)
+            if err.to_string()
+                == "protocol violation: incoming PUBLISH QoS 2 exceeds maximum permitted QoS 1"
+    );
+    assert!(connection.incoming_packets_tx.is_closed());
+    assert!(receiver.recv().now_or_never().is_none());
+    assert_matches!(
+        connection.outgoing_packets_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+    );
+
+    let mut connection = TestConnection::connect(connect_handle, true).await;
+    drop(old_token);
+    connection.drive().await;
+    connection.expect_pubacks(&[]);
+    let token = connection.receive_qos1(&mut receiver, 6, false).await;
+    let completion = token.accept(Default::default()).await.unwrap();
+    connection.drive().await;
+    connection.expect_pubacks(&[6]);
+    assert_matches!(completion.now_or_never(), Some(Ok(())));
+}
+
 #[test_matrix([false, true], [false, true])]
 #[tokio::test(start_paused = true)]
 async fn same_connection_identifier_collision_reports_protocol_error(dup: bool, buffered: bool) {
