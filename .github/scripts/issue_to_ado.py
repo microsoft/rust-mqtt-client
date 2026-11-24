@@ -18,7 +18,8 @@ GITHUB_REPOSITORY = "microsoft/rust-mqtt-client"
 GITHUB_REPOSITORY_ID = 1013299075
 ACTION_REPOSITORY = "https://github.com/danhellem/github-actions-issue-to-work-item.git"
 ACTION_REVISION = "70e94b931901465f5550532c7a061b0d103b4b10"
-SUPPORTED_ACTIONS = {"opened", "edited", "closed"}
+SUPPORTED_ACTIONS = {"opened", "edited", "closed", "labeled"}
+REQUIRED_LABEL = "planned"
 
 
 class AzureDevOps:
@@ -169,7 +170,7 @@ def prepare(ado, event, parent_id):
 
     item = find_item(ado, event)
     # The upstream action creates missing items even for edits and closures.
-    if item is None and action != "opened":
+    if item is None and action not in {"opened", "labeled"}:
         print("No mirrored ADO Bug exists; skipping this historical or ineligible issue.")
         return None
     if item is not None:
@@ -194,11 +195,25 @@ def prepare(ado, event, parent_id):
         or (issue["body"] is not None and not isinstance(issue["body"], str))
     ):
         raise ValueError("The refreshed GitHub issue does not match the event")
+    issue_type = issue["type"]
+    if issue_type is not None and not isinstance(issue_type, dict):
+        raise ValueError("The current GitHub issue type must be an object or null")
+    labels = issue["labels"]
+    if not isinstance(labels, list) or any(
+        not isinstance(label, dict) or not isinstance(label.get("name"), str)
+        for label in labels
+    ):
+        raise ValueError("The current GitHub issue labels must contain label-name objects")
+    if (issue_type or {}).get("name") != "Bug" or not any(
+        label["name"].casefold() == REQUIRED_LABEL for label in labels
+    ):
+        print("Issue is not currently a Bug labeled planned; synchronization is paused.")
+        return None
     if issue["body"] is None:
         issue["body"] = ""
     prepared_event = dict(event, issue=issue)
-    if action == "opened":
-        # Refresh after acquiring the stage lock: edits/closure may arrive before creation.
+    if action in {"opened", "labeled"}:
+        # Label events opt in without invoking the upstream action's label/tag copying.
         prepared_event["action"] = "closed" if issue["state"] == "closed" else "edited"
     return {
         "existing_id": item["id"] if item is not None else None,

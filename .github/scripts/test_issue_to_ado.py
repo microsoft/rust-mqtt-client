@@ -31,6 +31,7 @@ def event(action="opened", issue_type="Bug"):
             "number": 200, "html_url": ISSUE_URL, "title": "Original title",
             "body": "Original description", "state": "open", "type": {"name": issue_type},
             "user": {"login": "reporter"}, "closed_at": None,
+            "labels": [{"name": "planned"}],
         },
     }
 
@@ -127,6 +128,75 @@ class IssueSyncTests(unittest.TestCase):
                 self.assertEqual([call[0] for call in ado.calls], ["POST"])
         self.load.assert_not_called()
 
+    def test_existing_mirror_is_not_modified_without_current_planned_bug_approval(self):
+        for action in ("opened", "labeled", "edited", "closed"):
+            for issue_type, labels in (
+                ({"name": "Bug"}, []),
+                ({"name": "Bug"}, [{"name": "unplanned"}]),
+                ({"name": "Feature"}, [{"name": "planned"}]),
+                (None, [{"name": "planned"}]),
+            ):
+                with self.subTest(action=action, issue_type=issue_type, labels=labels):
+                    self.latest["type"] = issue_type
+                    self.latest["labels"] = labels
+                    self.latest["body"] = "The word planned in the body is not approval."
+                    ado = FakeAzureDevOps(bug(state="Active"))
+                    environment = {**self.pipeline_environment(), "WEBHOOK_ACTION": action}
+                    with patch.dict(os.environ, environment), patch(
+                        "issue_to_ado.AzureDevOps", return_value=ado,
+                    ), patch("issue_to_ado.run_action") as run:
+                        self.assertEqual(sync.main(), 0)
+                    run.assert_not_called()
+                    self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
+                    self.assertEqual(ado.item["fields"]["System.State"], "Active")
+
+    def test_label_added_event_opts_in_using_current_labels_not_stale_event_labels(self):
+        source = event("labeled")
+        source["label"] = {"name": "planned"}
+        source["issue"]["labels"] = []
+        self.latest["labels"] = [{"name": "Planned"}]
+        ado = FakeAzureDevOps()
+
+        def action(client, context):
+            self.assertIs(client, ado)
+            self.assertEqual(context["event"]["action"], "edited")
+            self.assertEqual(context["event"]["issue"]["title"], "Current title")
+            self.assertEqual(context["event"]["issue"]["labels"], [{"name": "Planned"}])
+            ado.item = bug(parent_id=None)
+            ado.matches = [{"id": 123}]
+
+        environment = {**self.pipeline_environment(), "WEBHOOK_ACTION": "labeled"}
+        with patch.dict(os.environ, environment), patch(
+            "issue_to_ado.webhook_event", return_value=source,
+        ), patch("issue_to_ado.AzureDevOps", return_value=ado), patch(
+            "issue_to_ado.run_action", side_effect=action,
+        ) as run:
+            self.assertEqual(sync.main(), 0)
+        run.assert_called_once()
+        self.assertEqual(ado.item["fields"]["System.State"], "New")
+        self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
+
+    def test_removing_planned_does_not_update_or_delete_the_existing_mirror(self):
+        self.latest["labels"] = []
+        ado = FakeAzureDevOps(bug(state="Active"))
+        environment = {**self.pipeline_environment(), "WEBHOOK_ACTION": "unlabeled"}
+        with patch.dict(os.environ, environment), patch(
+            "issue_to_ado.AzureDevOps", return_value=ado,
+        ), patch("issue_to_ado.run_action") as run:
+            self.assertEqual(sync.main(), 0)
+        run.assert_not_called()
+        self.assertEqual(ado.calls, [])
+        self.assertEqual(ado.item["fields"]["System.State"], "Active")
+
+    def test_invalid_current_label_data_fails_closed_before_mutation(self):
+        for labels in (None, "planned", ["planned"], [{}], [{"name": None}]):
+            with self.subTest(labels=labels):
+                self.latest["labels"] = labels
+                ado = FakeAzureDevOps(bug())
+                with self.assertRaisesRegex(ValueError, "current GitHub issue labels"):
+                    sync.prepare(ado, event("labeled"), PARENT_ID)
+                self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
+
     def test_unsubscribed_actions_are_ignored_and_pull_requests_fail(self):
         for action in ("reopened", "typed", "created", "assigned"):
             with self.subTest(action=action):
@@ -183,7 +253,7 @@ class IssueSyncTests(unittest.TestCase):
                     sync.prepare(FakeAzureDevOps(), source, PARENT_ID)
 
     def test_creation_retry_and_edits_preserve_manual_state(self):
-        for action in ("opened", "edited"):
+        for action in ("opened", "labeled", "edited"):
             with self.subTest(action=action):
                 ado = FakeAzureDevOps(bug(state="Active"))
                 source = event(action)
@@ -203,14 +273,16 @@ class IssueSyncTests(unittest.TestCase):
 
     def test_issue_closed_during_initial_creation_finishes_done(self):
         self.latest["state"] = "closed"
-        ado = FakeAzureDevOps()
-        prepared = sync.prepare(ado, event(), PARENT_ID)
-        self.assertEqual(prepared["event"]["action"], "closed")
-        ado.item = bug(state="Done", parent_id=None)
-        ado.matches = [{"id": 123}]
-        self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
-        self.assertEqual(ado.item["fields"]["System.State"], "Done")
-        self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
+        for action in ("opened", "labeled"):
+            with self.subTest(action=action):
+                ado = FakeAzureDevOps()
+                prepared = sync.prepare(ado, event(action), PARENT_ID)
+                self.assertEqual(prepared["event"]["action"], "closed")
+                ado.item = bug(state="Done", parent_id=None)
+                ado.matches = [{"id": 123}]
+                self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
+                self.assertEqual(ado.item["fields"]["System.State"], "Done")
+                self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
 
     def test_new_bug_gets_parent_and_new_state(self):
         ado = FakeAzureDevOps()

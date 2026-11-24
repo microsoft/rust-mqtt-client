@@ -17,7 +17,9 @@
 #   Native Incoming WebHook verification uses HMAC-SHA1, not SHA256.
 #
 # A manual initialization run without a webhook does not modify work items.
-# Existing issues are never imported by edits/closures; there is no schedule.
+# Only current native Bugs with the planned label sync; do not auto-apply that label.
+# Opened/labeled events can opt Bugs in; edits/closures never create missing items.
+# Removing planned pauses future updates without deleting the ADO item. No schedule.
 # Keep the upstream title suffix and repository tags used to identify each Bug.
 # Issue content is refreshed through the public GitHub API; rate limits fail the job.
 
