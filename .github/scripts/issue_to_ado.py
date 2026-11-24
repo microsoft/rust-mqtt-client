@@ -20,6 +20,7 @@ ACTION_REPOSITORY = "https://github.com/danhellem/github-actions-issue-to-work-i
 ACTION_REVISION = "70e94b931901465f5550532c7a061b0d103b4b10"
 SUPPORTED_ACTIONS = {"opened", "edited", "closed", "labeled"}
 REQUIRED_LABEL = "planned"
+WORK_ITEM_TYPES = {"Bug": "Bug", "Feature": "Product Backlog Item"}
 
 
 class AzureDevOps:
@@ -51,8 +52,15 @@ class AzureDevOps:
             ) from error
 
 
-def load_issue(event):
+def issue_number(event):
     number = event["issue"]["number"]
+    if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+        raise ValueError("The GitHub issue number must be a positive integer")
+    return number
+
+
+def load_issue(event):
+    number = issue_number(event)
     request = Request(
         f"https://api.github.com/repos/{GITHUB_REPOSITORY}/issues/{number}",
         headers={
@@ -107,10 +115,8 @@ def webhook_event():
     return event
 
 
-def find_item(ado, event):
-    number = event["issue"]["number"]
-    if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
-        raise ValueError("The GitHub issue number must be a positive integer")
+def find_item(ado, event, work_item_type):
+    number = issue_number(event)
     repository = event["repository"]["name"].replace("'", "''")
     # Match the upstream action's lookup, rejecting ambiguous or unrelated matches.
     result = ado.request("POST", "wiql", {
@@ -128,13 +134,16 @@ def find_item(ado, event):
     item = ado.request("GET", f"workitems/{result[0]['id']}?$expand=relations")
     if (
         item["fields"]["System.TeamProject"] != ado.project
-        or item["fields"]["System.WorkItemType"] != "Bug"
+        or item["fields"]["System.WorkItemType"] != work_item_type
         or not any(
             relation["rel"] == "Hyperlink" and relation["url"] == event["issue"]["html_url"]
             for relation in item.get("relations", [])
         )
     ):
-        raise RuntimeError("The matching ADO item is not a Bug linked to this GitHub issue")
+        raise RuntimeError(
+            f"The matching ADO item is not a {work_item_type} linked to this GitHub issue; "
+            "resolve work-item type changes manually"
+        )
     return item
 
 
@@ -147,11 +156,13 @@ def has_parent(item, parent_id):
         relation["url"].rstrip("/").rsplit("/", 1)[-1] != str(parent_id)
         for relation in parents
     ):
-        raise RuntimeError(f"ADO Bug {item['id']} already has a different parent; refusing to reparent")
+        raise RuntimeError(
+            f"ADO work item {item['id']} already has a different parent; refusing to reparent"
+        )
     return bool(parents)
 
 
-def prepare(ado, event, parent_id):
+def prepare(ado, event, parent_id, enhancement_parent_id=None):
     validate_repository(event)
     action = event["action"]
     if not isinstance(action, str) or not isinstance(event.get("issue"), dict):
@@ -160,28 +171,9 @@ def prepare(ado, event, parent_id):
         print(f"Ignoring issue action {action!r}; no work items modified.")
         return None
     if "pull_request" in event["issue"]:
-        raise ValueError("Pull requests must not be synchronized as Bugs")
-    if action == "opened":
-        issue_type = event["issue"].get("type")
-        if issue_type is not None and not isinstance(issue_type, dict):
-            raise ValueError("The GitHub issue type must be an object or null")
-        if (issue_type or {}).get("name") != "Bug":
-            return None
+        raise ValueError("Pull requests must not be synchronized as work items")
 
-    item = find_item(ado, event)
-    # The upstream action creates missing items even for edits and closures.
-    if item is None and action not in {"opened", "labeled"}:
-        print("No mirrored ADO Bug exists; skipping this historical or ineligible issue.")
-        return None
-    if item is not None:
-        has_parent(item, parent_id)
-    parent = ado.request("GET", f"workitems/{parent_id}")
-    if parent["fields"]["System.TeamProject"] != ado.project:
-        raise RuntimeError("The configured ADO parent is in a different project")
-    area = parent["fields"]["System.AreaPath"]
-    if not isinstance(area, str) or not area or "\n" in area or "\r" in area:
-        raise ValueError("The parent must have a valid area path")
-
+    issue_number(event)
     issue = load_issue(event)
     if not isinstance(issue, dict):
         raise ValueError("The GitHub API must return an issue object")
@@ -198,37 +190,61 @@ def prepare(ado, event, parent_id):
     issue_type = issue["type"]
     if issue_type is not None and not isinstance(issue_type, dict):
         raise ValueError("The current GitHub issue type must be an object or null")
+    type_name = (issue_type or {}).get("name")
+    if type_name is not None and not isinstance(type_name, str):
+        raise ValueError("The current GitHub issue type name must be a string")
     labels = issue["labels"]
     if not isinstance(labels, list) or any(
         not isinstance(label, dict) or not isinstance(label.get("name"), str)
         for label in labels
     ):
         raise ValueError("The current GitHub issue labels must contain label-name objects")
-    if (issue_type or {}).get("name") != "Bug" or not any(
+    if type_name not in WORK_ITEM_TYPES or not any(
         label["name"].casefold() == REQUIRED_LABEL for label in labels
     ):
-        print("Issue is not currently a Bug labeled planned; synchronization is paused.")
+        print("Issue is not currently a Bug or Feature labeled planned; synchronization is paused.")
         return None
+    work_item_type = WORK_ITEM_TYPES[type_name]
+    if type_name == "Feature":
+        if enhancement_parent_id is None:
+            raise ValueError("ADO_ENHANCEMENT_PARENT_ID must be configured for Feature issues")
+        parent_id = enhancement_parent_id
     if issue["body"] is None:
         issue["body"] = ""
     prepared_event = dict(event, issue=issue)
+    item = find_item(ado, prepared_event, work_item_type)
+    # The upstream action creates missing items even for edits and closures.
+    if item is None and action not in {"opened", "labeled"}:
+        print("No mirrored ADO item exists; skipping this historical or ineligible issue.")
+        return None
+    if item is not None:
+        has_parent(item, parent_id)
+    parent = ado.request("GET", f"workitems/{parent_id}")
+    if parent["fields"]["System.TeamProject"] != ado.project:
+        raise RuntimeError("The configured ADO parent is in a different project")
+    if parent["fields"]["System.WorkItemType"] != "Feature":
+        raise RuntimeError("The configured ADO parent must be a Feature")
+    area = parent["fields"]["System.AreaPath"]
+    if not isinstance(area, str) or not area or "\n" in area or "\r" in area:
+        raise ValueError("The parent must have a valid area path")
     if action in {"opened", "labeled"}:
         # Label events opt in without invoking the upstream action's label/tag copying.
         prepared_event["action"] = "closed" if issue["state"] == "closed" else "edited"
     return {
         "existing_id": item["id"] if item is not None else None,
         "parent_id": parent_id,
+        "work_item_type": work_item_type,
         "area_path": area,
         "event": prepared_event,
     }
 
 
 def complete(ado, event, context):
-    item = find_item(ado, event)
+    item = find_item(ado, event, context["work_item_type"])
     if item is None:
-        raise RuntimeError("The upstream action did not create or retain the expected ADO Bug")
+        raise RuntimeError("The upstream action did not create or retain the expected ADO item")
     if context["existing_id"] is not None and context["existing_id"] != item["id"]:
-        raise RuntimeError("The upstream action selected a different ADO Bug")
+        raise RuntimeError("The upstream action selected a different ADO item")
     patch = []
     if not has_parent(item, context["parent_id"]):
         patch.append({
@@ -246,7 +262,7 @@ def complete(ado, event, context):
     if event["action"] == "closed":
         expected_state = "Done"
         if item["fields"]["System.State"] != "Done":
-            raise RuntimeError("The upstream action did not transition the ADO Bug to Done")
+            raise RuntimeError("The upstream action did not transition the ADO item to Done")
     elif context["existing_id"] is None:
         expected_state = "New"
         # The upstream action accepts ado_new_state but does not apply it at creation.
@@ -258,9 +274,9 @@ def complete(ado, event, context):
             [{"op": "test", "path": "/rev", "value": item["rev"]}, *patch],
         )
     if not has_parent(item, context["parent_id"]):
-        raise RuntimeError("The ADO Bug does not have the configured parent")
+        raise RuntimeError("The ADO item does not have the configured parent")
     if expected_state is not None and item["fields"]["System.State"] != expected_state:
-        raise RuntimeError(f"The ADO Bug is not in the expected {expected_state} state")
+        raise RuntimeError(f"The ADO item is not in the expected {expected_state} state")
     return item["id"]
 
 
@@ -290,7 +306,7 @@ def run_action(ado, context):
             "ado_organization": ado.organization,
             "ado_project": ado.project,
             "ado_area_path": context["area_path"],
-            "ado_wit": "Bug",
+            "ado_wit": context["work_item_type"],
             "ado_new_state": "New",
             "ado_close_state": "Done",
             "github_token": "",
@@ -323,24 +339,28 @@ def main():
         token = os.environ["ADO_TOKEN"]
         if not token:
             raise ValueError("ADO_TOKEN must contain an Azure DevOps access token")
-        for name in ("ADO_ORGANIZATION", "ADO_PROJECT", "ADO_PARENT_ID"):
+        for name in (
+            "ADO_ORGANIZATION", "ADO_PROJECT", "ADO_PARENT_ID", "ADO_ENHANCEMENT_PARENT_ID",
+        ):
             value = os.environ[name]
             if not value.strip() or value.startswith("$("):
                 raise ValueError(f"{name} must be configured in private pipeline variables")
+        parent_id = int(os.environ["ADO_PARENT_ID"])
+        enhancement_parent_id = int(os.environ["ADO_ENHANCEMENT_PARENT_ID"])
+        if parent_id <= 0 or enhancement_parent_id <= 0:
+            raise ValueError("ADO parent IDs must be positive")
         ado = AzureDevOps(
             os.environ["ADO_ORGANIZATION"], os.environ["ADO_PROJECT"], token,
         )
-        parent_id = int(os.environ["ADO_PARENT_ID"])
-        if parent_id <= 0:
-            raise ValueError("ADO_PARENT_ID must be positive")
-        context = prepare(ado, event, parent_id)
+        context = prepare(ado, event, parent_id, enhancement_parent_id)
         if context is None:
             return 0
         run_action(ado, context)
         item_id = complete(ado, context["event"], context)
         print(
-            f"Synchronized ADO Bug https://dev.azure.com/{ado.organization}/"
-            f"{quote(ado.project, safe='')}/_workitems/edit/{item_id} under parent {parent_id}."
+            f"Synchronized ADO {context['work_item_type']} https://dev.azure.com/{ado.organization}/"
+            f"{quote(ado.project, safe='')}/_workitems/edit/{item_id} "
+            f"under parent {context['parent_id']}."
         )
     except (
         KeyError, ValueError, RuntimeError, OSError, subprocess.CalledProcessError,

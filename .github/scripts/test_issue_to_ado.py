@@ -14,6 +14,7 @@ import issue_to_ado as sync
 
 
 PARENT_ID = 34702979
+ENHANCEMENT_PARENT_ID = 456
 ISSUE_URL = "https://github.com/microsoft/rust-mqtt-client/issues/200"
 
 
@@ -52,6 +53,12 @@ def bug(state="New", parent_id=PARENT_ID):
     }
 
 
+def backlog_item(state="New", parent_id=ENHANCEMENT_PARENT_ID):
+    item = bug(state, parent_id)
+    item["fields"]["System.WorkItemType"] = "Product Backlog Item"
+    return item
+
+
 class FakeAzureDevOps:
     organization = "msazure"
     project = "One"
@@ -62,7 +69,16 @@ class FakeAzureDevOps:
         self.matches = [{"id": item["id"]}] if item is not None else []
         self.calls = []
         self.parent = {
-            "fields": {"System.TeamProject": "One", "System.AreaPath": "One\\SDKs\\MqttClient"},
+            "fields": {
+                "System.TeamProject": "One", "System.AreaPath": "One\\SDKs\\MqttClient",
+                "System.WorkItemType": "Feature",
+            },
+        }
+        self.enhancement_parent = {
+            "fields": {
+                "System.TeamProject": "One", "System.AreaPath": "One\\SDKs\\Enhancements",
+                "System.WorkItemType": "Feature",
+            },
         }
 
     def request(self, method, path, document=None):
@@ -71,6 +87,8 @@ class FakeAzureDevOps:
             return {"workItems": self.matches}
         if method == "GET" and path == f"workitems/{PARENT_ID}":
             return copy.deepcopy(self.parent)
+        if method == "GET" and path == f"workitems/{ENHANCEMENT_PARENT_ID}":
+            return copy.deepcopy(self.enhancement_parent)
         if method == "GET" and path == "workitems/123?$expand=relations":
             return copy.deepcopy(self.item)
         if method == "PATCH" and path == "workitems/123?$expand=relations":
@@ -103,22 +121,26 @@ class IssueSyncTests(unittest.TestCase):
         self.assertEqual(source, event())
         self.assertEqual({key: value for key, value in prepared.items() if key != "event"}, {
             "existing_id": None, "parent_id": PARENT_ID, "area_path": "One\\SDKs\\MqttClient",
+            "work_item_type": "Bug",
         })
         self.assertEqual(prepared["event"]["issue"]["title"], "Current title")
         self.assertEqual(prepared["event"]["issue"]["body"], "Current description")
         self.assertEqual(prepared["event"]["action"], "edited")
         self.load.assert_called_once_with(source)
 
-    def test_only_new_native_bugs_are_eligible_for_creation(self):
-        for issue_type in ("Task", "Feature", None):
+    def test_unsupported_native_types_are_not_imported_by_labels(self):
+        for issue_type in ("Task", "Enhancement", None):
             with self.subTest(issue_type=issue_type):
                 source = event(issue_type=issue_type)
-                source["issue"]["labels"] = [{"name": "bug"}]
-                self.assertIsNone(sync.prepare(FakeAzureDevOps(), source, PARENT_ID))
+                self.latest["type"] = source["issue"]["type"]
+                self.latest["labels"] = [{"name": name} for name in ("bug", "enhancement", "planned")]
+                ado = FakeAzureDevOps()
+                self.assertIsNone(sync.prepare(ado, source, PARENT_ID, ENHANCEMENT_PARENT_ID))
+                self.assertEqual(ado.calls, [])
         source = event()
         source["issue"]["type"] = None
+        self.latest["type"] = None
         self.assertIsNone(sync.prepare(FakeAzureDevOps(), source, PARENT_ID))
-        self.load.assert_not_called()
 
     def test_historical_edits_and_closures_do_not_create_items(self):
         for action in ("edited", "closed"):
@@ -126,14 +148,14 @@ class IssueSyncTests(unittest.TestCase):
                 ado = FakeAzureDevOps()
                 self.assertIsNone(sync.prepare(ado, event(action), PARENT_ID))
                 self.assertEqual([call[0] for call in ado.calls], ["POST"])
-        self.load.assert_not_called()
 
-    def test_existing_mirror_is_not_modified_without_current_planned_bug_approval(self):
+    def test_existing_mirror_is_not_modified_without_current_planned_supported_type(self):
         for action in ("opened", "labeled", "edited", "closed"):
             for issue_type, labels in (
                 ({"name": "Bug"}, []),
                 ({"name": "Bug"}, [{"name": "unplanned"}]),
-                ({"name": "Feature"}, [{"name": "planned"}]),
+                ({"name": "Feature"}, []),
+                ({"name": "Task"}, [{"name": "planned"}]),
                 (None, [{"name": "planned"}]),
             ):
                 with self.subTest(action=action, issue_type=issue_type, labels=labels):
@@ -147,7 +169,7 @@ class IssueSyncTests(unittest.TestCase):
                     ), patch("issue_to_ado.run_action") as run:
                         self.assertEqual(sync.main(), 0)
                     run.assert_not_called()
-                    self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
+                    self.assertEqual(ado.calls, [])
                     self.assertEqual(ado.item["fields"]["System.State"], "Active")
 
     def test_label_added_event_opts_in_using_current_labels_not_stale_event_labels(self):
@@ -175,6 +197,48 @@ class IssueSyncTests(unittest.TestCase):
         run.assert_called_once()
         self.assertEqual(ado.item["fields"]["System.State"], "New")
         self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
+
+    def test_live_feature_routes_to_pbi_and_its_own_parent(self):
+        self.latest["type"] = {"name": "Feature"}
+        for action in ("opened", "labeled"):
+            with self.subTest(action=action):
+                ado = FakeAzureDevOps()
+
+                def run_upstream(client, context):
+                    self.assertIs(client, ado)
+                    self.assertEqual(context["work_item_type"], "Product Backlog Item")
+                    self.assertEqual(context["parent_id"], ENHANCEMENT_PARENT_ID)
+                    self.assertEqual(context["area_path"], "One\\SDKs\\Enhancements")
+                    self.assertEqual(context["event"]["issue"]["type"]["name"], "Feature")
+                    self.assertEqual(context["event"]["action"], "edited")
+                    ado.item = backlog_item(parent_id=None)
+                    ado.matches = [{"id": 123}]
+
+                # The webhook still says Bug; current GitHub type must choose the PBI route.
+                environment = {**self.pipeline_environment(), "WEBHOOK_ACTION": action}
+                with patch.dict(os.environ, environment), patch(
+                    "issue_to_ado.AzureDevOps", return_value=ado,
+                ), patch("issue_to_ado.run_action", side_effect=run_upstream) as run:
+                    self.assertEqual(sync.main(), 0)
+                run.assert_called_once()
+                self.assertEqual(ado.item["fields"]["System.WorkItemType"], "Product Backlog Item")
+                self.assertEqual(ado.item["fields"]["System.State"], "New")
+                self.assertTrue(sync.has_parent(ado.item, ENHANCEMENT_PARENT_ID))
+                self.assertNotIn(("GET", f"workitems/{PARENT_ID}", None), ado.calls)
+
+    def test_type_changes_do_not_convert_or_reparent_existing_mirrors(self):
+        for current_type, item in (
+            ("Feature", bug(state="Active")),
+            ("Bug", backlog_item(state="Active")),
+        ):
+            with self.subTest(current_type=current_type):
+                self.latest["type"] = {"name": current_type}
+                original = copy.deepcopy(item)
+                ado = FakeAzureDevOps(item)
+                with self.assertRaisesRegex(RuntimeError, "resolve work-item type changes manually"):
+                    sync.prepare(ado, event("edited"), PARENT_ID, ENHANCEMENT_PARENT_ID)
+                self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
+                self.assertEqual(ado.item, original)
 
     def test_removing_planned_does_not_update_or_delete_the_existing_mirror(self):
         self.latest["labels"] = []
@@ -212,7 +276,7 @@ class IssueSyncTests(unittest.TestCase):
         ado.matches.append({"id": 456})
         with self.assertRaisesRegex(RuntimeError, "Multiple ADO"):
             sync.prepare(ado, event(), PARENT_ID)
-        self.load.assert_not_called()
+        self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
 
     def test_unrelated_matches_fail_before_mutation(self):
         for wrong_field, value in (("System.TeamProject", "Other"), ("System.WorkItemType", "Task")):
@@ -227,15 +291,25 @@ class IssueSyncTests(unittest.TestCase):
             sync.prepare(FakeAzureDevOps(item), event(), PARENT_ID)
 
     def test_wrong_parent_fails_instead_of_reparenting(self):
-        ado = FakeAzureDevOps(bug(parent_id=999))
-        with self.assertRaisesRegex(RuntimeError, "refusing to reparent"):
-            sync.prepare(ado, event("edited"), PARENT_ID)
-        self.load.assert_not_called()
+        for issue_type, item in (
+            ("Bug", bug(parent_id=ENHANCEMENT_PARENT_ID)),
+            ("Feature", backlog_item(parent_id=PARENT_ID)),
+        ):
+            with self.subTest(issue_type=issue_type):
+                self.latest["type"] = {"name": issue_type}
+                ado = FakeAzureDevOps(item)
+                with self.assertRaisesRegex(RuntimeError, "refusing to reparent"):
+                    sync.prepare(ado, event("edited"), PARENT_ID, ENHANCEMENT_PARENT_ID)
+                self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
 
     def test_parent_project_and_area_are_validated(self):
         ado = FakeAzureDevOps()
         ado.parent["fields"]["System.TeamProject"] = "Other"
         with self.assertRaisesRegex(RuntimeError, "different project"):
+            sync.prepare(ado, event(), PARENT_ID)
+        ado = FakeAzureDevOps()
+        ado.parent["fields"]["System.WorkItemType"] = "Product Backlog Item"
+        with self.assertRaisesRegex(RuntimeError, "parent must be a Feature"):
             sync.prepare(ado, event(), PARENT_ID)
         for area in ("", "One\nbad", "One\rbad", None):
             with self.subTest(area=area):
@@ -253,36 +327,43 @@ class IssueSyncTests(unittest.TestCase):
                     sync.prepare(FakeAzureDevOps(), source, PARENT_ID)
 
     def test_creation_retry_and_edits_preserve_manual_state(self):
-        for action in ("opened", "labeled", "edited"):
-            with self.subTest(action=action):
-                ado = FakeAzureDevOps(bug(state="Active"))
-                source = event(action)
-                prepared = sync.prepare(ado, source, PARENT_ID)
-                self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
-                self.assertEqual(ado.item["fields"]["System.State"], "Active")
-                self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
+        for issue_type, factory in (("Bug", bug), ("Feature", backlog_item)):
+            self.latest["type"] = {"name": issue_type}
+            for action in ("opened", "labeled", "edited"):
+                with self.subTest(issue_type=issue_type, action=action):
+                    ado = FakeAzureDevOps(factory(state="Active"))
+                    source = event(action)
+                    prepared = sync.prepare(ado, source, PARENT_ID, ENHANCEMENT_PARENT_ID)
+                    self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
+                    self.assertEqual(ado.item["fields"]["System.State"], "Active")
+                    self.assertFalse(any(call[0] == "PATCH" for call in ado.calls))
 
     def test_closed_event_preserves_action_and_requires_done(self):
-        ado = FakeAzureDevOps(bug(state="Active"))
-        source = event("closed")
-        prepared = sync.prepare(ado, source, PARENT_ID)
-        with self.assertRaisesRegex(RuntimeError, "transition.*Done"):
-            sync.complete(ado, prepared["event"], prepared)
-        ado.item["fields"]["System.State"] = "Done"
-        self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
+        for issue_type, factory in (("Bug", bug), ("Feature", backlog_item)):
+            with self.subTest(issue_type=issue_type):
+                self.latest["type"] = {"name": issue_type}
+                ado = FakeAzureDevOps(factory(state="Active"))
+                source = event("closed")
+                prepared = sync.prepare(ado, source, PARENT_ID, ENHANCEMENT_PARENT_ID)
+                with self.assertRaisesRegex(RuntimeError, "transition.*Done"):
+                    sync.complete(ado, prepared["event"], prepared)
+                ado.item["fields"]["System.State"] = "Done"
+                self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
 
     def test_issue_closed_during_initial_creation_finishes_done(self):
         self.latest["state"] = "closed"
-        for action in ("opened", "labeled"):
-            with self.subTest(action=action):
-                ado = FakeAzureDevOps()
-                prepared = sync.prepare(ado, event(action), PARENT_ID)
-                self.assertEqual(prepared["event"]["action"], "closed")
-                ado.item = bug(state="Done", parent_id=None)
-                ado.matches = [{"id": 123}]
-                self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
-                self.assertEqual(ado.item["fields"]["System.State"], "Done")
-                self.assertTrue(sync.has_parent(ado.item, PARENT_ID))
+        for issue_type, factory in (("Bug", bug), ("Feature", backlog_item)):
+            self.latest["type"] = {"name": issue_type}
+            for action in ("opened", "labeled"):
+                with self.subTest(issue_type=issue_type, action=action):
+                    ado = FakeAzureDevOps()
+                    prepared = sync.prepare(ado, event(action), PARENT_ID, ENHANCEMENT_PARENT_ID)
+                    self.assertEqual(prepared["event"]["action"], "closed")
+                    ado.item = factory(state="Done", parent_id=None)
+                    ado.matches = [{"id": 123}]
+                    self.assertEqual(sync.complete(ado, prepared["event"], prepared), 123)
+                    self.assertEqual(ado.item["fields"]["System.State"], "Done")
+                    self.assertTrue(sync.has_parent(ado.item, prepared["parent_id"]))
 
     def test_new_bug_gets_parent_and_new_state(self):
         ado = FakeAzureDevOps()
@@ -314,7 +395,7 @@ class IssueSyncTests(unittest.TestCase):
         prepared["existing_id"] = 456
         ado.item = bug()
         ado.matches = [{"id": 123}]
-        with self.assertRaisesRegex(RuntimeError, "different ADO Bug"):
+        with self.assertRaisesRegex(RuntimeError, "different ADO item"):
             sync.complete(ado, prepared["event"], prepared)
 
     def test_mismatched_refreshed_issue_fails(self):
@@ -372,6 +453,7 @@ class IssueSyncTests(unittest.TestCase):
         return {
             "ADO_ORGANIZATION": "msazure", "ADO_PROJECT": "One",
             "ADO_TOKEN": "test-token", "ADO_PARENT_ID": str(PARENT_ID),
+            "ADO_ENHANCEMENT_PARENT_ID": str(ENHANCEMENT_PARENT_ID),
             "WEBHOOK_REPOSITORY_ID": str(sync.GITHUB_REPOSITORY_ID),
             "WEBHOOK_REPOSITORY": sync.GITHUB_REPOSITORY,
             "WEBHOOK_ACTION": "opened", "WEBHOOK_ISSUE_NUMBER": "200",
@@ -390,7 +472,9 @@ class IssueSyncTests(unittest.TestCase):
         self.assertIn("ADO_TOKEN", errors.getvalue())
 
     def test_missing_private_routing_fails_before_api_access(self):
-        for name in ("ADO_ORGANIZATION", "ADO_PROJECT", "ADO_PARENT_ID"):
+        for name in (
+            "ADO_ORGANIZATION", "ADO_PROJECT", "ADO_PARENT_ID", "ADO_ENHANCEMENT_PARENT_ID",
+        ):
             for value in (None, "", " ", f"$({name})"):
                 with self.subTest(name=name, value=value):
                     environment = self.pipeline_environment()
@@ -438,6 +522,20 @@ class IssueSyncTests(unittest.TestCase):
         self.assertEqual(captured["environment"]["ado_close_state"], "Done")
         self.assertEqual(captured["environment"]["github_token"], "")
         self.assertNotIn("ado_bypassrules", captured["environment"])
+
+    def test_feature_passes_pbi_type_and_area_to_the_upstream_action(self):
+        self.latest["type"] = {"name": "Feature"}
+        ado = FakeAzureDevOps()
+        prepared = sync.prepare(ado, event("labeled"), PARENT_ID, ENHANCEMENT_PARENT_ID)
+
+        with patch("issue_to_ado.subprocess.run") as run:
+            sync.run_action(ado, prepared)
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(environment["ado_wit"], "Product Backlog Item")
+        self.assertEqual(environment["ado_area_path"], "One\\SDKs\\Enhancements")
+        self.assertEqual(environment["ado_new_state"], "New")
+        self.assertEqual(environment["ado_close_state"], "Done")
+        self.assertEqual(environment["github_token"], "")
 
     def test_large_unicode_issue_body_is_a_file_not_a_process_environment_value(self):
         prepared = sync.prepare(FakeAzureDevOps(), event(), PARENT_ID)

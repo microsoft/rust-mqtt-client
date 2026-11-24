@@ -7,9 +7,10 @@
 #   Authorize only this pipeline to use the connection.
 # - Create an Azure DevOps/WIF connection named ms-mqtt-client-ado-workitems
 #   for the target organization. Grant its identity the required project access,
-#   View/Edit work items in the parent's area, and Create tag definition if needed.
+#   View/Edit work items in both parent areas, and Create tag definition if needed.
 #   Authorize only this pipeline. The named Sync stage serializes deliveries.
 # - Set private pipeline variables ADO_ORGANIZATION, ADO_PROJECT, and ADO_PARENT_ID.
+#   Keep ADO_PARENT_ID for Bugs; set ADO_ENHANCEMENT_PARENT_ID for enhancement PBIs.
 # - In the GitHub repository's Webhooks settings, subscribe to Issues only,
 #   use application/json, enable SSL verification, and configure the same secret.
 #   URL: https://dev.azure.com/<build-org>/_apis/public/distributedtask/webhooks/ms-mqtt-client-issues?api-version=6.0-preview
@@ -17,10 +18,11 @@
 #   Native Incoming WebHook verification uses HMAC-SHA1, not SHA256.
 #
 # A manual initialization run without a webhook does not modify work items.
-# Only current native Bugs with the planned label sync; do not auto-apply that label.
-# Opened/labeled events can opt Bugs in; edits/closures never create missing items.
+# Only current native Bug/Feature issues with planned sync; do not auto-apply it.
+# Native Features become Product Backlog Items; an enhancement label alone is insufficient.
+# Opened/labeled events can opt issues in; edits/closures never create missing items.
 # Removing planned pauses future updates without deleting the ADO item. No schedule.
-# Keep the upstream title suffix and repository tags used to identify each Bug.
+# Keep the upstream title suffix and repository tags used to identify each item.
 # Issue content is refreshed through the public GitHub API; rate limits fail the job.
 
 trigger: none
@@ -53,11 +55,11 @@ extends:
         os: windows
     stages:
       - stage: Sync
-        displayName: Synchronize GitHub Bugs
+        displayName: Synchronize planned GitHub issues
         lockBehavior: sequential
         jobs:
           - job: SyncBugs
-            displayName: Create or update the mirrored ADO Bug
+            displayName: Create or update the mirrored ADO item
             timeoutInMinutes: '10'
             steps:
               - checkout: self
@@ -93,6 +95,7 @@ extends:
                   ADO_ORGANIZATION: $(ADO_ORGANIZATION)
                   ADO_PROJECT: $(ADO_PROJECT)
                   ADO_PARENT_ID: $(ADO_PARENT_ID)
+                  ADO_ENHANCEMENT_PARENT_ID: $(ADO_ENHANCEMENT_PARENT_ID)
                   WEBHOOK_REPOSITORY_ID: ${{ parameters.GitHubIssues.repository.id }}
                   WEBHOOK_REPOSITORY: ${{ parameters.GitHubIssues.repository.full_name }}
                   WEBHOOK_ACTION: ${{ parameters.GitHubIssues.action }}
