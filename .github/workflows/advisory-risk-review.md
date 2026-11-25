@@ -29,6 +29,10 @@ on:
         type: boolean
   roles: all
   status-comment: false
+env:
+  # PRs always use test mode. Other triggers use the manual option, or false if absent.
+  NON_PUBLISHING: &non-publishing ${{ github.event_name == 'pull_request' || inputs.non_publishing == true }}
+# Only test runs may be started manually from outside the default branch.
 if: &trusted-trigger >-
   (github.event_name == 'pull_request' &&
    github.event.pull_request.head.repo.full_name == github.repository) ||
@@ -65,7 +69,7 @@ tools:
   bash: ["cat", "find", "grep", "rg", "sed", "git show", "git ls-tree", "git grep", "git log"]
 safe-outputs:
   # "Staged" is the framework's test mode: save assessments instead of posting comments.
-  staged: &non-publishing ${{ github.event_name == 'pull_request' || inputs.non_publishing == true }}
+  staged: *non-publishing
   create-issue: false
   report-incomplete: false
   report-missing-tool: false
@@ -74,7 +78,7 @@ safe-outputs:
   report-failed-jobs: false
   threat-detection:
     report-as-issue: false
-    continue-on-error: ${{ github.event_name != 'pull_request' && inputs.non_publishing != true }}
+    continue-on-error: ${{ env.NON_PUBLISHING == 'false' }}
   data:
     advisory_key: string
     fingerprint: string
@@ -87,7 +91,7 @@ safe-outputs:
     required-labels:
       - dependency-advisory
       # Test reviews can use already-reviewed issues; normal reviews require the pending-review label.
-      - ${{ (github.event_name == 'pull_request' || inputs.non_publishing == true) && 'dependency-advisory' || 'copilot-risk-review' }}
+      - ${{ env.NON_PUBLISHING == 'true' && 'dependency-advisory' || 'copilot-risk-review' }}
 jobs:
   prepare:
     if: *trusted-trigger
@@ -111,7 +115,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ inputs.issue_number || github.event.issue.number || '' }}
-          NON_PUBLISHING: *non-publishing
         run: |
           python3 .github/scripts/review_advisories.py prepare \
             --repository "$GITHUB_REPOSITORY" \
@@ -136,23 +139,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download test comment processing results
-        if: github.event_name == 'pull_request' || inputs.non_publishing == true
+        if: env.NON_PUBLISHING == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: safe-outputs-items
           path: ${{ runner.temp }}/advisory-preview
       - name: Download the generated test assessment
-        if: github.event_name == 'pull_request' || inputs.non_publishing == true
+        if: env.NON_PUBLISHING == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent-output-fallback
           path: ${{ runner.temp }}/advisory-preview
       - name: Clear pending-review labels or verify test results
         env:
-          GH_TOKEN: ${{ github.event_name != 'pull_request' && inputs.non_publishing != true && github.token || '' }}
+          GH_TOKEN: ${{ env.NON_PUBLISHING == 'false' && github.token || '' }}
           REVIEW_QUEUE: ${{ needs.prepare.outputs.queue }}
           REVIEW_CONTINUATION_REF: ${{ needs.prepare.outputs.has_more_reviews == 'true' && github.event.repository.default_branch || '' }}
-          NON_PUBLISHING: *non-publishing
           STAGED_OUTCOMES: ${{ runner.temp }}/advisory-preview/safe-output-outcomes.jsonl
           AGENT_OUTPUT: ${{ runner.temp }}/advisory-preview/agent_output.json
         run: |

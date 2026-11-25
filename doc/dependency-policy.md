@@ -148,6 +148,10 @@ There are two review modes:
 Same-repository PRs changing the review workflow, action pin cache, or advisory
 scripts automatically use test mode. Manual runs can enable `non_publishing`,
 including on a topic branch, and use `issue_number` to select an existing report.
+The workflow computes one effective `NON_PUBLISHING` flag: it is always true for
+PRs, and otherwise follows the manual input, which defaults to false. Comment
+processing, safety checks, test-result downloads, and helper scripts share that
+flag. Separate trigger checks still control which branches may start a run.
 Test findings need only the `dependency-advisory` label, not the pending-review
 label. Tests still call the real AI service and consume credits within the
 workflow's limits.
