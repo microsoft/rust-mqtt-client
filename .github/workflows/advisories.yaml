@@ -47,12 +47,14 @@ jobs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: |
         if [ "$EVENT_NAME" = "pull_request" ]; then
-          changed_files="$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" -- Cargo.toml deny.toml)"
+          changed_files="$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" -- \
+            Cargo.toml deny.toml rust-toolchain.toml \
+            .github/workflows/advisories.yaml .github/scripts/report_advisories.py)"
           if [ -n "$changed_files" ]; then
             echo "Full advisory matrix required: $changed_files"
             echo "scan_required=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Cargo.toml and deny.toml are unchanged; the full matrix is not required."
+            echo "Advisory scan inputs are unchanged; the full matrix is not required."
             echo "scan_required=false" >> "$GITHUB_OUTPUT"
           fi
         else
@@ -203,7 +205,7 @@ jobs:
         fi
         case "$SCAN_REQUIRED:$SCAN_RESULT" in
           false:skipped)
-            echo "Cargo.toml and deny.toml are unchanged; the full matrix is not required."
+            echo "Advisory scan inputs are unchanged; the full matrix is not required."
             ;;
           true:success)
             echo "Both latest and minimum-direct advisory scans passed."

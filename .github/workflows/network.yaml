@@ -6,8 +6,9 @@
 #      `network-mosquitto` job in pr.yaml), which is what proves a change didn't break
 #      talking to a real server. This workflow adds the BREADTH the gate can't hold
 #      stable: other implementations. A red run here often means the outside
-#      world moved, so -- like `nightly.yaml` -- it must not block a PR, and a
-#      `notify` job files the failure since no author is watching.
+#      world moved, so -- like `nightly.yaml` -- it must not block unrelated PRs,
+#      and a `notify` job files the failure since no author is watching.
+#      PRs changing this workflow or its tooling/fixtures run the same broker jobs.
 #
 #   2. Broker matrix. The test suite is server-agnostic -- it connects to whatever
 #      MQTT_HOST/MQTT_PORT point at -- so each matrix entry only swaps which
@@ -24,6 +25,12 @@
 name: 'Network'
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/network.yaml'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'tests/network/fixtures/**'
   schedule:
     # 13:00 UTC (06:00 PT) daily -- staggered an hour after `fuzz.yaml` so the
     # scheduled workloads don't pile onto the same runner minute.
@@ -32,7 +39,7 @@ on:
 
 # One scheduled run at a time.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -43,14 +50,14 @@ env:
 
 jobs:
   network:
-    name: Network (${{ matrix.broker }})
+    name: ${{ github.event_name == 'pull_request' && 'Broker dependency validation' || 'Network' }} (${{ matrix.broker }})
     runs-on: 'ubuntu-24.04'
     # Generous because the AIO MQ leg stands up a k3d cluster and Helm-installs an
     # operator before a single test runs; Mosquitto starts in seconds.
     timeout-minutes: 25
     # Letting AIO MQ go red without failing the workflow keeps it from masking a
     # real regression in another broker; the `notify` job still reports genuine failures.
-    continue-on-error: ${{ startsWith(matrix.broker, 'aio-mq') }}
+    continue-on-error: ${{ github.event_name != 'pull_request' && startsWith(matrix.broker, 'aio-mq') }}
 
     strategy:
       fail-fast: false
@@ -107,6 +114,8 @@ jobs:
       run: tests/network/fixtures/up.sh ${{ matrix.broker }}
 
     - name: Test
+      # Keep known AIO MQ test differences optional, but validate its PR setup.
+      continue-on-error: ${{ github.event_name == 'pull_request' && startsWith(matrix.broker, 'aio-mq') }}
       env:
         MQTT_SERVER: ${{ matrix.broker }}
       run: cargo test --features "__network,websockets ${{ matrix.features }}" --test network
@@ -121,7 +130,7 @@ jobs:
   notify:
     name: Report failure
     needs: [network]
-    if: failure()
+    if: failure() && github.event_name != 'pull_request'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     permissions:

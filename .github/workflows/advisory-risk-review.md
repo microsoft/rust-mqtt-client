@@ -3,6 +3,13 @@
 # gh aw compile advisory-risk-review --action-mode action --action-tag 53d0749e19424a918acd82b4d140264ce48f2f14
 name: Dependency advisory risk review
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/advisory-risk-review.md'
+      - '.github/workflows/advisory-risk-review.lock.yml'
+      - '.github/aw/actions-lock.json'
+      - '.github/scripts/review_advisories.py'
+      - '.github/scripts/report_advisories.py'
   workflow_run:
     workflows: ["Dependency advisories"]
     branches: [main]
@@ -17,7 +24,8 @@ on:
         type: string
   roles: all
   status-comment: false
-if: &trusted-trigger >-
+if: >-
+  github.event_name == 'pull_request' ||
   (github.event_name == 'workflow_run' &&
    github.event.workflow_run.event != 'pull_request' &&
    github.event.workflow_run.head_repository.full_name == github.repository &&
@@ -26,7 +34,7 @@ if: &trusted-trigger >-
   (github.event_name == 'issues' && github.event.label.name == 'copilot-risk-review') ||
   (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
 concurrency:
-  group: dependency-advisory-risk-review-${{ github.repository }}
+  group: dependency-advisory-risk-review-${{ github.repository }}-${{ github.event.pull_request.number || 'production' }}
   job-discriminator: ${{ github.run_id }}
   cancel-in-progress: false
 permissions:
@@ -68,8 +76,18 @@ safe-outputs:
     replace-older-comments: true
     required-labels: [dependency-advisory, copilot-risk-review]
 jobs:
+  activation:
+    # PRs exercise the actual runtime even though production queue preparation is skipped.
+    if: always() && (github.event_name == 'pull_request' || needs.prepare.result == 'success')
   prepare:
-    if: *trusted-trigger
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event != 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+       github.event.workflow_run.conclusion != 'cancelled') ||
+      (github.event_name == 'issues' && github.event.label.name == 'copilot-risk-review') ||
+      (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency: &advisory-state-lock
@@ -97,12 +115,17 @@ jobs:
             --issue-number "$ISSUE_NUMBER"
   agent:
     needs: [prepare]
-    if: needs.prepare.outputs.has_reviews == 'true'
+    if: github.event_name != 'pull_request' && needs.prepare.outputs.has_reviews == 'true'
   detection:
+    if: github.event_name != 'pull_request'
     timeout-minutes: 5
+  safe_outputs:
+    if: github.event_name != 'pull_request'
+  conclusion:
+    if: github.event_name != 'pull_request'
   finalize:
     needs: [prepare, agent, detection, safe_outputs]
-    if: needs.prepare.outputs.has_reviews == 'true' && needs.safe_outputs.result == 'success'
+    if: github.event_name != 'pull_request' && needs.prepare.outputs.has_reviews == 'true' && needs.safe_outputs.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency: *advisory-state-lock

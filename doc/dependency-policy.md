@@ -28,7 +28,8 @@ the minimum supported Rust version (MSRV) and the current stable compiler:
 The [Dependency advisories workflow](../.github/workflows/advisories.yaml) scans
 both resolutions with cargo-deny against RustSec. It runs on a schedule because
 advisory data can change even when our code does not. It also validates PRs that
-change [Cargo.toml](../Cargo.toml) or [deny.toml](../deny.toml).
+change [Cargo.toml](../Cargo.toml), [deny.toml](../deny.toml), or the scan's
+workflow, toolchain, or reporting script.
 
 These are two useful samples, not exhaustive coverage of every permitted version,
 feature, target, or consumer dependency graph. We rely on SemVer compatibility for
@@ -40,7 +41,9 @@ should also audit their final resolved dependencies.
 Every PR receives a **Dependency advisory validation** check. The workflow compares
 the PR's merge base and head using Git. Any change to the root `Cargo.toml` or
 `deny.toml` requires the full latest/minimum-direct matrix, including comments,
-formatting, additions, and deletions. There is no TOML parsing or section filtering.
+formatting, additions, and deletions. Changes to the advisory workflow, pinned
+Rust toolchain, or reporting script also exercise the matrix before merge.
+There is no TOML parsing or section filtering.
 Other PRs do not run the advisory matrix. Unavailable Git revisions or failed
 change detection fail validation rather than silently skipping it.
 
@@ -51,7 +54,7 @@ PR workflow completions are excluded from the automatic risk-review handoff.
 Scheduled and manually dispatched runs still scan both resolutions and report
 findings as before.
 
-The final check always runs on PRs. When neither input file changed, it succeeds
+The final check always runs on PRs. When none of those inputs changed, it succeeds
 without running the matrix. Otherwise, detection and both matrix legs must
 succeed. Each scan verifies its report with the existing completeness checks
 before uploading artifacts. The final check also reads both reports and rejects
@@ -125,6 +128,11 @@ tests, not optional remediation for applicable vulnerabilities.
 The [automated Copilot assessment](../.github/workflows/advisory-risk-review.md)
 provides evidence and recommendations in an issue comment. It does not decide
 exceptions, change dependencies, or replace maintainer review.
+
+Same-repository PRs changing its workflow, action pin cache, or advisory scripts
+exercise the same compiler-generated runtime activation with read-only permissions. Queue
+preparation, AI execution, assessment publication, and finalization remain disabled
+on PRs. An empty production queue therefore does not hide runtime startup failures.
 
 - The initial issue description contains the full advisory report and space for
   maintainer reasoning. Copilot adds a separate analysis comment; the scanner does

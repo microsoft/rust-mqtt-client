@@ -14,10 +14,18 @@
 # and time budget (which is meant to grow), its own concurrency (a long run
 # must not be cancelled by, or hold up, the quick nightly checks), and a
 # purpose-built crash report (upload the minimized reproducer, distinct issue).
+# PRs changing its tooling run the same setup and a 30-second smoke run per target.
 
 name: 'Fuzz'
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/fuzz.yaml'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'fuzz/Cargo.toml'
+      - 'fuzz/fuzz_targets/**'
   schedule:
     # 12:00 UTC (05:00 PT) daily -- staggered an hour after `nightly.yaml` so the
     # two scheduled workloads don't pile onto the same runner minute.
@@ -26,7 +34,7 @@ on:
 
 # One fuzzing run at a time; a newly-triggered run supersedes an in-flight one.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -107,7 +115,9 @@ jobs:
     # instrumented build never falls back to a static-libc musl target (see the
     # nightly-install step for the failure modes that would cause).
     - name: Fuzz
-      run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=3600
+      env:
+        FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '30' || '3600' }}
+      run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time="$FUZZ_SECONDS"
 
     # On a crash, cargo-fuzz writes a minimized reproducer under
     # fuzz/artifacts/<target>/. Upload it so the exact crashing input is
@@ -127,7 +137,7 @@ jobs:
   notify:
     name: Report crash
     needs: [fuzz]
-    if: failure()
+    if: failure() && github.event_name != 'pull_request'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     permissions:

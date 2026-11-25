@@ -4,7 +4,7 @@
 #
 #   1. Gate vs. nightly. This workflow owns everything that can go red because
 #      the *outside world moved* rather than because our code changed -- so it
-#      must not gate PRs. That includes: toolchains beyond MSRV+stable (beta and
+#      must not gate unrelated PRs. That includes: toolchains beyond MSRV+stable (beta and
 #      nightly, to get early warning of future breakage) and external documentation
 #      links (third-party sites can change or go down). Dependency advisories have
 #      their own workflow (`advisories.yaml`) so triage cannot obscure test failures.
@@ -19,13 +19,19 @@
 name: 'Nightly'
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/nightly.yaml'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'Makefile'
   schedule:
     - cron: '0 11 * * *'   # 11:00 UTC (04:00 PT) daily. Scheduled runs fire on the default branch only.
   workflow_dispatch:
 
-# Only one scheduled run at a time.
+# PR validation must not cancel the scheduled run.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -82,7 +88,7 @@ jobs:
       run: make -j test
 
   links:
-    name: Documentation links (online)
+    name: ${{ github.event_name == 'pull_request' && 'Link action dependency validation' || 'Documentation links (online)' }}
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
 
@@ -92,7 +98,8 @@ jobs:
     - name: Check Markdown links
       uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
       with:
-        args: --include-fragments --no-progress --timeout 30 --max-retries 2 '**/*.md'
+        # Exercise the same action on PRs without gating on third-party availability.
+        args: ${{ github.event_name == 'pull_request' && '--offline --include-fragments --no-progress' || '--include-fragments --no-progress --timeout 30 --max-retries 2' }} '**/*.md'
         fail: true
 
   # Scheduled runs have no PR to turn red and no author watching, so surface
@@ -101,7 +108,7 @@ jobs:
   notify:
     name: Report failure
     needs: [test, links]
-    if: failure()
+    if: failure() && github.event_name != 'pull_request'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     permissions:

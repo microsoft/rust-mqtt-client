@@ -9,8 +9,8 @@
 #      releases, freshly published advisories, dependency drift on unpinned
 #      transitive versions) lives in `nightly.yaml` or `advisories.yaml`, so it never blocks
 #      an unrelated PR. Concretely: MSRV + stable are gated; beta/nightly
-#      toolchains are not. `advisories.yaml` gates advisory-DB scans only for
-#      PRs changing Cargo.toml or deny.toml.
+#      toolchains are not. Scheduled workflows also exercise their own setup
+#      and dependencies on PRs that change their workflow or tooling inputs.
 #
 #   2. Static analysis vs. running tests. All static analysis (rustfmt, clippy,
 #      cargo-deny, cargo-machete -- via `make check`) runs on the SINGLE pinned
@@ -84,13 +84,13 @@ jobs:
         printf '%s  %s\n' "$GH_AW_SHA256" "$directory/gh-aw" | sha256sum --check
         chmod +x "$directory/gh-aw"
 
-    - name: Validate all workflow definitions and generated files
-      env:
-        GH_AW_SETUP_SHA: 53d0749e19424a918acd82b4d140264ce48f2f14
+    - name: Lint all workflow definitions
       run: |
-        python3 -B .github/scripts/check_workflows.py \
-          --compiler "$RUNNER_TEMP/gh-aw-compiler/gh-aw" \
-          --setup-sha "$GH_AW_SETUP_SHA"
+        "$RUNNER_TEMP/gh-aw-compiler/gh-aw" lint .github/workflows
+
+    - name: Validate agentic workflow source
+      run: |
+        "$RUNNER_TEMP/gh-aw-compiler/gh-aw" compile --no-emit --no-check-update
 
   # Static analysis on the pinned dev toolchain (rust-toolchain.toml). Lint
   # results are toolchain-specific, so fmt/clippy run here only -- never across
