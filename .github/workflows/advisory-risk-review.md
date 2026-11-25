@@ -23,7 +23,7 @@ on:
         required: false
         type: string
       non_publishing:
-        description: Test an existing scan finding without posting comments or marking it reviewed
+        description: Validate the review workflow using an existing finding without posting comments or marking it reviewed
         required: false
         default: false
         type: boolean

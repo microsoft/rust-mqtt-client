@@ -191,7 +191,7 @@ def main():
     )
     parser.add_argument(
         "--non-publishing", choices=["true", "false"], default="false",
-        help="Run a test assessment without posting comments or changing pending-review labels",
+        help="Use test review mode to validate the workflow without changing pending-review labels",
     )
     parser.add_argument(
         "--staged-outcomes", type=Path,

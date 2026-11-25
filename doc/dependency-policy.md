@@ -43,7 +43,7 @@ Every PR receives a **Dependency advisory validation** check. The workflow compa
 the PR's merge base and head using Git. Any change to the root `Cargo.toml` or
 `deny.toml` requires both dependency scans, including changes to comments,
 formatting, additions, and deletions. Changes to the advisory workflow, pinned
-Rust toolchain, or reporting script also run both scans before merge.
+Rust toolchain, or reporting script also trigger both scans.
 There is no TOML parsing or section filtering.
 Other PRs do not run the advisory scans. Unavailable Git revisions or failed
 change detection fail validation rather than silently skipping it.
@@ -70,14 +70,6 @@ Before closing an advisory through a remediation or exception PR, link a passing
 run at its latest head; ordinary PR tests or a local latest-only scan are not a
 substitute. The scan verifies the proposed policy or dependency change, not the
 correctness of the maintainer's applicability judgment.
-
-To require advisory validation before merging, configure **Dependency advisory
-validation** as a required status check for `main` in the repository ruleset or
-branch-protection settings. Repository code creates the check; it does not change
-those settings.
-Do not path-filter the entire workflow: unrelated PRs need the successful
-not-applicable check rather than a missing required status. Existing approval
-policies for workflows on Copilot-authored PRs still apply.
 
 ## Relationship to GitHub security tooling
 
@@ -138,20 +130,22 @@ There are two review modes:
   must have both `dependency-advisory` and `copilot-risk-review` labels. The latter
   is the **pending-review label**; removing it marks the automated review complete,
   not the dependency problem resolved.
-- **Test review** (`non_publishing: true`): select one existing, complete scan
-  report and generate a new AI assessment without posting or editing comments,
-  changing issue labels, or marking the finding reviewed. The finding can be
-  closed or already reviewed, so the test still runs when no new reviews are
-  pending. It uses the versions and code revision in that saved report; it does
-  not reuse an old AI response or scan today's dependencies again.
+- **Test review** (`non_publishing: true`): validate the review workflow using one
+  existing, complete scan report. Generate a new AI assessment without posting or
+  editing comments, changing issue labels, or marking the finding reviewed. The
+  finding can be closed or already reviewed, so the test still runs when no new
+  reviews are pending. It uses the versions and code revision in that saved
+  report; it does not reuse an old AI response or scan today's dependencies again.
 
 Same-repository PRs changing the review workflow, action pin cache, or advisory
 scripts automatically use test mode. Manual runs can enable `non_publishing`,
 including on a topic branch, and use `issue_number` to select an existing report.
 The workflow computes one effective `NON_PUBLISHING` flag: it is always true for
-PRs, and otherwise follows the manual input, which defaults to false. Comment
-processing, safety checks, test-result downloads, and helper scripts share that
-flag. Separate trigger checks still control which branches may start a run.
+PRs, and otherwise follows the manual input, which defaults to false. It passes
+that flag as `--non-publishing` to both `prepare` and `finalize` in
+[review_advisories.py](../.github/scripts/review_advisories.py). Comment processing,
+safety checks, and test-result downloads use the same flag. Separate trigger
+checks still control which branches may start a run.
 Test findings need only the `dependency-advisory` label, not the pending-review
 label. Tests still call the real AI service and consume credits within the
 workflow's limits.
