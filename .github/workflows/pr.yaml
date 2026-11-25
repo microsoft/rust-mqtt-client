@@ -44,15 +44,63 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  workflows:
+    name: Workflow validation
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+
+    steps:
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Install actionlint
+      uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      with:
+        tool: actionlint@1.7.12
+
+    - name: Install workflow compiler
+      env:
+        GH_AW_VERSION: v1.2.2
+        GH_AW_SHA256: c2378d85466d29cdbdfebd0e513557b5cbec18d34f44e7cc00c2fa323687a153
+      run: |
+        set -euo pipefail
+        directory="$RUNNER_TEMP/gh-aw-compiler"
+        mkdir -p "$directory"
+        curl --fail --silent --show-error --location --retry 3 \
+          --output "$directory/gh-aw" \
+          "https://github.com/github/gh-aw/releases/download/${GH_AW_VERSION}/linux-amd64"
+        printf '%s  %s\n' "$GH_AW_SHA256" "$directory/gh-aw" | sha256sum --check
+        chmod +x "$directory/gh-aw"
+
+    - name: Validate all workflow definitions and generated files
+      env:
+        GH_AW_SETUP_SHA: 53d0749e19424a918acd82b4d140264ce48f2f14
+      run: |
+        python3 -B .github/scripts/check_workflows.py \
+          --compiler "$RUNNER_TEMP/gh-aw-compiler/gh-aw" \
+          --setup-sha "$GH_AW_SETUP_SHA"
+
   # Static analysis on the pinned dev toolchain (rust-toolchain.toml). Lint
   # results are toolchain-specific, so fmt/clippy run here only -- never across
   # the test matrix, where a newer stable could fail on freshly-added lints.
   check:
     name: Check (pinned toolchain)
+    needs: workflows
+    if: ${{ !cancelled() }}
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
 
     steps:
+    - name: Require workflow validation
+      env:
+        WORKFLOW_RESULT: ${{ needs.workflows.result }}
+      run: |
+        if [ "$WORKFLOW_RESULT" != "success" ]; then
+          echo "::error::Workflow validation did not succeed: $WORKFLOW_RESULT."
+          exit 1
+        fi
+
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
 
     - name: Setup Rust (pinned via rust-toolchain.toml)
