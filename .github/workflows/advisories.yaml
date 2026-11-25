@@ -1,5 +1,5 @@
-# Dependency findings need applicability triage, independently of Nightly test failures.
-# Keep both resolutions: a clean latest graph says nothing about older supported versions.
+# Review dependency findings separately from ordinary test failures.
+# Scan both dependency sets: a clean latest-version scan does not cover older supported versions.
 name: 'Dependency advisories'
 
 on:
@@ -7,7 +7,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
   schedule:
-    - cron: '30 11 * * *'   # Daily, staggered after Nightly and before Fuzz.
+    - cron: '30 11 * * *'   # 11:30 UTC daily, between Nightly and Fuzz.
   workflow_dispatch:
 
 concurrency:
@@ -51,10 +51,10 @@ jobs:
             Cargo.toml deny.toml rust-toolchain.toml \
             .github/workflows/advisories.yaml .github/scripts/report_advisories.py)"
           if [ -n "$changed_files" ]; then
-            echo "Full advisory matrix required: $changed_files"
+            echo "Run both advisory scans because these inputs changed: $changed_files"
             echo "scan_required=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Advisory scan inputs are unchanged; the full matrix is not required."
+            echo "No advisory scan inputs changed; skip both dependency scans."
             echo "scan_required=false" >> "$GITHUB_OUTPUT"
           fi
         else
@@ -121,7 +121,7 @@ jobs:
         echo "cargo-deny exited with status $status; full diagnostics are in the scan artifact."
         exit "$status"
 
-    - name: Verify scan completeness
+    - name: Check that the scan report is complete
       run: |
         python3 - <<'PY'
         import os
@@ -150,7 +150,7 @@ jobs:
     if: always() && !cancelled() && github.event_name != 'pull_request'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
-    # Share the lock with Copilot's queue readers/writers, not just other scan runs.
+    # Do not update issues while another run selects findings or marks reviews complete.
     concurrency:
       group: dependency-advisory-state-${{ github.repository }}
       cancel-in-progress: false
@@ -169,7 +169,7 @@ jobs:
         pattern: dependency-advisories-*
         path: ${{ runner.temp }}/advisory-reports
 
-    - name: Open or update dependency issues
+    - name: Create or update issues for dependency findings and scan failures
       if: always() && !cancelled() && steps.checkout.outcome == 'success'
       env:
         GH_TOKEN: ${{ github.token }}
@@ -193,7 +193,7 @@ jobs:
       contents: read
 
     steps:
-    - name: Require the applicable matrix result
+    - name: Require the selected advisory scans to pass
       env:
         DETECTION_RESULT: ${{ needs.changes.result }}
         SCAN_REQUIRED: ${{ needs.changes.outputs.scan_required }}
@@ -205,13 +205,13 @@ jobs:
         fi
         case "$SCAN_REQUIRED:$SCAN_RESULT" in
           false:skipped)
-            echo "Advisory scan inputs are unchanged; the full matrix is not required."
+            echo "No advisory scan inputs changed; skip both dependency scans."
             ;;
           true:success)
             echo "Both latest and minimum-direct advisory scans passed."
             ;;
           *)
-            echo "::error::Advisory matrix did not pass: required=$SCAN_REQUIRED, result=$SCAN_RESULT."
+            echo "::error::Advisory scans did not pass: required=$SCAN_REQUIRED, result=$SCAN_RESULT."
             exit 1
             ;;
         esac
@@ -229,7 +229,7 @@ jobs:
         pattern: dependency-advisories-*
         path: ${{ runner.temp }}/advisory-reports
 
-    - name: Require removal of unused advisory ignores
+    - name: Check that advisory exceptions are still needed
       if: needs.changes.outputs.scan_required == 'true'
       run: |
         python3 - <<'PY'
@@ -241,5 +241,5 @@ jobs:
         from report_advisories import validate_ignored_advisories
 
         validate_ignored_advisories(Path(os.environ["RUNNER_TEMP"]) / "advisory-reports")
-        print("No advisory ignore is unused by both dependency resolutions.")
+        print("Every advisory exception is still needed by at least one dependency set.")
         PY

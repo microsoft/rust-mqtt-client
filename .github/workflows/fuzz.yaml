@@ -1,20 +1,8 @@
-# Fuzz: scheduled, non-blocking, coverage-guided fuzzing of the untrusted-input
-# decoders. Deliberately its OWN workflow rather than part of `pr.yaml` or
-# `nightly.yaml`, because fuzzing is a third category that fits neither:
-#
-#   - The PR gate owns DETERMINISTIC, code-caused checks. Fuzzing is
-#     non-deterministic and open-ended (no "pass" state), so it can't gate a PR.
-#     The gate only *compile-checks* the fuzz targets (the `fuzz` job there).
-#   - `nightly.yaml` owns things that go red because the *outside world moved*
-#     (new compilers, dependency drift); `advisories.yaml` owns RustSec triage. A fuzz
-#     crash is the opposite: a bug in OUR decoder, i.e. CODE-caused. It's
-#     scheduled-not-gated only because it's non-deterministic and expensive.
-#
-# Keeping it separate also lets fuzzing evolve independently: its own schedule
-# and time budget (which is meant to grow), its own concurrency (a long run
-# must not be cancelled by, or hold up, the quick nightly checks), and a
-# purpose-built crash report (upload the minimized reproducer, distinct issue).
-# PRs changing its tooling run the same setup and a 30-second smoke run per target.
+# Fuzzing generates varied inputs to look for crashes in packet and topic handling.
+# Scheduled and manual runs test each target for up to 60 minutes.
+# PRs changing the listed inputs run the same setup and 30 seconds per target.
+# Other PRs only check that the targets compile, in pr.yaml.
+# Failing inputs are saved with the Actions run; only non-PR runs create issues.
 
 name: 'Fuzz'
 
@@ -27,12 +15,11 @@ on:
       - 'fuzz/Cargo.toml'
       - 'fuzz/fuzz_targets/**'
   schedule:
-    # 12:00 UTC (05:00 PT) daily -- staggered an hour after `nightly.yaml` so the
-    # two scheduled workloads don't pile onto the same runner minute.
+    # 12:00 UTC daily, one hour after Nightly's scheduled start.
     - cron: '0 12 * * *'
   workflow_dispatch:
 
-# One fuzzing run at a time; a newly-triggered run supersedes an in-flight one.
+# Cancel older runs of the same PR or branch, not runs for other PRs or branches.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -44,17 +31,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Bounded, coverage-guided fuzzing. A crash fails the job (NOT
-  # continue-on-error) so the `notify` job files a tracking issue -- a crash is
-  # a real, actionable, potentially security-relevant finding.
-  #
-  # Budget: 60 min per target. The targets run in parallel across the matrix
-  # (each on its own runner), so wall time stays ~60 min rather than 3x. Adjust
-  # `max_total_time` to invest more or less once the targets prove their signal.
+  # Each target runs in its own job. Crashes fail the job and save the failing input.
   fuzz:
     name: Fuzz (${{ matrix.target }})
     runs-on: 'ubuntu-24.04'
-    # 60 min fuzzing + instrumented build + tool install, with margin.
+    # Allow time for setup and compilation in addition to the 60-minute scheduled run.
     timeout-minutes: 75
 
     strategy:
@@ -72,16 +53,9 @@ jobs:
         rustflags: ''
         build-warnings: ''
 
-    # cargo-fuzz builds with unstable `-Z sanitizer` + SanitizerCoverage flags,
-    # so the instrumented target must be built on nightly (the library still
-    # targets the pinned toolchain everywhere else).
-    #
-    # Explicitly add the glibc target: cargo-fuzz otherwise builds for the
-    # runner's default host triple, which can resolve to a musl target. musl
-    # links libc statically (`crt-static`), and ASan is incompatible with a
-    # statically linked libc ("sanitizer is incompatible with statically linked
-    # libc"); `--profile minimal` also ships std only for the host, so a musl
-    # build fails with "can't find crate for `core`". Pinning glibc avoids both.
+    # cargo-fuzz needs nightly sanitizer support and the glibc target's standard
+    # library. A musl target can link libc statically, which AddressSanitizer
+    # cannot instrument.
     - name: Install nightly Rust
       run: |
         rustup toolchain install nightly --profile minimal
@@ -90,15 +64,12 @@ jobs:
     - name: Cache cargo build artifacts
       uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
-        # `fuzz/` is its own workspace; the instrumented build is cache-
-        # incompatible with the gate's plain check, so key it separately.
+        # Sanitizer-instrumented builds cannot share the ordinary fuzz compile-check cache.
         workspaces: fuzz
         shared-key: fuzz-${{ matrix.target }}
 
-    # Persist the corpus across runs: restore the prior corpus, extend it this
-    # run, save it back. This is what makes fuzzing compound over time rather
-    # than starting cold each run.
-    - name: Restore/persist fuzz corpus
+    # Reuse saved fuzz inputs (the corpus) so each run builds on earlier testing.
+    - name: Restore and save fuzz test inputs
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: fuzz/corpus/${{ matrix.target }}
@@ -111,18 +82,13 @@ jobs:
       with:
         tool: cargo-fuzz
 
-    # `--target x86_64-unknown-linux-gnu` pins the glibc target so the ASan-
-    # instrumented build never falls back to a static-libc musl target (see the
-    # nightly-install step for the failure modes that would cause).
     - name: Fuzz
       env:
         FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '30' || '3600' }}
       run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time="$FUZZ_SECONDS"
 
-    # On a crash, cargo-fuzz writes a minimized reproducer under
-    # fuzz/artifacts/<target>/. Upload it so the exact crashing input is
-    # attached to the run for triage and can be committed as a regression test.
-    - name: Upload crash reproducer
+    # Save the input that caused a crash so maintainers can reproduce the failure.
+    - name: Upload failing fuzz inputs
       if: failure()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
@@ -131,9 +97,8 @@ jobs:
         if-no-files-found: ignore
         retention-days: 30
 
-  # A crash has no PR to turn red and no author watching, so surface it by
-  # opening (or updating) a tracking issue. The minimized reproducer is attached
-  # to the run as an artifact (see the `fuzz` job's upload step).
+  # Report scheduled/manual failures, including setup and compilation failures.
+  # Crash input files are available only when a fuzz target reached a crash.
   notify:
     name: Report crash
     needs: [fuzz]
@@ -151,8 +116,9 @@ jobs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
+        # Keep the existing title: the lookup below uses it to find the tracking issue.
         title="Fuzzing found a crash"
-        body="A scheduled fuzzing run failed, which usually means a target found a crashing input. The minimized reproducer is attached to the run as a \`fuzz-crash-*\` artifact. Run: ${RUN_URL}"
+        body="The Fuzz workflow failed during setup, compilation, or fuzzing. If a target crashed, its failing inputs are saved with the run as \`fuzz-crash-*\` artifacts. See the failing jobs and logs: ${RUN_URL}"
         number="$(
           gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
             --json number,title \

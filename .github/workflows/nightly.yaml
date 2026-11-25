@@ -1,20 +1,8 @@
-# Nightly: scheduled, non-blocking checks. Complements the `pr.yaml` gate.
-#
-# Guiding principles (kept consistent with `pr.yaml`):
-#
-#   1. Gate vs. nightly. This workflow owns everything that can go red because
-#      the *outside world moved* rather than because our code changed -- so it
-#      must not gate unrelated PRs. That includes: toolchains beyond MSRV+stable (beta and
-#      nightly, to get early warning of future breakage) and external documentation
-#      links (third-party sites can change or go down). Dependency advisories have
-#      their own workflow (`advisories.yaml`) so triage cannot obscure test failures.
-#      Since a scheduled run has no PR to turn red, the `notify` job opens a tracking
-#      issue on failure. Deterministic, code-caused checks belong in the gate.
-#
-#   2. Static analysis vs. running tests. Same split as the gate: static
-#      analysis is a single-toolchain concern and is NOT re-run per toolchain
-#      here. What this workflow adds is running the tests against *more*
-#      versions than the gate can hold stable -- extra toolchains.
+# Daily tests against additional Rust versions and external documentation links.
+# These detect upstream changes even when this repository has not changed.
+# PRs changing the listed workflow inputs also run these jobs, but check links
+# offline so external website outages do not block those PRs.
+# Dependency advisory scanning is handled separately by advisories.yaml.
 
 name: 'Nightly'
 
@@ -26,7 +14,7 @@ on:
       - 'rust-toolchain.toml'
       - 'Makefile'
   schedule:
-    - cron: '0 11 * * *'   # 11:00 UTC (04:00 PT) daily. Scheduled runs fire on the default branch only.
+    - cron: '0 11 * * *'   # 11:00 UTC daily, on the default branch only.
   workflow_dispatch:
 
 # PR validation must not cancel the scheduled run.
@@ -41,13 +29,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Test across the moving toolchains the PR gate can't hold stable. The MSRV
-  # (1.88) is included because dependency versions float (Cargo.lock is not
-  # committed): a dependency can raise its own MSRV and break our 1.88 build
-  # with no code change on our side -- something the PR gate only catches when
-  # a PR happens to run. `nightly` is allowed to fail (continue-on-error) --
-  # it's an early-warning signal, not a gate -- so a broken nightly compiler
-  # won't trip the failure notification.
+  # Cargo.lock is not committed, so newly resolved dependencies can break an
+  # older Rust build without a library change. Check the minimum version daily.
+  # Nightly Rust failures are allowed and do not trigger failure issues.
   test:
     name: Test (rust ${{ matrix.rust }})
     runs-on: 'ubuntu-24.04'
@@ -67,8 +51,7 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
       with:
         cache: false
-        # No global warning-denial: tests also run across moving toolchains,
-        # and a newer compiler's freshly-added warnings must not fail the run.
+        # New compiler warnings must not fail tests; only the pinned Clippy check denies warnings.
         rustflags: ''
         build-warnings: ''
 
@@ -98,13 +81,12 @@ jobs:
     - name: Check Markdown links
       uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
       with:
-        # Exercise the same action on PRs without gating on third-party availability.
+        # Test the link-checking action on PRs without depending on external websites.
         args: ${{ github.event_name == 'pull_request' && '--offline --include-fragments --no-progress' || '--include-fragments --no-progress --timeout 30 --max-retries 2' }} '**/*.md'
         fail: true
 
-  # Scheduled runs have no PR to turn red and no author watching, so surface
-  # failures by opening (or updating) a tracking issue. nightly-toolchain
-  # failures are neutralized by continue-on-error above and won't reach here.
+  # Only scheduled and manual runs create failure issues. Allowed nightly-Rust
+  # failures do not count as workflow failures.
   notify:
     name: Report failure
     needs: [test, links]
@@ -123,7 +105,7 @@ jobs:
       run: |
         set -euo pipefail
         title="Nightly workflow failed"
-        body="The scheduled nightly workflow failed. Run: ${RUN_URL}"
+        body="The Nightly workflow failed. See the failing jobs and logs: ${RUN_URL}"
         labels="$(
           gh api --paginate "repos/${GITHUB_REPOSITORY}/labels?per_page=100" \
             --jq '.[].name'

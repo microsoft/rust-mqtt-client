@@ -52,8 +52,8 @@ def prepare(repository, output, issue_number="", non_publishing=False):
         published = current_scan(issue, comments)
         if published is None:
             print(
-                f"Keeping issue #{issue['number']} queued: its generated scan report is missing. "
-                "Rerun the scanner or review the issue manually.",
+                f"Skipping issue #{issue['number']}: its saved scan report is missing. "
+                "Its labels are unchanged. Rerun the scanner or review the issue manually.",
                 file=sys.stderr,
             )
             continue
@@ -62,29 +62,32 @@ def prepare(repository, output, issue_number="", non_publishing=False):
             raise ValueError(f"Issue #{issue['number']} lacks dependency review metadata")
         if not state["report_complete"]:
             print(
-                f"Keeping issue #{issue['number']} queued: its scan evidence exceeds the report "
-                "size limit. Assess the complete scan artifacts manually.",
+                f"Skipping issue #{issue['number']}: its scan evidence exceeds the report "
+                "size limit. Its labels are unchanged. Review the full scan files in Actions.",
                 file=sys.stderr,
             )
             continue
         if not non_publishing and completed_review(comments, state):
             clear_queue(repository, issue["number"])
-            print(f"Reusing completed assessment for issue #{issue['number']}.")
+            print(f"Issue #{issue['number']} already has a matching assessment; removed its pending-review label.")
             continue
         if len(queue) == MAX_REVIEWS:
             has_more_reviews = True
-            print(f"Deferring issue #{issue['number']}: the per-run review limit is {MAX_REVIEWS}.")
+            print(f"Leaving issue #{issue['number']} for a later run: this run can review at most {MAX_REVIEWS} findings.")
             continue
         queue.append({"issue_number": issue["number"], "report_url": published["html_url"], **state})
         if non_publishing:
             break
     if non_publishing and not queue:
-        raise ValueError("Non-publishing review requires a complete captured dependency finding")
+        raise ValueError("Test review requires an existing finding with a complete saved scan report")
     with output.open("a") as stream:
         stream.write(f"has_reviews={str(bool(queue)).lower()}\n")
         stream.write(f"has_more_reviews={str(has_more_reviews).lower()}\n")
         stream.write("queue=" + json.dumps(queue, separators=(",", ":")) + "\n")
-    print(f"Queued {len(queue)} dependency risk assessment(s).")
+    if non_publishing:
+        print(f"Selected {len(queue)} finding(s) for a test review; issue labels are unchanged.")
+    else:
+        print(f"Selected {len(queue)} pending finding(s) for AI assessment.")
 
 
 def finalize(
@@ -93,7 +96,7 @@ def finalize(
 ):
     if non_publishing:
         if not queue or staged_outcomes is None or agent_output is None:
-            raise ValueError("Non-publishing finalization requires a replay queue and assessment artifacts")
+            raise ValueError("Test review verification requires selected findings and assessment result files")
         outcomes = [
             json.loads(line) for line in staged_outcomes.read_text().splitlines() if line.strip()
         ]
@@ -104,23 +107,23 @@ def finalize(
             or outcome.get("url") is not None
             for outcome in outcomes
         ):
-            raise ValueError("Non-publishing review produced a failed, skipped, or applied output")
+            raise ValueError("Test review must contain only successful, unposted assessment results")
         comments = [outcome for outcome in outcomes if outcome.get("type") == "add_comment"]
         if len(comments) != len(queue):
-            raise ValueError("Non-publishing review did not stage one assessment per queued finding")
+            raise ValueError("Test review did not save one unposted assessment per selected finding")
         payload = json.loads(agent_output.read_text())
         if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
-            raise ValueError("Non-publishing review lacks valid assessment payloads")
+            raise ValueError("Test review is missing a valid generated assessment file")
         items = payload["items"]
         expected = {request["issue_number"]: request for request in queue}
         matched = set()
         for outcome in comments:
             index = outcome.get("messageIndex")
             if type(index) is not int or not 0 <= index < len(items):
-                raise ValueError("Non-publishing review lacks a matching staged assessment payload")
+                raise ValueError("Test review result does not identify a matching generated assessment")
             item = items[index]
             if not isinstance(item, dict):
-                raise ValueError("Non-publishing review lacks a valid staged assessment payload")
+                raise ValueError("Test review result identifies an invalid generated assessment")
             number = item.get("item_number")
             if isinstance(number, str) and number.isascii() and number.isdecimal():
                 number = int(number)
@@ -133,9 +136,9 @@ def finalize(
                     key: request[key] for key in ("advisory_key", "fingerprint", "source_revision")
                 }
             ):
-                raise ValueError("Non-publishing review assessment does not match the replayed finding")
+                raise ValueError("Test review assessment does not match the selected finding")
             matched.add(number)
-        print(f"Verified {len(comments)} staged assessment(s); no queue state was changed.")
+        print(f"Verified {len(comments)} test assessment(s); no comments were posted and no issue labels were changed.")
         return
     incomplete = []
     completed = 0
@@ -152,35 +155,52 @@ def finalize(
             current["advisory_key"] != request["advisory_key"]
             or current["fingerprint"] != request["fingerprint"]
         ):
-            print(f"Keeping issue #{number} queued: the dependency finding changed during review.")
+            print(f"Keeping issue #{number} pending: the dependency finding changed during review.")
             continue
         if not current["report_complete"] or not completed_review(comments, request):
             incomplete.append(str(number))
             continue
         clear_queue(repository, number)
         completed += 1
-        print(f"Completed dependency risk assessment for issue #{number}.")
+        print(f"Verified the posted assessment for issue #{number}; removed its pending-review label.")
     if incomplete:
         raise ValueError(
-            "No matching Copilot assessment was published for issue(s): " + ", ".join(incomplete)
+            "No matching Copilot assessment comment was found for issue(s): " + ", ".join(incomplete)
         )
     if continuation_ref and queue and completed == len(queue):
         gh(
             "workflow", "run", f"{REVIEW_WORKFLOW_ID}.lock.yml",
             "--repo", repository, "--ref", continuation_ref,
         )
-        print("Dispatched the next batch of queued dependency risk assessments.")
+        print("Started another workflow run to assess the next pending findings.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Prepare and finalize comment-only Copilot reviews.")
-    parser.add_argument("operation", choices=["prepare", "finalize"])
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--issue-number", default="")
-    parser.add_argument("--non-publishing", choices=["true", "false"], default="false")
-    parser.add_argument("--staged-outcomes", type=Path)
-    parser.add_argument("--agent-output", type=Path)
+    parser = argparse.ArgumentParser(
+        description="Select scan findings and verify normal or test AI assessments.",
+    )
+    parser.add_argument(
+        "operation", choices=["prepare", "finalize"],
+        help="prepare selects findings; finalize verifies assessments and marks normal reviews complete",
+    )
+    parser.add_argument("--repository", required=True, help="GitHub repository in owner/name form")
+    parser.add_argument("--output", type=Path, help="File for the selected findings and workflow outputs")
+    parser.add_argument(
+        "--issue-number", default="",
+        help="Optional issue to review; tests can use closed or already reviewed issues",
+    )
+    parser.add_argument(
+        "--non-publishing", choices=["true", "false"], default="false",
+        help="Run a test assessment without posting comments or changing pending-review labels",
+    )
+    parser.add_argument(
+        "--staged-outcomes", type=Path,
+        help="Framework comment-processing results, required only for a test review",
+    )
+    parser.add_argument(
+        "--agent-output", type=Path,
+        help="Generated assessment JSON, required only for a test review",
+    )
     args = parser.parse_args()
     try:
         if args.operation == "prepare":

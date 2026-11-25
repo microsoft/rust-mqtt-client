@@ -1,16 +1,6 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
-# NOTE: We intentionally do NOT configure version updates for the source code itself.
-# This repository contains an OSS library, and routinely bumping dependency floors in manifests
-# raises MSRV-like constraints for downstream consumers.  Critical security fixes are handled
-# separately by GitHub's "Dependabot security updates" toggle (repo
-# Settings > Security), which opens PRs only when an advisory matches.
-#
-# Only tooling-hygiene ecosystems are watched here - those aren't exposed to consumers,
-# so pin-rot is pure downside.
+# Update CI actions and test broker images, not the library's Cargo dependencies.
+# Routinely raising minimum dependency versions would restrict downstream users.
+# GitHub's separate Dependabot security-update setting handles matching advisories.
 
 version: 2
 updates:
@@ -25,18 +15,10 @@ updates:
     cooldown:
       default-days: 7
 
-  # Broker images for the live network suite. Test infrastructure, so the exclusion above
-  # doesn't apply -- nothing here reaches consumers.
-  #
-  # Note that only a mosquitto bump is validated before merge: the PR gate's
-  # `network-mosquitto` job is the only live broker test that runs on pull requests. EMQX
-  # and HiveMQ bumps aren't exercised until the next scheduled `Network` run, so they merge
-  # unvalidated and a regression surfaces after the fact.
-  #
-  # NOT covered, and needing a manual bump: the AIO MQ chart version in
-  # tests/network/fixtures/brokers/aio-mq/up.sh (a shell variable pulled from an OCI registry, which
-  # Dependabot's helm support doesn't handle), and the pinned k3d and Helm versions in
-  # .github/workflows/network.yaml.
+  # Broker image updates run the Network workflow's connection tests before merge.
+  # These images are test infrastructure, not dependencies of consuming applications.
+  # The AIO MQ chart version in tests/network/fixtures/brokers/aio-mq/up.sh and
+  # the k3d/Helm versions in .github/workflows/network.yaml still need manual updates.
   - package-ecosystem: "docker-compose"
     directories:
       - "/tests/network/fixtures/brokers/*"

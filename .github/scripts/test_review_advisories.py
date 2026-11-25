@@ -72,7 +72,7 @@ class ReviewAdvisoriesTests(unittest.TestCase):
                 f"<!-- dependency-advisory:{state['advisory_key']} -->\n"
                 f"{REPORT_START}\n"
                 f"<!-- dependency-advisory-review:{json.dumps(state)} -->\n"
-                f"Captured scan evidence.\n{REPORT_END}"
+                f"Saved scan data.\n{REPORT_END}"
             ),
         }
         self.comments[number] = []
@@ -228,21 +228,21 @@ class ReviewAdvisoriesTests(unittest.TestCase):
         review.finalize(REPOSITORY, [], continuation_ref="main")
         self.assertEqual(self.dispatches, [])
 
-    def test_non_publishing_replays_closed_completed_finding_without_queue_changes(self):
+    def test_non_publishing_reviews_closed_completed_finding_without_changing_labels(self):
         self.add_finding(1)
         _, queue = self.prepare("1")
         self.publish(queue)
         self.issues[1]["state"] = "closed"
         self.issues[1]["labels"] = [{"name": ADVISORY_LABEL}]
 
-        outputs, replay = self.prepare(non_publishing=True)
+        outputs, selected = self.prepare(non_publishing=True)
 
-        self.assertEqual(replay, queue)
+        self.assertEqual(selected, queue)
         self.assertEqual(outputs["has_more_reviews"], "false")
         self.assertEqual(self.issues[1]["state"], "closed")
         self.assertEqual(self.issues[1]["labels"], [{"name": ADVISORY_LABEL}])
 
-    def test_non_publishing_replays_one_finding_without_continuation(self):
+    def test_non_publishing_selects_one_finding_without_continuation(self):
         for number in range(1, 7):
             self.add_finding(number)
         outputs, queue = self.prepare(non_publishing=True)
@@ -252,9 +252,9 @@ class ReviewAdvisoriesTests(unittest.TestCase):
             {"name": REVIEW_LABEL} in issue["labels"] for issue in self.issues.values()
         ))
 
-    def test_non_publishing_requires_a_complete_captured_report(self):
+    def test_non_publishing_requires_a_complete_saved_report(self):
         self.add_finding(1, complete=False)
-        with self.assertRaisesRegex(ValueError, "requires a complete captured dependency finding"):
+        with self.assertRaisesRegex(ValueError, "requires an existing finding with a complete saved scan report"):
             self.prepare(non_publishing=True)
 
     def test_non_publishing_finalization_never_reads_or_mutates_github(self):
@@ -304,7 +304,7 @@ class ReviewAdvisoriesTests(unittest.TestCase):
             for entries in cases:
                 with self.subTest(entries=entries):
                     outcomes.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
-                    with self.assertRaisesRegex(ValueError, "Non-publishing review"):
+                    with self.assertRaisesRegex(ValueError, "Test review"):
                         review.finalize(
                             REPOSITORY, queue, non_publishing=True, staged_outcomes=outcomes,
                             agent_output=agent_output,
@@ -329,7 +329,7 @@ class ReviewAdvisoriesTests(unittest.TestCase):
             for item in cases:
                 with self.subTest(item=item):
                     agent_output.write_text(json.dumps({"items": [item]}))
-                    with self.assertRaisesRegex(ValueError, "does not match the replayed finding"):
+                    with self.assertRaisesRegex(ValueError, "does not match the selected finding"):
                         review.finalize(
                             REPOSITORY, queue, non_publishing=True,
                             staged_outcomes=outcomes, agent_output=agent_output,
