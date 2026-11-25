@@ -10,10 +10,6 @@ on:
       - '.github/aw/actions-lock.json'
       - '.github/scripts/review_advisories.py'
       - '.github/scripts/report_advisories.py'
-  workflow_run:
-    workflows: ["Dependency advisories"]
-    branches: [main]
-    types: [completed]
   issues:
     types: [labeled]
   workflow_dispatch:
@@ -23,27 +19,20 @@ on:
         required: false
         type: string
       non_publishing:
-        description: Validate the review workflow using an existing finding without posting comments or marking it reviewed
+        description: 'Dry run: validate the review workflow using a saved scan report without changing issues'
         required: false
         default: false
         type: boolean
   roles: all
   status-comment: false
 env:
-  # PRs always use test mode. Other triggers use the manual option, or false if absent.
+  # PRs never publish. Manual runs use the option; other triggers publish.
   NON_PUBLISHING: &non-publishing ${{ github.event_name == 'pull_request' || inputs.non_publishing == true }}
-# Only test runs may be started manually from outside the default branch.
 if: &trusted-trigger >-
   (github.event_name == 'pull_request' &&
    github.event.pull_request.head.repo.full_name == github.repository) ||
-  (github.event_name == 'workflow_run' &&
-   github.event.workflow_run.event != 'pull_request' &&
-   github.event.workflow_run.head_repository.full_name == github.repository &&
-   github.event.workflow_run.head_branch == github.event.repository.default_branch &&
-   github.event.workflow_run.conclusion != 'cancelled') ||
   (github.event_name == 'issues' && github.event.label.name == 'copilot-risk-review') ||
-  (github.event_name == 'workflow_dispatch' &&
-   (github.ref_name == github.event.repository.default_branch || inputs.non_publishing == true))
+  github.event_name == 'workflow_dispatch'
 concurrency:
   group: dependency-advisory-risk-review-${{ github.repository }}-${{ github.event.pull_request.number || 'production' }}
   job-discriminator: ${{ github.run_id }}
@@ -109,6 +98,14 @@ jobs:
       has_more_reviews: ${{ steps.queue.outputs.has_more_reviews }}
       queue: ${{ steps.queue.outputs.queue }}
     steps:
+      - name: Validate publishing mode
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$NON_PUBLISHING" = "false" ] && [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::Publishing runs must use the default branch. Enable dry run to validate a different branch or tag."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: queue
         name: Select scan findings to assess

@@ -50,15 +50,21 @@ change detection fail validation rather than silently skipping it.
 
 The scans use the exact PR head, with the same pinned tool and dependency-selection
 commands as scheduled runs. The scan workflow sets `NON_PUBLISHING` to `true` for
-PRs and `false` for scheduled and manual runs. Both modes use the same
-[reporter](../.github/scripts/report_advisories.py). In non-publishing mode, it
+PRs, follows the **Dry run** (`non_publishing`) option for manual runs, and uses
+`false` for scheduled runs. The manual option defaults to `false`. Both modes use
+the same [reporter](../.github/scripts/report_advisories.py). In non-publishing mode, it
 parses the reports and writes the Actions summary without calling GitHub.
 Scan files are still saved as Actions artifacts, and findings or scan failures
 still fail PR validation. No issues, comments, or review labels are changed.
-Completion of a PR scan does not trigger a normal AI review.
+Neither PR scans nor manual dry runs start a normal AI review.
 The separate AI review workflow can run a test assessment on its own relevant PRs.
-Scheduled and manually dispatched runs still scan both resolutions and report
-findings as before.
+Manual runs always scan both resolutions, including dry runs. Publishing runs
+must use the default branch; a publishing request on another branch or a tag
+fails before any issue updates. Dry runs may use a topic branch or tag.
+
+The publishing job explicitly starts the risk-review workflow after reporting.
+It passes the same mode flag, rather than relying on a workflow-completion event
+that could accidentally start a publishing review after a dry run.
 
 The final check always runs on PRs. When none of those inputs changed, it succeeds
 without running the scans. Otherwise, change detection and both scans must
@@ -134,8 +140,8 @@ There are two review modes:
   must have both `dependency-advisory` and `copilot-risk-review` labels. The latter
   is the **pending-review label**; removing it marks the automated review complete,
   not the dependency problem resolved.
-- **Test review** (`non_publishing: true`): validate the review workflow using one
-  existing, complete scan report. Generate a new AI assessment without posting or
+- **Test review / dry run** (`non_publishing: true`): validate the review workflow
+  using one existing, complete scan report. Generate a new AI assessment without posting or
   editing comments, changing issue labels, or marking the finding reviewed. The
   finding can be closed or already reviewed, so the test still runs when no new
   reviews are pending. It uses the versions and code revision in that saved
@@ -144,6 +150,8 @@ There are two review modes:
 Same-repository PRs changing the review workflow, action pin cache, or advisory
 scripts automatically use test mode. Manual runs can enable `non_publishing`,
 including on a topic branch, and use `issue_number` to select an existing report.
+Publishing is allowed only on the default branch; a manual publishing request
+on another branch or a tag fails before any issue reads or updates.
 The workflow computes one effective `NON_PUBLISHING` flag: it is always true for
 PRs, and otherwise follows the manual input, which defaults to false. It passes
 that flag as `--non-publishing` to both `prepare` and `finalize` in
@@ -180,7 +188,7 @@ The Actions UI uses these job names:
   maintainer reasoning. Copilot adds a separate analysis comment; the scanner does
   not add a comment duplicating the initial report or rewrite existing descriptions.
 - A changed finding adds a follow-up scan comment and reapplies the
-  `copilot-risk-review` label. Workflow completion starts the follow-up review,
+  `copilot-risk-review` label. The scan's publishing job starts the follow-up review,
   because labels applied with `GITHUB_TOKEN` do not themselves trigger Actions.
 - Use the selected report URL: the initial issue description, or the latest follow-up
   when the findings have changed. Inspect library source at that report's scanned
@@ -193,9 +201,11 @@ The Actions UI uses these job names:
   than adding another assessment. Historical scan-update comments remain intact.
 - Each run reviews at most five findings within its existing time and AI-credit
   budgets. If eligible findings remain beyond that batch, successful finalization
-  automatically starts the next run on the default branch. Only the finalization
-  job receives `actions: write` to start another batch. The AI job reads repository
-  and issue data; the separate comment-processing job posts its assessment.
+  automatically starts the next run on the default branch. Within the review
+  workflow, only the finalization job receives `actions: write` to start another
+  batch. The scan's publishing job has that permission to start the initial review.
+  The AI job reads repository and issue data; the separate comment-processing
+  job posts its assessment.
 - Automatic continuation requires every selected assessment to be verified and
   marked reviewed by removing its pending-review label. Failed, missing, unsafe,
   or changed findings stop automatic follow-up runs. Remaining findings retain

@@ -9,6 +9,12 @@ on:
   schedule:
     - cron: '30 11 * * *'   # 11:30 UTC daily, between Nightly and Fuzz.
   workflow_dispatch:
+    inputs:
+      non_publishing:
+        description: 'Dry run: scan and validate without updating issues or starting risk reviews'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,7 +26,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: never
-  NON_PUBLISHING: ${{ github.event_name == 'pull_request' }}
+  # PRs never publish. Manual runs use the option; scheduled runs publish.
+  NON_PUBLISHING: ${{ github.event_name == 'pull_request' || inputs.non_publishing == true }}
 
 defaults:
   run:
@@ -32,9 +39,21 @@ jobs:
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     outputs:
+      non_publishing: ${{ steps.mode.outputs.non_publishing }}
       scan_required: ${{ steps.changes.outputs.scan_required }}
 
     steps:
+    - name: Validate publishing mode
+      id: mode
+      env:
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        if [ "$NON_PUBLISHING" = "false" ] && [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+          echo "::error::Publishing runs must use the default branch. Enable dry run to validate a different branch or tag."
+          exit 1
+        fi
+        echo "non_publishing=$NON_PUBLISHING" >> "$GITHUB_OUTPUT"
+
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
       with:
         fetch-depth: 0
@@ -43,10 +62,11 @@ jobs:
     - name: Compare advisory inputs
       id: changes
       env:
+        EVENT_NAME: ${{ github.event_name }}
         BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: |
-        if [ "$NON_PUBLISHING" = "true" ]; then
+        if [ "$EVENT_NAME" = "pull_request" ]; then
           changed_files="$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" -- \
             Cargo.toml deny.toml rust-toolchain.toml \
             .github/workflows/advisories.yaml .github/scripts/report_advisories.py)"
@@ -146,8 +166,8 @@ jobs:
 
   report:
     name: Report dependency findings
-    needs: scan
-    if: always() && !cancelled() && github.event_name != 'pull_request'
+    needs: [changes, scan]
+    if: always() && !cancelled() && needs.changes.outputs.non_publishing == 'false'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     # Do not update issues while another run selects findings or marks reviews complete.
@@ -155,14 +175,17 @@ jobs:
       group: dependency-advisory-state-${{ github.repository }}
       cancel-in-progress: false
       queue: max
-    # PR validation uses the same reporter without issue-write permission.
+    # Only validated publishing runs can update issues or dispatch the risk review.
     permissions:
+      actions: write
       contents: read
       issues: write
 
     steps:
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
       id: checkout
+      with:
+        persist-credentials: false
 
     - name: Download scan reports
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -185,10 +208,22 @@ jobs:
           --summary "$GITHUB_STEP_SUMMARY" \
           --non-publishing "$NON_PUBLISHING"
 
+    - name: Start the advisory risk review
+      if: always() && !cancelled()
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REVIEW_REF: ${{ github.event.repository.default_branch }}
+      run: |
+        gh workflow run advisory-risk-review.lock.yml \
+          --repo "$GITHUB_REPOSITORY" \
+          --ref "$REVIEW_REF" \
+          -f non_publishing="$NON_PUBLISHING"
+
   validation:
     name: Dependency advisory validation
     needs: [changes, scan]
-    if: always() && github.event_name == 'pull_request'
+    # An unavailable mode must fail read-only validation, not skip a PR check.
+    if: always() && needs.changes.outputs.non_publishing != 'false'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     permissions:
@@ -197,12 +232,13 @@ jobs:
     steps:
     - name: Require the selected advisory scans to pass
       env:
+        NON_PUBLISHING_OUTPUT: ${{ needs.changes.outputs.non_publishing }}
         DETECTION_RESULT: ${{ needs.changes.result }}
         SCAN_REQUIRED: ${{ needs.changes.outputs.scan_required }}
         SCAN_RESULT: ${{ needs.scan.result }}
       run: |
-        if [ "$DETECTION_RESULT" != "success" ]; then
-          echo "::error::Advisory input detection did not succeed."
+        if [ "$NON_PUBLISHING_OUTPUT:$DETECTION_RESULT" != "true:success" ]; then
+          echo "::error::Advisory validation setup failed: non_publishing=$NON_PUBLISHING_OUTPUT, input_detection=$DETECTION_RESULT."
           exit 1
         fi
         case "$SCAN_REQUIRED:$SCAN_RESULT" in
@@ -220,20 +256,20 @@ jobs:
 
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
       id: checkout
-      if: always() && !cancelled() && needs.changes.outputs.scan_required == 'true'
+      if: always() && !cancelled() && needs.changes.outputs.non_publishing == 'true' && needs.changes.outputs.scan_required == 'true'
       with:
-        ref: ${{ github.event.pull_request.head.sha }}
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
         persist-credentials: false
 
     - name: Download scan reports
-      if: always() && !cancelled() && needs.changes.outputs.scan_required == 'true'
+      if: always() && !cancelled() && steps.checkout.outcome == 'success'
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         pattern: dependency-advisories-*
         path: ${{ runner.temp }}/advisory-reports
 
     - name: Check that advisory exceptions are still needed
-      if: needs.changes.outputs.scan_required == 'true'
+      if: steps.checkout.outcome == 'success'
       run: |
         python3 - <<'PY'
         import os
@@ -248,7 +284,7 @@ jobs:
         PY
 
     - name: Generate the advisory report without publishing issues
-      if: always() && !cancelled() && needs.changes.outputs.scan_required == 'true' && steps.checkout.outcome == 'success'
+      if: always() && !cancelled() && steps.checkout.outcome == 'success'
       env:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         SCAN_RESULT: ${{ needs.scan.result }}
