@@ -2,8 +2,7 @@
 # Formatters and linters use the Rust version in rust-toolchain.toml.
 # Tests cover the minimum supported Rust version and current stable Rust,
 # each with the latest compatible and minimum direct dependency versions.
-# Other workflows test additional compilers, brokers, and tools on a schedule
-# and on PRs that change those workflows or their dependency inputs.
+# Nightly, Network, and advisory workflows also run on PRs that change their inputs.
 
 name: 'PR'
 
@@ -137,9 +136,15 @@ jobs:
         args: --offline --include-fragments --no-progress '**/*.md'
         fail: true
 
-  # Fuzz targets have a separate Cargo workspace and use internal library APIs.
-  # Every PR checks that they compile. The Fuzz workflow also runs them when
-  # its workflow, toolchain, or dependency inputs change.
+  # Compile-guard for the fuzz targets. The `fuzz/` crate is a detached
+  # workspace (its own `[workspace]`), so nothing else in this gate builds it --
+  # yet its targets reach into internal APIs exposed by the `__fuzzing` feature,
+  # so an ordinary refactor can silently break them.
+  # This job just keeps the harness compiling. It only *builds* (`cargo check`)
+  # -- actually running the fuzzer is non-deterministic and runs as part of the
+  # dedicated fuzzing workflow (fuzz.yaml) not the gate. `cargo check`
+  # doesn't link the libFuzzer runtime, so it runs fine on the pinned
+  # stable toolchain like the rest of this gate.
   fuzz:
     name: Fuzz targets compile (pinned toolchain)
     runs-on: 'ubuntu-24.04'
@@ -160,7 +165,8 @@ jobs:
     - name: Cache cargo build artifacts
       uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
-        # Cache the separate fuzz workspace independently of the library builds.
+        # `fuzz/` is a separate workspace with its own target/, so point the
+        # cache at it explicitly and key it apart from the library builds.
         workspaces: fuzz
         shared-key: fuzz
 
