@@ -263,12 +263,21 @@ class ReviewAdvisoriesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             outcomes = Path(directory) / "outcomes.jsonl"
             outcomes.write_text(json.dumps({
-                "type": "add_comment", "status": "staged", "staged": True,
+                "type": "add_comment", "status": "staged", "staged": True, "messageIndex": 0,
             }) + "\n")
+            agent_output = Path(directory) / "agent_output.json"
+            agent_output.write_text(json.dumps({"items": [{
+                "type": "add_comment", "item_number": "1",
+                "data": {
+                    key: queue[0][key]
+                    for key in ("advisory_key", "fingerprint", "source_revision")
+                },
+            }]}))
             with patch.object(review, "gh") as github:
                 review.finalize(
                     REPOSITORY, queue, continuation_ref="main",
                     non_publishing=True, staged_outcomes=outcomes,
+                    agent_output=agent_output,
                 )
             github.assert_not_called()
         self.assertEqual(self.dispatches, [])
@@ -290,12 +299,40 @@ class ReviewAdvisoriesTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as directory:
             outcomes = Path(directory) / "outcomes.jsonl"
+            agent_output = Path(directory) / "agent_output.json"
+            agent_output.write_text('{"items":[]}')
             for entries in cases:
                 with self.subTest(entries=entries):
                     outcomes.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
                     with self.assertRaisesRegex(ValueError, "Non-publishing review"):
                         review.finalize(
                             REPOSITORY, queue, non_publishing=True, staged_outcomes=outcomes,
+                            agent_output=agent_output,
+                        )
+
+    def test_non_publishing_rejects_mismatched_assessment_target_or_metadata(self):
+        self.add_finding(1)
+        _, queue = self.prepare()
+        data = {
+            key: queue[0][key] for key in ("advisory_key", "fingerprint", "source_revision")
+        }
+        cases = [
+            {"type": "add_comment", "item_number": "2", "data": data},
+            {"type": "add_comment", "item_number": 1, "data": {**data, "fingerprint": "f" * 64}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            outcomes = Path(directory) / "outcomes.jsonl"
+            outcomes.write_text(json.dumps({
+                "type": "add_comment", "status": "staged", "staged": True, "messageIndex": 0,
+            }) + "\n")
+            agent_output = Path(directory) / "agent_output.json"
+            for item in cases:
+                with self.subTest(item=item):
+                    agent_output.write_text(json.dumps({"items": [item]}))
+                    with self.assertRaisesRegex(ValueError, "does not match the replayed finding"):
+                        review.finalize(
+                            REPOSITORY, queue, non_publishing=True,
+                            staged_outcomes=outcomes, agent_output=agent_output,
                         )
 
     def test_main_passes_continuation_ref(self):
@@ -309,7 +346,7 @@ class ReviewAdvisoriesTests(unittest.TestCase):
                     self.assertEqual(review.main(), 0)
                 finalize.assert_called_once_with(
                     REPOSITORY, [], continuation_ref=ref,
-                    non_publishing=False, staged_outcomes=None,
+                    non_publishing=False, staged_outcomes=None, agent_output=None,
                 )
 
 

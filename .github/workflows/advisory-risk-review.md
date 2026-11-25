@@ -140,6 +140,12 @@ jobs:
         with:
           name: safe-outputs-items
           path: ${{ runner.temp }}/advisory-preview
+      - name: Download replayed assessment payload
+        if: github.event_name == 'pull_request' || inputs.non_publishing == true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-output-fallback
+          path: ${{ runner.temp }}/advisory-preview
       - name: Finalize published assessments or verify staged replay
         env:
           GH_TOKEN: ${{ github.event_name != 'pull_request' && inputs.non_publishing != true && github.token || '' }}
@@ -147,11 +153,13 @@ jobs:
           REVIEW_CONTINUATION_REF: ${{ needs.prepare.outputs.has_more_reviews == 'true' && github.event.repository.default_branch || '' }}
           NON_PUBLISHING: *non-publishing
           STAGED_OUTCOMES: ${{ runner.temp }}/advisory-preview/safe-output-outcomes.jsonl
+          AGENT_OUTPUT: ${{ runner.temp }}/advisory-preview/agent_output.json
         run: |
           python3 .github/scripts/review_advisories.py finalize \
             --repository "$GITHUB_REPOSITORY" \
             --non-publishing "$NON_PUBLISHING" \
-            --staged-outcomes "$STAGED_OUTCOMES"
+            --staged-outcomes "$STAGED_OUTCOMES" \
+            --agent-output "$AGENT_OUTPUT"
 ---
 
 # Dependency advisory risk assessment

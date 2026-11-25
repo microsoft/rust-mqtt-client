@@ -134,8 +134,9 @@ run the shared pipeline in non-publishing mode. It replays one complete captured
 finding, including closed or previously reviewed findings, without changing queue
 labels. The agent and threat detector run, and the normal comment handler stages
 an assessment instead of publishing it. Finalization requires a successful staged
-comment outcome and never clears labels or dispatches another batch. Missing,
-skipped, or failed preview outputs fail validation rather than passing an empty run.
+comment outcome matching the replayed issue and advisory metadata, and never
+clears labels or dispatches another batch. Missing, skipped, failed, or mismatched
+preview outputs fail validation rather than passing an empty run.
 
 The manual workflow input `non_publishing: true` enables the same replay mode,
 including on a topic branch; `issue_number` can select a particular captured finding.

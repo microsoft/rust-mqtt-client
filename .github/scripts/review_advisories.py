@@ -87,10 +87,13 @@ def prepare(repository, output, issue_number="", non_publishing=False):
     print(f"Queued {len(queue)} dependency risk assessment(s).")
 
 
-def finalize(repository, queue, continuation_ref="", non_publishing=False, staged_outcomes=None):
+def finalize(
+    repository, queue, continuation_ref="", non_publishing=False,
+    staged_outcomes=None, agent_output=None,
+):
     if non_publishing:
-        if not queue or staged_outcomes is None:
-            raise ValueError("Non-publishing finalization requires a replay queue and staged outcomes")
+        if not queue or staged_outcomes is None or agent_output is None:
+            raise ValueError("Non-publishing finalization requires a replay queue and assessment artifacts")
         outcomes = [
             json.loads(line) for line in staged_outcomes.read_text().splitlines() if line.strip()
         ]
@@ -105,6 +108,33 @@ def finalize(repository, queue, continuation_ref="", non_publishing=False, stage
         comments = [outcome for outcome in outcomes if outcome.get("type") == "add_comment"]
         if len(comments) != len(queue):
             raise ValueError("Non-publishing review did not stage one assessment per queued finding")
+        payload = json.loads(agent_output.read_text())
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            raise ValueError("Non-publishing review lacks valid assessment payloads")
+        items = payload["items"]
+        expected = {request["issue_number"]: request for request in queue}
+        matched = set()
+        for outcome in comments:
+            index = outcome.get("messageIndex")
+            if type(index) is not int or not 0 <= index < len(items):
+                raise ValueError("Non-publishing review lacks a matching staged assessment payload")
+            item = items[index]
+            if not isinstance(item, dict):
+                raise ValueError("Non-publishing review lacks a valid staged assessment payload")
+            number = item.get("item_number")
+            if isinstance(number, str) and number.isascii() and number.isdecimal():
+                number = int(number)
+            request = expected.get(number) if type(number) is int else None
+            if (
+                item.get("type") != "add_comment"
+                or request is None
+                or number in matched
+                or item.get("data") != {
+                    key: request[key] for key in ("advisory_key", "fingerprint", "source_revision")
+                }
+            ):
+                raise ValueError("Non-publishing review assessment does not match the replayed finding")
+            matched.add(number)
         print(f"Verified {len(comments)} staged assessment(s); no queue state was changed.")
         return
     incomplete = []
@@ -150,6 +180,7 @@ def main():
     parser.add_argument("--issue-number", default="")
     parser.add_argument("--non-publishing", choices=["true", "false"], default="false")
     parser.add_argument("--staged-outcomes", type=Path)
+    parser.add_argument("--agent-output", type=Path)
     args = parser.parse_args()
     try:
         if args.operation == "prepare":
@@ -165,6 +196,7 @@ def main():
                 continuation_ref=os.environ.get("REVIEW_CONTINUATION_REF", ""),
                 non_publishing=args.non_publishing == "true",
                 staged_outcomes=args.staged_outcomes,
+                agent_output=args.agent_output,
             )
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
         print(f"Dependency risk review failed: {error}", file=sys.stderr)
