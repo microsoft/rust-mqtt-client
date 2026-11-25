@@ -130,9 +130,18 @@ provides evidence and recommendations in an issue comment. It does not decide
 exceptions, change dependencies, or replace maintainer review.
 
 Same-repository PRs changing its workflow, action pin cache, or advisory scripts
-exercise the same compiler-generated runtime activation with read-only permissions. Queue
-preparation, AI execution, assessment publication, and finalization remain disabled
-on PRs. An empty production queue therefore does not hide runtime startup failures.
+run the shared pipeline in non-publishing mode. It replays one complete captured
+finding, including closed or previously reviewed findings, without changing queue
+labels. The agent and threat detector run, and the normal comment handler stages
+an assessment instead of publishing it. Finalization requires a successful staged
+comment outcome and never clears labels or dispatches another batch. Missing,
+skipped, or failed preview outputs fail validation rather than passing an empty run.
+
+The manual workflow input `non_publishing: true` enables the same replay mode,
+including on a topic branch; `issue_number` can select a particular captured finding.
+Production runs still require both advisory and queue labels before publication.
+Preview runs only require the advisory label because historical findings are no
+longer queued. Non-publishing runs consume AI credits within the workflow's limits.
 
 - The initial issue description contains the full advisory report and space for
   maintainer reasoning. Copilot adds a separate analysis comment; the scanner does

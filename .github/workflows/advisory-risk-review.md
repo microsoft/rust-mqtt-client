@@ -19,20 +19,27 @@ on:
   workflow_dispatch:
     inputs:
       issue_number:
-        description: Optional queued dependency issue to assess
+        description: Optional dependency issue to assess or replay
         required: false
         type: string
+      non_publishing:
+        description: Replay a captured advisory without publishing or changing queue state
+        required: false
+        default: false
+        type: boolean
   roles: all
   status-comment: false
-if: >-
-  github.event_name == 'pull_request' ||
+if: &trusted-trigger >-
+  (github.event_name == 'pull_request' &&
+   github.event.pull_request.head.repo.full_name == github.repository) ||
   (github.event_name == 'workflow_run' &&
    github.event.workflow_run.event != 'pull_request' &&
    github.event.workflow_run.head_repository.full_name == github.repository &&
    github.event.workflow_run.head_branch == github.event.repository.default_branch &&
    github.event.workflow_run.conclusion != 'cancelled') ||
   (github.event_name == 'issues' && github.event.label.name == 'copilot-risk-review') ||
-  (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
+  (github.event_name == 'workflow_dispatch' &&
+   (github.ref_name == github.event.repository.default_branch || inputs.non_publishing == true))
 concurrency:
   group: dependency-advisory-risk-review-${{ github.repository }}-${{ github.event.pull_request.number || 'production' }}
   job-discriminator: ${{ github.run_id }}
@@ -57,6 +64,7 @@ tools:
     read-only: true
   bash: ["cat", "find", "grep", "rg", "sed", "git show", "git ls-tree", "git grep", "git log"]
 safe-outputs:
+  staged: &non-publishing ${{ github.event_name == 'pull_request' || inputs.non_publishing == true }}
   create-issue: false
   report-incomplete: false
   report-missing-tool: false
@@ -65,6 +73,7 @@ safe-outputs:
   report-failed-jobs: false
   threat-detection:
     report-as-issue: false
+    continue-on-error: ${{ github.event_name != 'pull_request' && inputs.non_publishing != true }}
   data:
     advisory_key: string
     fingerprint: string
@@ -74,20 +83,13 @@ safe-outputs:
     target: "*"
     max: 5
     replace-older-comments: true
-    required-labels: [dependency-advisory, copilot-risk-review]
+    required-labels:
+      - dependency-advisory
+      # Staged replay also accepts historical findings that are no longer queued.
+      - ${{ (github.event_name == 'pull_request' || inputs.non_publishing == true) && 'dependency-advisory' || 'copilot-risk-review' }}
 jobs:
-  activation:
-    # PRs exercise the actual runtime even though production queue preparation is skipped.
-    if: always() && (github.event_name == 'pull_request' || needs.prepare.result == 'success')
   prepare:
-    if: >-
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event != 'pull_request' &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
-       github.event.workflow_run.conclusion != 'cancelled') ||
-      (github.event_name == 'issues' && github.event.label.name == 'copilot-risk-review') ||
-      (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)
+    if: *trusted-trigger
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency: &advisory-state-lock
@@ -104,28 +106,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: queue
-        name: Select unreviewed dependency findings
+        name: Select dependency findings for review or replay
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ inputs.issue_number || github.event.issue.number || '' }}
+          NON_PUBLISHING: *non-publishing
         run: |
           python3 .github/scripts/review_advisories.py prepare \
             --repository "$GITHUB_REPOSITORY" \
             --output "$GITHUB_OUTPUT" \
-            --issue-number "$ISSUE_NUMBER"
+            --issue-number "$ISSUE_NUMBER" \
+            --non-publishing "$NON_PUBLISHING"
   agent:
     needs: [prepare]
-    if: github.event_name != 'pull_request' && needs.prepare.outputs.has_reviews == 'true'
+    if: needs.prepare.outputs.has_reviews == 'true'
   detection:
-    if: github.event_name != 'pull_request'
     timeout-minutes: 5
-  safe_outputs:
-    if: github.event_name != 'pull_request'
-  conclusion:
-    if: github.event_name != 'pull_request'
   finalize:
     needs: [prepare, agent, detection, safe_outputs]
-    if: github.event_name != 'pull_request' && needs.prepare.outputs.has_reviews == 'true' && needs.safe_outputs.result == 'success'
+    if: needs.prepare.outputs.has_reviews == 'true' && needs.safe_outputs.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency: *advisory-state-lock
@@ -135,12 +134,24 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Mark only published assessments as complete
+      - name: Download staged assessment outcomes
+        if: github.event_name == 'pull_request' || inputs.non_publishing == true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: safe-outputs-items
+          path: ${{ runner.temp }}/advisory-preview
+      - name: Finalize published assessments or verify staged replay
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.event_name != 'pull_request' && inputs.non_publishing != true && github.token || '' }}
           REVIEW_QUEUE: ${{ needs.prepare.outputs.queue }}
           REVIEW_CONTINUATION_REF: ${{ needs.prepare.outputs.has_more_reviews == 'true' && github.event.repository.default_branch || '' }}
-        run: python3 .github/scripts/review_advisories.py finalize --repository "$GITHUB_REPOSITORY"
+          NON_PUBLISHING: *non-publishing
+          STAGED_OUTCOMES: ${{ runner.temp }}/advisory-preview/safe-output-outcomes.jsonl
+        run: |
+          python3 .github/scripts/review_advisories.py finalize \
+            --repository "$GITHUB_REPOSITORY" \
+            --non-publishing "$NON_PUBLISHING" \
+            --staged-outcomes "$STAGED_OUTCOMES"
 ---
 
 # Dependency advisory risk assessment

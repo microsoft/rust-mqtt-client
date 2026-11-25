@@ -21,16 +21,17 @@ def clear_queue(repository, number):
     gh("issue", "edit", str(number), "--repo", repository, "--remove-label", REVIEW_LABEL)
 
 
-def prepare(repository, output, issue_number=""):
+def prepare(repository, output, issue_number="", non_publishing=False):
     if issue_number:
         if not issue_number.isdecimal() or int(issue_number) < 1:
             raise ValueError("Invalid issue number")
         issues = [json.loads(gh("api", f"repos/{repository}/issues/{issue_number}"))]
     else:
+        labels = ADVISORY_LABEL if non_publishing else f"{ADVISORY_LABEL},{REVIEW_LABEL}"
         pages = json.loads(gh(
             "api", "--method", "GET", "--paginate", "--slurp",
-            f"repos/{repository}/issues", "-f", "state=open",
-            "-f", f"labels={ADVISORY_LABEL},{REVIEW_LABEL}", "-f", "per_page=100",
+            f"repos/{repository}/issues", "-f", f"state={'all' if non_publishing else 'open'}",
+            "-f", f"labels={labels}", "-f", "per_page=100",
         ))
         issues = [issue for page in pages for issue in page]
     queue = []
@@ -38,13 +39,14 @@ def prepare(repository, output, issue_number=""):
     unique_issues = {issue["number"]: issue for issue in issues}
     for issue in sorted(unique_issues.values(), key=lambda item: item["number"]):
         labels = {label["name"].casefold() for label in issue["labels"]}
+        required_labels = {ADVISORY_LABEL} if non_publishing else {ADVISORY_LABEL, REVIEW_LABEL}
         if (
             "pull_request" in issue
-            or issue["state"] != "open"
+            or (not non_publishing and issue["state"] != "open")
             or not workflow_authored(issue)
-            or not {ADVISORY_LABEL, REVIEW_LABEL}.issubset(labels)
+            or not required_labels.issubset(labels)
         ):
-            print(f"Skipping issue #{issue['number']}: not a queued workflow-created finding.")
+            print(f"Skipping issue #{issue['number']}: not an eligible workflow-created finding.")
             continue
         comments = issue_comments(repository, issue["number"])
         published = current_scan(issue, comments)
@@ -65,7 +67,7 @@ def prepare(repository, output, issue_number=""):
                 file=sys.stderr,
             )
             continue
-        if completed_review(comments, state):
+        if not non_publishing and completed_review(comments, state):
             clear_queue(repository, issue["number"])
             print(f"Reusing completed assessment for issue #{issue['number']}.")
             continue
@@ -74,6 +76,10 @@ def prepare(repository, output, issue_number=""):
             print(f"Deferring issue #{issue['number']}: the per-run review limit is {MAX_REVIEWS}.")
             continue
         queue.append({"issue_number": issue["number"], "report_url": published["html_url"], **state})
+        if non_publishing:
+            break
+    if non_publishing and not queue:
+        raise ValueError("Non-publishing review requires a complete captured dependency finding")
     with output.open("a") as stream:
         stream.write(f"has_reviews={str(bool(queue)).lower()}\n")
         stream.write(f"has_more_reviews={str(has_more_reviews).lower()}\n")
@@ -81,7 +87,26 @@ def prepare(repository, output, issue_number=""):
     print(f"Queued {len(queue)} dependency risk assessment(s).")
 
 
-def finalize(repository, queue, continuation_ref=""):
+def finalize(repository, queue, continuation_ref="", non_publishing=False, staged_outcomes=None):
+    if non_publishing:
+        if not queue or staged_outcomes is None:
+            raise ValueError("Non-publishing finalization requires a replay queue and staged outcomes")
+        outcomes = [
+            json.loads(line) for line in staged_outcomes.read_text().splitlines() if line.strip()
+        ]
+        if any(
+            not isinstance(outcome, dict)
+            or outcome.get("staged") is not True
+            or outcome.get("status") != "staged"
+            or outcome.get("url") is not None
+            for outcome in outcomes
+        ):
+            raise ValueError("Non-publishing review produced a failed, skipped, or applied output")
+        comments = [outcome for outcome in outcomes if outcome.get("type") == "add_comment"]
+        if len(comments) != len(queue):
+            raise ValueError("Non-publishing review did not stage one assessment per queued finding")
+        print(f"Verified {len(comments)} staged assessment(s); no queue state was changed.")
+        return
     incomplete = []
     completed = 0
     for request in queue:
@@ -123,16 +148,23 @@ def main():
     parser.add_argument("--repository", required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--issue-number", default="")
+    parser.add_argument("--non-publishing", choices=["true", "false"], default="false")
+    parser.add_argument("--staged-outcomes", type=Path)
     args = parser.parse_args()
     try:
         if args.operation == "prepare":
             if args.output is None:
                 raise ValueError("--output is required for prepare")
-            prepare(args.repository, args.output, args.issue_number)
+            prepare(
+                args.repository, args.output, args.issue_number,
+                non_publishing=args.non_publishing == "true",
+            )
         else:
             finalize(
                 args.repository, json.loads(os.environ["REVIEW_QUEUE"]),
                 continuation_ref=os.environ.get("REVIEW_CONTINUATION_REF", ""),
+                non_publishing=args.non_publishing == "true",
+                staged_outcomes=args.staged_outcomes,
             )
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
         print(f"Dependency risk review failed: {error}", file=sys.stderr)
