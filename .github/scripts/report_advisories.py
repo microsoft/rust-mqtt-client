@@ -73,7 +73,7 @@ def completed_review(comments, state):
         return False
     for comment in comments:
         body = comment["body"]
-        # Warn-mode comments can be published without a successful safety verdict.
+        # A comment posted with a safety warning must not mark the review complete.
         if (
             not workflow_authored(comment)
             or not from_review_workflow(body)
@@ -215,17 +215,17 @@ def read_advisories(directory):
             affected = entry["affected"]
             versions = entry["versions"]
             if affected is not None and not isinstance(affected, dict):
-                raise ValueError("Invalid advisory affected-data snapshot")
+                raise ValueError("Invalid saved data about when the advisory applies")
             if not isinstance(versions, dict) or not all(
                 isinstance(versions[name], list)
                 and all(isinstance(value, str) for value in versions[name])
                 for name in ("patched", "unaffected")
             ):
-                raise ValueError("Invalid advisory version-range snapshot")
+                raise ValueError("Invalid saved advisory version ranges")
             snapshot = {"advisory": metadata, "affected": affected, "versions": versions}
             key = (metadata["id"], package["name"], package["version"])
             if key in advisories and advisories[key] != snapshot:
-                raise ValueError(f"Conflicting advisory snapshots for {key}")
+                raise ValueError(f"Scan report contains conflicting advisory data for {key}")
             advisories[key] = snapshot
     return advisories
 
@@ -297,7 +297,7 @@ def read_scan(directory):
             package = fields["graphs"][0]["Krate"]
             key = (fields["advisory"]["id"], package["name"], package["version"])
             if key not in advisories:
-                raise ValueError(f"Missing complete advisory snapshot for {key}")
+                raise ValueError(f"Scan report is missing the saved advisory data for {key}")
             snapshot = advisories[key]
             if snapshot["advisory"] != fields["advisory"]:
                 raise ValueError(f"Diagnostic and audit advisory metadata disagree for {key}")
@@ -354,7 +354,7 @@ def bounded(text, limit=12000):
             open_fence = None
     if open_fence:
         text += "\n" + open_fence
-    return text + "\n[Truncated; see the full scan artifact linked from the run.]"
+    return text + "\n[Report shortened; download the full scan files from the linked Actions run.]"
 
 
 def render_finding(key, occurrences, run_url):
@@ -363,8 +363,8 @@ def render_finding(key, occurrences, run_url):
     lines = [
         "## Dependency finding",
         "",
-        "> This is a dependency-version match requiring applicability review, "
-        "not confirmation that this library is exploitable.",
+        "> This scan matched a dependency version to a reported problem. "
+        "Check whether the problem affects this library; the match alone does not prove it does.",
         "",
         f"- **Dependency:** `{package['name']}`",
         f"- **Finding:** `{key}`",
@@ -378,7 +378,7 @@ def render_finding(key, occurrences, run_url):
         f"- **Latest scan:** [workflow run and complete artifacts]({run_url})",
     ]
     if fields["code"] == "yanked":
-        title = f"Dependency issue requires triage: {package['name']} {package['version']} (yanked)"
+        title = f"Dependency version needs review: {package['name']} {package['version']} (withdrawn release)"
         lines.extend([
             f"- **Source:** [crates.io registry]"
             f"(https://crates.io/crates/{package['name']}/{package['version']})",
@@ -388,10 +388,10 @@ def render_finding(key, occurrences, run_url):
             fields["message"],
             "",
             "The resolved version is yanked. Review the registry and upstream releases "
-            "for a supported replacement; this is not itself a RustSec advisory.",
+            "for a supported replacement; a withdrawn package version is not itself a RustSec advisory.",
         ])
     else:
-        title = f"Dependency advisory requires triage: {key} ({package['name']})"
+        title = f"Dependency advisory needs review: {key} ({package['name']})"
         lines.extend([
             f"- **Advisory:** [{key}](https://rustsec.org/advisories/{key})",
             "- **Database:** [RustSec advisory database]"
@@ -403,21 +403,21 @@ def render_finding(key, occurrences, run_url):
         if len(snapshots) > 1:
             lines.extend([
                 "",
-                "> These resolutions captured different advisory payloads. "
-                "Assess each snapshot below.",
+                "> The two dependency scans saved different advisory data. "
+                "Assess each saved version below.",
             ])
         for captured in snapshots.values():
             snapshot = captured[0][1]
             advisory = snapshot["advisory"]
             lines.extend([
-                "", "### Advisory snapshot: " + ", ".join(sorted({
+                "", "### Saved advisory data: " + ", ".join(sorted({
                     resolution for resolution, _ in captured
                 })), "",
                 f"- **Classification:** {snapshot['code']}",
                 f"- **Advisory date:** {advisory['date']}",
                 f"- **Aliases:** {', '.join(advisory.get('aliases', [])) or 'None reported'}",
                 f"- **CVSS vector:** {advisory.get('cvss') or 'Not provided by the advisory'}",
-                f"- **Captured advisory payload SHA-256:** `{snapshot['advisory_snapshot']}`",
+                f"- **Saved advisory data hash (SHA-256):** `{snapshot['advisory_snapshot']}`",
             ])
             if advisory.get("url"):
                 lines.append(f"- **Upstream announcement/fix:** {advisory['url']}")
@@ -427,16 +427,16 @@ def render_finding(key, occurrences, run_url):
                 lines.extend(["", "#### Upstream references", ""])
                 lines.extend(f"- {reference}" for reference in references)
             lines.extend([
-                "", "#### Applicability captured by this scan", "", "```json",
+                "", "#### Affected versions and conditions saved by this scan", "", "```json",
                 json.dumps(snapshot["applicability"], sort_keys=True, indent=2), "```",
             ])
-    lines.extend(["", "### Affected resolutions and dependency paths", ""])
+    lines.extend(["", "### Affected dependency sets and dependency paths", ""])
     for resolution, occurrence in occurrences:
         root = occurrence["graphs"][0]["Krate"]
         lines.extend([
             f"#### {resolution}: `{root['name']} {root['version']}`",
             "",
-            "Each indented parent depends on the package above it.",
+            "Read outward from the affected package: each indented package depends on the one level above it.",
             "",
             "```text",
             "\n\n".join("\n".join(graph_lines(graph)) for graph in occurrence["graphs"]),
@@ -446,8 +446,8 @@ def render_finding(key, occurrences, run_url):
         lines.extend(note for note in occurrence.get("notes", []) if note.startswith("Solution:"))
         lines.append("")
     lines.append(
-        "An upstream patched version is remediation guidance, not an automatic "
-        "requirement to raise this library's dependency floor."
+        "An upstream patched version suggests a possible fix; it does not automatically "
+        "require raising this library's minimum dependency version."
     )
     return Issue(key, title, "\n".join(lines))
 
@@ -473,8 +473,8 @@ def render_issues(findings, failures, run_url):
         issue.report_complete = len(issue.report) <= REPORT_LIMIT
         if not issue.report_complete:
             issue.report = (
-                "> **Manual assessment required:** Complete scan evidence exceeds this comment's "
-                "size limit. Automated review is deferred; use the full scan artifacts linked below.\n\n"
+                "> **Manual assessment required:** The full scan evidence exceeds this comment's "
+                "size limit. Automatic review will not run; download the full scan files linked below.\n\n"
                 + bounded(issue.report, limit=REPORT_LIMIT)
             )
     return issues
@@ -484,7 +484,7 @@ def issue_body(issue, repository):
     marker = f"<!-- dependency-advisory:{issue.key} -->"
     body = (
         f"{marker}\n"
-        "> Initial scan report. Material changes are reported in follow-up comments; "
+        "> Initial scan report. Changed findings are reported in follow-up comments; "
         "this issue body is not rewritten.\n\n"
         f"{REPORT_START}\n{issue.report}\n{REPORT_END}\n\n"
     )
@@ -496,9 +496,9 @@ def issue_body(issue, repository):
         )
     return body + (
         "## Maintainer assessment\n\n"
-        "- [ ] Assign a maintainer and assess direct/transitive API reachability, "
-        "supported features/targets, and triggering conditions.\n"
-        "- [ ] If applicable, link the fix or mitigation; update a dependency floor "
+        "- [ ] Assign a maintainer to check whether the library can reach the affected code, "
+        "directly or through other dependencies, with supported features and build targets.\n"
+        "- [ ] If affected, link the fix or mitigation; raise a minimum dependency version "
         "only when necessary for safe library operation.\n"
         "- [ ] If not applicable, add a reviewed `deny.toml` exception "
         "with a specific reason.\n"
@@ -562,7 +562,7 @@ def ensure_review_labels(repository):
     existing = {label["name"].casefold() for page in pages for label in page}
     definitions = {
         ADVISORY_LABEL: ("5319e7", "Dependency finding requiring applicability triage"),
-        REVIEW_LABEL: ("fbca04", "Queue a comment-only Copilot dependency risk assessment"),
+        REVIEW_LABEL: ("fbca04", "Awaiting an automated Copilot dependency risk assessment"),
     }
     for name, (color, description) in definitions.items():
         if name not in existing:
@@ -619,7 +619,7 @@ def publish_issues(issues, repository):
             changed = previous is None or previous["fingerprint"] != issue.review["fingerprint"]
             if not changed:
                 state = previous
-        # Queue the work before publishing its fingerprint so interrupted updates can retry.
+        # Add the pending-review label before saving the new fingerprint so interrupted updates can retry.
         if issue.review:
             updates = ["--add-label", ADVISORY_LABEL]
             if changed or not completed_review(comments, state):
@@ -629,7 +629,7 @@ def publish_issues(issues, repository):
             comment_body = (
                 f"{scan_comment_marker(issue.key)}\n"
                 "## Updated dependency finding\n\n"
-                "This report supersedes the earlier scan details. Keep maintainer "
+                "Use this report instead of the earlier scan details. Keep maintainer "
                 "notes in the issue description.\n\n"
                 f"{REPORT_START}\n{issue.report}\n{REPORT_END}"
             )
@@ -642,19 +642,24 @@ def publish_issues(issues, repository):
         print(f"Updated {issue.key}: {current['html_url']}")
 
 
-def report(reports, repository, run_url, scan_result, summary):
+def report(reports, repository, run_url, scan_result, summary, non_publishing=False):
     findings, failures = collect_scans(reports, scan_result)
     issues = render_issues(findings, failures, run_url)
     if findings:
         attach_review_state(issues, findings, repository)
     with summary.open("a") as output:
         output.write("# Dependency advisory scans\n\n")
+        if non_publishing:
+            output.write(
+                "Non-publishing mode: no GitHub issues, comments, or labels are changed.\n\n"
+            )
         output.write(f"Unhandled dependency findings: **{len(findings)}**\n\n")
         for issue in issues:
             output.write(f"## {issue.title}\n\n{issue.report}\n\n")
         if not issues:
-            output.write("Both dependency resolutions completed with no unhandled findings.\n")
-    publish_issues(issues, repository)
+            output.write("Both dependency scans completed with no unhandled findings.\n")
+    if not non_publishing:
+        publish_issues(issues, repository)
     return int(bool(issues))
 
 
@@ -665,9 +670,16 @@ def main():
     parser.add_argument("--run-url", required=True)
     parser.add_argument("--scan-result", choices=["success", "failure", "cancelled", "skipped"], required=True)
     parser.add_argument("--summary", type=Path, required=True)
+    parser.add_argument(
+        "--non-publishing", choices=["true", "false"], default="false",
+        help="Validate scan reporting without creating or changing GitHub issues",
+    )
     args = parser.parse_args()
     try:
-        return report(args.reports, args.repository, args.run_url, args.scan_result, args.summary)
+        return report(
+            args.reports, args.repository, args.run_url, args.scan_result, args.summary,
+            non_publishing=args.non_publishing == "true",
+        )
     except (OSError, ValueError, RuntimeError) as error:
         print(f"Dependency advisory reporting failed: {error}", file=sys.stderr)
         return 1

@@ -3,9 +3,12 @@
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import report_advisories as report
 from report_advisories import collect_scans, validate_ignored_advisories
 
 
@@ -13,15 +16,26 @@ FIRST = "RUSTSEC-2026-0001"
 SECOND = "RUSTSEC-2026-0002"
 
 
-class IgnoredAdvisoriesTests(unittest.TestCase):
+class ReportAdvisoriesTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.reports = Path(directory.name)
+        self.summary = self.reports / "summary"
 
-    def write_scan(self, resolution, unused=(), ignored=()):
+    def write_scan(self, resolution, unused=(), ignored=(), unhandled=()):
         directory = self.reports / f"dependency-advisories-{resolution}"
         directory.mkdir()
+        advisories = {
+            advisory: {
+                "id": advisory,
+                "package": "example",
+                "title": "Example dependency vulnerability",
+                "description": "A test finding requiring review.",
+                "date": "2026-01-01",
+            }
+            for advisory in (*ignored, *unhandled)
+        }
         diagnostics = [
             {
                 "type": "diagnostic",
@@ -42,9 +56,23 @@ class IgnoredAdvisoriesTests(unittest.TestCase):
             )
             for advisory in advisories
         ]
+        diagnostics.extend({
+            "type": "diagnostic",
+            "fields": {
+                "code": "vulnerability",
+                "severity": "error",
+                "message": "A test finding requiring review.",
+                "advisory": advisories[advisory],
+                "graphs": [{"Krate": {"name": "example", "version": "1.0.0"}}],
+            },
+        } for advisory in unhandled)
         diagnostics.append({
             "type": "summary",
-            "fields": {"advisories": {"errors": 0, "warnings": len(unused), "notes": len(ignored)}},
+            "fields": {
+                "advisories": {
+                    "errors": len(unhandled), "warnings": len(unused), "notes": len(ignored),
+                },
+            },
         })
         (directory / "diagnostics.jsonl").write_text(
             "".join(json.dumps(event) + "\n" for event in diagnostics)
@@ -53,17 +81,73 @@ class IgnoredAdvisoriesTests(unittest.TestCase):
             "settings": {"ignore": sorted(set(unused) | set(ignored))},
             "vulnerabilities": [
                 {
-                    "advisory": {"id": advisory, "package": "example"},
+                    "advisory": advisories[advisory],
                     "package": {"name": "example", "version": "1.0.0"},
                     "affected": None,
                     "versions": {"patched": [">=1.1.0"], "unaffected": []},
                 }
-                for advisory in ignored
+                for advisory in (*ignored, *unhandled)
             ],
             "warnings": {},
         }) + "\n")
-        (directory / "exit-code.txt").write_text("0\n")
+        (directory / "exit-code.txt").write_text(f"{int(bool(unhandled))}\n")
         return directory
+
+    def run_report(self, non_publishing=None, scan_result="success"):
+        arguments = [
+            "report_advisories.py",
+            "--reports", str(self.reports),
+            "--repository", "owner/repository",
+            "--run-url", "https://github.com/owner/repository/actions/runs/123",
+            "--scan-result", scan_result,
+            "--summary", str(self.summary),
+        ]
+        if non_publishing is not None:
+            arguments.extend(["--non-publishing", str(non_publishing).lower()])
+        with (
+            patch.object(sys, "argv", arguments),
+            patch.object(report.subprocess, "check_output", side_effect=["a" * 40, "source tree"]),
+        ):
+            return report.main()
+
+    def test_non_publishing_accepts_clean_scans_without_github_calls(self):
+        self.write_scan("latest")
+        self.write_scan("minimal")
+        with patch.object(report, "gh", side_effect=AssertionError("Unexpected GitHub call")):
+            self.assertEqual(self.run_report(non_publishing=True), 0)
+        self.assertIn("Both dependency scans completed", self.summary.read_text())
+
+    def test_non_publishing_reports_findings_without_github_calls(self):
+        self.write_scan("latest", unhandled=(FIRST,))
+        self.write_scan("minimal", unhandled=(FIRST,))
+        with patch.object(report, "gh", side_effect=AssertionError("Unexpected GitHub call")):
+            self.assertEqual(self.run_report(non_publishing=True, scan_result="failure"), 1)
+        summary = self.summary.read_text()
+        self.assertIn("Unhandled dependency findings: **1**", summary)
+        self.assertIn(FIRST, summary)
+
+    def test_non_publishing_reports_missing_scans_without_github_calls(self):
+        self.write_scan("latest")
+        with patch.object(report, "gh", side_effect=AssertionError("Unexpected GitHub call")):
+            self.assertEqual(self.run_report(non_publishing=True, scan_result="failure"), 1)
+        self.assertIn("Dependency advisory infrastructure failure", self.summary.read_text())
+
+    def test_non_publishing_does_not_hide_failed_scan_jobs(self):
+        self.write_scan("latest")
+        self.write_scan("minimal")
+        with patch.object(report, "gh", side_effect=AssertionError("Unexpected GitHub call")):
+            self.assertEqual(self.run_report(non_publishing=True, scan_result="failure"), 1)
+        self.assertIn("Scan job result was failure despite clean reports", self.summary.read_text())
+
+    def test_default_mode_still_publishes_findings(self):
+        self.write_scan("latest", unhandled=(FIRST,))
+        self.write_scan("minimal")
+        with patch.object(report, "publish_issues") as publish:
+            self.assertEqual(self.run_report(scan_result="failure"), 1)
+        publish.assert_called_once()
+        issues, repository = publish.call_args.args
+        self.assertEqual([issue.key for issue in issues], [FIRST])
+        self.assertEqual(repository, "owner/repository")
 
     def test_rejects_ignore_unused_by_both_resolutions(self):
         self.write_scan("latest", unused=(SECOND, FIRST))

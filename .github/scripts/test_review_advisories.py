@@ -72,15 +72,15 @@ class ReviewAdvisoriesTests(unittest.TestCase):
                 f"<!-- dependency-advisory:{state['advisory_key']} -->\n"
                 f"{REPORT_START}\n"
                 f"<!-- dependency-advisory-review:{json.dumps(state)} -->\n"
-                f"Captured scan evidence.\n{REPORT_END}"
+                f"Saved scan data.\n{REPORT_END}"
             ),
         }
         self.comments[number] = []
 
-    def prepare(self, issue_number=""):
+    def prepare(self, issue_number="", non_publishing=False):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
-            review.prepare(REPOSITORY, output, issue_number)
+            review.prepare(REPOSITORY, output, issue_number, non_publishing=non_publishing)
             outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
         queue = json.loads(outputs["queue"])
         self.assertEqual(outputs["has_reviews"], str(bool(queue)).lower())
@@ -228,6 +228,113 @@ class ReviewAdvisoriesTests(unittest.TestCase):
         review.finalize(REPOSITORY, [], continuation_ref="main")
         self.assertEqual(self.dispatches, [])
 
+    def test_non_publishing_reviews_closed_completed_finding_without_changing_labels(self):
+        self.add_finding(1)
+        _, queue = self.prepare("1")
+        self.publish(queue)
+        self.issues[1]["state"] = "closed"
+        self.issues[1]["labels"] = [{"name": ADVISORY_LABEL}]
+
+        outputs, selected = self.prepare(non_publishing=True)
+
+        self.assertEqual(selected, queue)
+        self.assertEqual(outputs["has_more_reviews"], "false")
+        self.assertEqual(self.issues[1]["state"], "closed")
+        self.assertEqual(self.issues[1]["labels"], [{"name": ADVISORY_LABEL}])
+
+    def test_non_publishing_selects_one_finding_without_continuation(self):
+        for number in range(1, 7):
+            self.add_finding(number)
+        outputs, queue = self.prepare(non_publishing=True)
+        self.assertEqual([entry["issue_number"] for entry in queue], [1])
+        self.assertEqual(outputs["has_more_reviews"], "false")
+        self.assertTrue(all(
+            {"name": REVIEW_LABEL} in issue["labels"] for issue in self.issues.values()
+        ))
+
+    def test_non_publishing_requires_a_complete_saved_report(self):
+        self.add_finding(1, complete=False)
+        with self.assertRaisesRegex(ValueError, "requires an existing finding with a complete saved scan report"):
+            self.prepare(non_publishing=True)
+
+    def test_non_publishing_finalization_never_reads_or_mutates_github(self):
+        self.add_finding(1)
+        _, queue = self.prepare()
+        with tempfile.TemporaryDirectory() as directory:
+            outcomes = Path(directory) / "outcomes.jsonl"
+            outcomes.write_text(json.dumps({
+                "type": "add_comment", "status": "staged", "staged": True, "messageIndex": 0,
+            }) + "\n")
+            agent_output = Path(directory) / "agent_output.json"
+            agent_output.write_text(json.dumps({"items": [{
+                "type": "add_comment", "item_number": "1",
+                "data": {
+                    key: queue[0][key]
+                    for key in ("advisory_key", "fingerprint", "source_revision")
+                },
+            }]}))
+            with patch.object(review, "gh") as github:
+                review.finalize(
+                    REPOSITORY, queue, continuation_ref="main",
+                    non_publishing=True, staged_outcomes=outcomes,
+                    agent_output=agent_output,
+                )
+            github.assert_not_called()
+        self.assertEqual(self.dispatches, [])
+        self.assertIn({"name": REVIEW_LABEL}, self.issues[1]["labels"])
+
+    def test_non_publishing_rejects_missing_skipped_failed_or_applied_outputs(self):
+        self.add_finding(1)
+        _, queue = self.prepare()
+        cases = [
+            [],
+            [{"type": "noop", "status": "staged", "staged": True}],
+            [{"type": "add_comment", "status": "skipped", "staged": True}],
+            [{"type": "add_comment", "status": "failed", "staged": True}],
+            [{"type": "add_comment", "status": "success", "staged": False}],
+            [{
+                "type": "add_comment", "status": "staged", "staged": True,
+                "url": "https://github.com/owner/repository/issues/1#issuecomment-1",
+            }],
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            outcomes = Path(directory) / "outcomes.jsonl"
+            agent_output = Path(directory) / "agent_output.json"
+            agent_output.write_text('{"items":[]}')
+            for entries in cases:
+                with self.subTest(entries=entries):
+                    outcomes.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+                    with self.assertRaisesRegex(ValueError, "Test review"):
+                        review.finalize(
+                            REPOSITORY, queue, non_publishing=True, staged_outcomes=outcomes,
+                            agent_output=agent_output,
+                        )
+
+    def test_non_publishing_rejects_mismatched_assessment_target_or_metadata(self):
+        self.add_finding(1)
+        _, queue = self.prepare()
+        data = {
+            key: queue[0][key] for key in ("advisory_key", "fingerprint", "source_revision")
+        }
+        cases = [
+            {"type": "add_comment", "item_number": "2", "data": data},
+            {"type": "add_comment", "item_number": 1, "data": {**data, "fingerprint": "f" * 64}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            outcomes = Path(directory) / "outcomes.jsonl"
+            outcomes.write_text(json.dumps({
+                "type": "add_comment", "status": "staged", "staged": True, "messageIndex": 0,
+            }) + "\n")
+            agent_output = Path(directory) / "agent_output.json"
+            for item in cases:
+                with self.subTest(item=item):
+                    agent_output.write_text(json.dumps({"items": [item]}))
+                    with self.assertRaisesRegex(ValueError, "does not match the selected finding"):
+                        review.finalize(
+                            REPOSITORY, queue, non_publishing=True,
+                            staged_outcomes=outcomes, agent_output=agent_output,
+                        )
+
     def test_main_passes_continuation_ref(self):
         for ref in ("", "main"):
             with self.subTest(ref=ref), patch.object(review, "finalize") as finalize:
@@ -237,7 +344,10 @@ class ReviewAdvisoriesTests(unittest.TestCase):
                     "review_advisories.py", "finalize", "--repository", REPOSITORY,
                 ]):
                     self.assertEqual(review.main(), 0)
-                finalize.assert_called_once_with(REPOSITORY, [], continuation_ref=ref)
+                finalize.assert_called_once_with(
+                    REPOSITORY, [], continuation_ref=ref,
+                    non_publishing=False, staged_outcomes=None, agent_output=None,
+                )
 
 
 if __name__ == "__main__":

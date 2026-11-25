@@ -1,14 +1,20 @@
-# Dependency findings need applicability triage, independently of Nightly test failures.
-# Keep both resolutions: a clean latest graph says nothing about older supported versions.
+# Review dependency findings separately from ordinary test failures.
+# Scan both dependency sets: a clean latest-version scan does not cover older supported versions.
 name: 'Dependency advisories'
 
 on:
-  # Keep a required check present even when no advisory scan is needed.
+  # Keep advisory validation present even when no scan is needed.
   pull_request:
     types: [opened, synchronize, reopened, edited]
   schedule:
-    - cron: '30 11 * * *'   # Daily, staggered after Nightly and before Fuzz.
+    - cron: '30 11 * * *'   # 11:30 UTC daily, between Nightly and Fuzz.
   workflow_dispatch:
+    inputs:
+      non_publishing:
+        description: 'Dry run: scan and validate without updating issues or starting risk reviews'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,6 +26,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: never
+  # PRs never publish. Manual runs use the option; scheduled runs publish.
+  NON_PUBLISHING: ${{ github.event_name == 'pull_request' || inputs.non_publishing == true }}
 
 defaults:
   run:
@@ -31,9 +39,21 @@ jobs:
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     outputs:
+      non_publishing: ${{ steps.mode.outputs.non_publishing }}
       scan_required: ${{ steps.changes.outputs.scan_required }}
 
     steps:
+    - name: Validate publishing mode
+      id: mode
+      env:
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        if [ "$NON_PUBLISHING" = "false" ] && [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+          echo "::error::Publishing runs must use the default branch. Enable dry run to validate a different branch or tag."
+          exit 1
+        fi
+        echo "non_publishing=$NON_PUBLISHING" >> "$GITHUB_OUTPUT"
+
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
       with:
         fetch-depth: 0
@@ -47,12 +67,14 @@ jobs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: |
         if [ "$EVENT_NAME" = "pull_request" ]; then
-          changed_files="$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" -- Cargo.toml deny.toml)"
+          changed_files="$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" -- \
+            Cargo.toml deny.toml rust-toolchain.toml \
+            .github/workflows/advisories.yaml .github/scripts/report_advisories.py)"
           if [ -n "$changed_files" ]; then
-            echo "Full advisory matrix required: $changed_files"
+            echo "Run both advisory scans because these inputs changed: $changed_files"
             echo "scan_required=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Cargo.toml and deny.toml are unchanged; the full matrix is not required."
+            echo "No advisory scan inputs changed; skip both dependency scans."
             echo "scan_required=false" >> "$GITHUB_OUTPUT"
           fi
         else
@@ -119,7 +141,7 @@ jobs:
         echo "cargo-deny exited with status $status; full diagnostics are in the scan artifact."
         exit "$status"
 
-    - name: Verify scan completeness
+    - name: Check that the scan report is complete
       run: |
         python3 - <<'PY'
         import os
@@ -144,22 +166,26 @@ jobs:
 
   report:
     name: Report dependency findings
-    needs: scan
-    if: always() && !cancelled() && github.event_name != 'pull_request'
+    needs: [changes, scan]
+    if: always() && !cancelled() && needs.changes.outputs.non_publishing == 'false'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
-    # Share the lock with Copilot's queue readers/writers, not just other scan runs.
+    # Do not update issues while another run selects findings or marks reviews complete.
     concurrency:
       group: dependency-advisory-state-${{ github.repository }}
       cancel-in-progress: false
       queue: max
+    # Only validated publishing runs can update issues or dispatch the risk review.
     permissions:
+      actions: write
       contents: read
       issues: write
 
     steps:
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
       id: checkout
+      with:
+        persist-credentials: false
 
     - name: Download scan reports
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -167,7 +193,7 @@ jobs:
         pattern: dependency-advisories-*
         path: ${{ runner.temp }}/advisory-reports
 
-    - name: Open or update dependency issues
+    - name: Create or update issues for dependency findings and scan failures
       if: always() && !cancelled() && steps.checkout.outcome == 'success'
       env:
         GH_TOKEN: ${{ github.token }}
@@ -179,56 +205,71 @@ jobs:
           --repository "$GITHUB_REPOSITORY" \
           --run-url "$RUN_URL" \
           --scan-result "$SCAN_RESULT" \
-          --summary "$GITHUB_STEP_SUMMARY"
+          --summary "$GITHUB_STEP_SUMMARY" \
+          --non-publishing "$NON_PUBLISHING"
+
+    - name: Start the advisory risk review
+      if: always() && !cancelled()
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REVIEW_REF: ${{ github.event.repository.default_branch }}
+      run: |
+        gh workflow run advisory-risk-review.lock.yml \
+          --repo "$GITHUB_REPOSITORY" \
+          --ref "$REVIEW_REF" \
+          -f non_publishing="$NON_PUBLISHING"
 
   validation:
     name: Dependency advisory validation
     needs: [changes, scan]
-    if: always() && github.event_name == 'pull_request'
+    # An unavailable mode must fail read-only validation, not skip a PR check.
+    if: always() && needs.changes.outputs.non_publishing != 'false'
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 5
     permissions:
       contents: read
 
     steps:
-    - name: Require the applicable matrix result
+    - name: Require the selected advisory scans to pass
       env:
+        NON_PUBLISHING_OUTPUT: ${{ needs.changes.outputs.non_publishing }}
         DETECTION_RESULT: ${{ needs.changes.result }}
         SCAN_REQUIRED: ${{ needs.changes.outputs.scan_required }}
         SCAN_RESULT: ${{ needs.scan.result }}
       run: |
-        if [ "$DETECTION_RESULT" != "success" ]; then
-          echo "::error::Advisory input detection did not succeed."
+        if [ "$NON_PUBLISHING_OUTPUT:$DETECTION_RESULT" != "true:success" ]; then
+          echo "::error::Advisory validation setup failed: non_publishing=$NON_PUBLISHING_OUTPUT, input_detection=$DETECTION_RESULT."
           exit 1
         fi
         case "$SCAN_REQUIRED:$SCAN_RESULT" in
           false:skipped)
-            echo "Cargo.toml and deny.toml are unchanged; the full matrix is not required."
+            echo "No advisory scan inputs changed; skip both dependency scans."
             ;;
           true:success)
             echo "Both latest and minimum-direct advisory scans passed."
             ;;
           *)
-            echo "::error::Advisory matrix did not pass: required=$SCAN_REQUIRED, result=$SCAN_RESULT."
+            echo "::error::Advisory scans did not pass: required=$SCAN_REQUIRED, result=$SCAN_RESULT."
             exit 1
             ;;
         esac
 
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
-      if: needs.changes.outputs.scan_required == 'true'
+      id: checkout
+      if: always() && !cancelled() && needs.changes.outputs.non_publishing == 'true' && needs.changes.outputs.scan_required == 'true'
       with:
-        ref: ${{ github.event.pull_request.head.sha }}
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
         persist-credentials: false
 
     - name: Download scan reports
-      if: needs.changes.outputs.scan_required == 'true'
+      if: always() && !cancelled() && steps.checkout.outcome == 'success'
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         pattern: dependency-advisories-*
         path: ${{ runner.temp }}/advisory-reports
 
-    - name: Require removal of unused advisory ignores
-      if: needs.changes.outputs.scan_required == 'true'
+    - name: Check that advisory exceptions are still needed
+      if: steps.checkout.outcome == 'success'
       run: |
         python3 - <<'PY'
         import os
@@ -239,5 +280,19 @@ jobs:
         from report_advisories import validate_ignored_advisories
 
         validate_ignored_advisories(Path(os.environ["RUNNER_TEMP"]) / "advisory-reports")
-        print("No advisory ignore is unused by both dependency resolutions.")
+        print("Every advisory exception is still needed by at least one dependency set.")
         PY
+
+    - name: Generate the advisory report without publishing issues
+      if: always() && !cancelled() && steps.checkout.outcome == 'success'
+      env:
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        SCAN_RESULT: ${{ needs.scan.result }}
+      run: |
+        python3 .github/scripts/report_advisories.py \
+          --reports "$RUNNER_TEMP/advisory-reports" \
+          --repository "$GITHUB_REPOSITORY" \
+          --run-url "$RUN_URL" \
+          --scan-result "$SCAN_RESULT" \
+          --summary "$GITHUB_STEP_SUMMARY" \
+          --non-publishing "$NON_PUBLISHING"

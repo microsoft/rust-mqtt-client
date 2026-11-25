@@ -13,20 +13,17 @@ test:
 	cargo test --lib
 # TEMPORARY, remove with the feature. Lib-only: the strict integration tests reject what it allows.
 	cargo test --lib --features __allow_omitted_auth_method
-# `--tests` rather than `--test '*'`: the glob counts as explicit target selection,
-# so Cargo hard-errors on a target whose `required-features` are unmet (the live
-# network suites). Bulk selection skips those instead.
+# `--tests` skips test targets whose required features are disabled.
+# `--test '*'` explicitly selects them and fails on the disabled network tests.
 	set -eu; \
 	for feature_set in '__integration' 'websockets,__integration'; do \
 		cargo test --features "$$feature_set" --tests; \
 	done
 
 
-# Live tests against a real MQTT server. BROKER selects which broker implementation gets
-# provisioned -- the suite itself is server-agnostic. Each broker directory exposes
-# up.sh/down.sh, so a broker that isn't a container (AIO MQ needs a k3d cluster)
-# plugs in the same way.
-# Deliberately not part of `test`: these need a server running.
+# Tests against a real MQTT server. BROKER selects the server and its setup scripts.
+# Each broker provides up.sh/down.sh, including AIO MQ's local Kubernetes setup.
+# These are separate from `test` because they need a running server.
 BROKER ?= mosquitto
 # Extra cargo features for the network suite, e.g. __allow_omitted_auth_method for aio-mq-1.6.1.
 FEATURES ?=
@@ -84,9 +81,8 @@ check:
 			--deny=warnings; \
 	done
 	cargo machete
-	# Advisories are deliberately excluded here: they depend on the RustSec
-	# database (which updates independently of our code) and so belong in the
-	# separate `Dependency advisories` workflow, not this blanket PR check.
-	# That workflow also gates PRs changing Cargo.toml or deny.toml.
-	# Bans, licenses, and sources only change when our dependencies do.
+	# Advisory scans use the separately updated RustSec database, so they run
+	# in the Dependency advisories workflow, not on every ordinary source PR.
+	# That workflow also scans PRs changing its workflow, manifests, toolchain,
+	# or reporting script. Other cargo-deny checks remain here.
 	cargo deny check bans licenses sources

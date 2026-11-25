@@ -1,25 +1,8 @@
-# PR gate: the blocking, pre-merge checks. Runs on every pull request and push.
-#
-# Guiding principles (kept consistent with `nightly.yaml`):
-#
-#   1. Gate vs. nightly. This workflow tests only what a *code change* can
-#      break -- checks that are deterministic with respect to our own source.
-#      A failure here should always be actionable by the PR author. Anything
-#      that can go red because the *outside world moved* (new compiler
-#      releases, freshly published advisories, dependency drift on unpinned
-#      transitive versions) lives in `nightly.yaml` or `advisories.yaml`, so it never blocks
-#      an unrelated PR. Concretely: MSRV + stable are gated; beta/nightly
-#      toolchains are not. `advisories.yaml` gates advisory-DB scans only for
-#      PRs changing Cargo.toml or deny.toml.
-#
-#   2. Static analysis vs. running tests. All static analysis (rustfmt, clippy,
-#      cargo-deny, cargo-machete -- via `make check`) runs on the SINGLE pinned
-#      toolchain from rust-toolchain.toml. Lint/format output is
-#      toolchain-specific, so pinning keeps it reproducible and prevents a
-#      newer compiler's freshly-added lints from failing unrelated PRs. Running
-#      the tests, by contrast, must validate every version we promise to
-#      support, so `make test` runs across a matrix of toolchains (and
-#      dependency resolutions).
+# Checks for every pull request, pushes to main, and manual runs.
+# Formatters and linters use the Rust version in rust-toolchain.toml.
+# Tests cover the minimum supported Rust version and current stable Rust,
+# each with the latest compatible and minimum direct dependency versions.
+# Nightly, Network, and advisory workflows also run on PRs that change their inputs.
 
 name: 'PR'
 
@@ -44,15 +27,72 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Static analysis on the pinned dev toolchain (rust-toolchain.toml). Lint
-  # results are toolchain-specific, so fmt/clippy run here only -- never across
-  # the test matrix, where a newer stable could fail on freshly-added lints.
-  check:
-    name: Check (pinned toolchain)
+  workflows:
+    name: Workflow validation
     runs-on: 'ubuntu-24.04'
     timeout-minutes: 10
 
     steps:
+    - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Install the actionlint workflow checker
+      env:
+        ACTIONLINT_VERSION: '1.7.12'
+        ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      run: |
+        set -euo pipefail
+        directory="$RUNNER_TEMP/actionlint"
+        archive="$directory/actionlint.tar.gz"
+        mkdir -p "$directory"
+        curl --fail --silent --show-error --location --retry 3 \
+          --output "$archive" \
+          "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check
+        tar --extract --gzip --file "$archive" --directory "$directory" --no-same-owner actionlint
+        printf '%s\n' "$directory" >> "$GITHUB_PATH"
+
+    - name: Install the gh-aw AI workflow compiler
+      env:
+        GH_AW_VERSION: v1.2.2
+        GH_AW_SHA256: c2378d85466d29cdbdfebd0e513557b5cbec18d34f44e7cc00c2fa323687a153
+      run: |
+        set -euo pipefail
+        directory="$RUNNER_TEMP/gh-aw-compiler"
+        mkdir -p "$directory"
+        curl --fail --silent --show-error --location --retry 3 \
+          --output "$directory/gh-aw" \
+          "https://github.com/github/gh-aw/releases/download/${GH_AW_VERSION}/linux-amd64"
+        printf '%s  %s\n' "$GH_AW_SHA256" "$directory/gh-aw" | sha256sum --check
+        chmod +x "$directory/gh-aw"
+
+    - name: Check workflow definitions for errors
+      run: |
+        "$RUNNER_TEMP/gh-aw-compiler/gh-aw" lint .github/workflows
+
+    - name: Check that the AI workflow source compiles
+      run: |
+        "$RUNNER_TEMP/gh-aw-compiler/gh-aw" compile --no-emit --no-check-update
+
+  # Keep formatter and linter results consistent by using one pinned Rust version.
+  check:
+    name: Check (pinned toolchain)
+    needs: workflows
+    if: ${{ !cancelled() }}
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 10
+
+    steps:
+    - name: Require workflow validation
+      env:
+        WORKFLOW_RESULT: ${{ needs.workflows.result }}
+      run: |
+        if [ "$WORKFLOW_RESULT" != "success" ]; then
+          echo "::error::Workflow validation did not succeed: $WORKFLOW_RESULT."
+          exit 1
+        fi
+
     - uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # v7.0.1
 
     - name: Setup Rust (pinned via rust-toolchain.toml)
@@ -72,8 +112,6 @@ jobs:
       with:
         shared-key: check
 
-    # Install cargo subcommands AFTER the cache restore: Swatinem/rust-cache
-    # caches ~/.cargo/bin, so a warm cache makes this a no-op.
     - name: Install cargo tooling
       uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
       with:
@@ -135,26 +173,10 @@ jobs:
     - name: Check fuzz targets
       run: cargo check --manifest-path fuzz/Cargo.toml
 
-  # Full test suite across the supported toolchains (the MSRV declared in
-  # Cargo.toml's `rust-version` and the latest stable) crossed with the
-  # dependency resolution (latest compatible vs. our declared minimums).
-  # `beta`/`nightly` toolchains are exercised separately by the scheduled
-  # `nightly.yaml` workflow.
-  #
-  # The `deps` axis:
-  # - `latest`  : newest compatible versions -- what we develop against.
-  # - `minimal` : our DIRECT dependencies resolved to the lowest version each
-  #   constraint permits (`-Z direct-minimal-versions`; transitive deps resolve
-  #   normally, avoiding the third-party under-declaration noise of full
-  #   `-Z minimal-versions`). Verifies the lower bounds we promise consumers
-  #   actually build/test. A failure means we used an API newer than a declared
-  #   floor -- a deterministic, code-caused regression -- so it belongs in the
-  #   gate. Endpoints only: versions between min and latest are assumed
-  #   compatible by SemVer and handled reactively if a dep violates it.
-  #
-  # The full 2x2 matters: MSRV+minimal is the strictest corner for old deps,
-  # while stable+minimal catches the (rarer) case of an old dependency version
-  # that fails to compile on a newer compiler.
+  # Run all four combinations of Rust version and dependency set.
+  # "latest" selects the newest compatible versions. "minimal" selects the
+  # lowest allowed direct dependencies; indirect dependencies resolve normally.
+  # This checks both our declared minimums and compatibility with current Rust.
   test:
     name: Test (rust ${{ matrix.rust }}, ${{ matrix.deps }} deps)
     runs-on: 'ubuntu-24.04'
@@ -178,9 +200,8 @@ jobs:
         rustflags: ''
         build-warnings: ''
 
-    # Nightly is needed only to run the unstable `-Z direct-minimal-versions`
-    # resolver (minimal legs only); it never compiles our code -- the build and
-    # test run on the matrix toolchain below.
+    # Nightly Rust selects minimum dependency versions with an unstable Cargo
+    # option. The tests themselves still use the Rust version selected above.
     - name: Install nightly Rust (for the minimal-versions resolver)
       if: matrix.deps == 'minimal'
       run: rustup toolchain install nightly --profile minimal
@@ -199,27 +220,17 @@ jobs:
       if: matrix.deps == 'minimal'
       run: cargo +nightly generate-lockfile -Z direct-minimal-versions
 
-    # RUSTUP_TOOLCHAIN selects the matrix toolchain for the build/test without
-    # deleting the rust-toolchain.toml pin. On minimal legs it runs against the
-    # lockfile produced by the resolver step above.
+    # Override the development Rust version without changing rust-toolchain.toml.
     - name: Test
       env:
         RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
       run: make -j test
 
 
-  # The gate's only test against a real MQTT server. Every other test in the gate uses
-  # the in-process `Test` transport, which hands `Packet` values down a channel and
-  # never opens a socket -- so this job is the only thing here that exercises
-  # `src/io/`, the framing, and a real CONNECT/DISCONNECT over TCP. Without it, a
-  # PR could break the ability to talk to any server and the gate wouldn't notice.
-  #
-  # Deliberately mosquitto ONLY. It starts in seconds from a small, pinned,
-  # stable image, so a failure here means the PR broke the client -- the gate's
-  # bar of being actionable by the author. The rest of the server matrix
-  # (EMQX, HiveMQ, AIO MQ) runs on a schedule in `network.yaml`, because
-  # cross-implementation differences can go red for reasons that have nothing to
-  # do with the PR.
+  # Every PR tests real TCP connections against Mosquitto. Other tests here
+  # inject decoded packets and do not exercise socket I/O or packet framing.
+  # The Network workflow tests other brokers on a schedule and when its
+  # workflow, manifests, toolchain, or broker setup files change.
   network-mosquitto:
     name: Network (mosquitto)
     runs-on: 'ubuntu-24.04'
@@ -243,7 +254,7 @@ jobs:
         # its target/ separate from theirs.
         shared-key: network
 
-    - name: Start fixtures
+    - name: Start the broker and test services
       run: tests/network/fixtures/up.sh mosquitto
 
     - name: Test
@@ -251,15 +262,13 @@ jobs:
         MQTT_SERVER: mosquitto
       run: cargo test --features __network,websockets --test network
 
-    - name: Stop fixtures
+    - name: Stop the broker and test services
       if: always()
       run: tests/network/fixtures/down.sh mosquitto
 
 
-  # Coverage on the pinned toolchain. Separate from `test` because LLVM
-  # instrumentation produces a different target/ (cache-incompatible) and
-  # slows the build; measuring on one canonical toolchain keeps the trend
-  # consistent across PRs.
+  # Coverage uses one pinned Rust version for comparable results across PRs.
+  # Its instrumented builds need a separate cache from ordinary test builds.
   coverage:
     name: Coverage (pinned toolchain)
     runs-on: 'ubuntu-24.04'
@@ -289,7 +298,7 @@ jobs:
         tool: cargo-llvm-cov
 
     - name: Coverage
-      # Network tests are needed to cover I/O stack that is currently bypassed by the integration test injection pattern
+      # Real broker traffic covers socket I/O that decoded-packet tests do not reach.
       run: make network-coverage BROKER=mosquitto
 
     - name: Upload coverage report
