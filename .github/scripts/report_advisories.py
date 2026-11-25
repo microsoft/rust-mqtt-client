@@ -642,19 +642,24 @@ def publish_issues(issues, repository):
         print(f"Updated {issue.key}: {current['html_url']}")
 
 
-def report(reports, repository, run_url, scan_result, summary):
+def report(reports, repository, run_url, scan_result, summary, non_publishing=False):
     findings, failures = collect_scans(reports, scan_result)
     issues = render_issues(findings, failures, run_url)
     if findings:
         attach_review_state(issues, findings, repository)
     with summary.open("a") as output:
         output.write("# Dependency advisory scans\n\n")
+        if non_publishing:
+            output.write(
+                "Non-publishing mode: no GitHub issues, comments, or labels are changed.\n\n"
+            )
         output.write(f"Unhandled dependency findings: **{len(findings)}**\n\n")
         for issue in issues:
             output.write(f"## {issue.title}\n\n{issue.report}\n\n")
         if not issues:
             output.write("Both dependency scans completed with no unhandled findings.\n")
-    publish_issues(issues, repository)
+    if not non_publishing:
+        publish_issues(issues, repository)
     return int(bool(issues))
 
 
@@ -665,9 +670,16 @@ def main():
     parser.add_argument("--run-url", required=True)
     parser.add_argument("--scan-result", choices=["success", "failure", "cancelled", "skipped"], required=True)
     parser.add_argument("--summary", type=Path, required=True)
+    parser.add_argument(
+        "--non-publishing", choices=["true", "false"], default="false",
+        help="Validate scan reporting without creating or changing GitHub issues",
+    )
     args = parser.parse_args()
     try:
-        return report(args.reports, args.repository, args.run_url, args.scan_result, args.summary)
+        return report(
+            args.reports, args.repository, args.run_url, args.scan_result, args.summary,
+            non_publishing=args.non_publishing == "true",
+        )
     except (OSError, ValueError, RuntimeError) as error:
         print(f"Dependency advisory reporting failed: {error}", file=sys.stderr)
         return 1

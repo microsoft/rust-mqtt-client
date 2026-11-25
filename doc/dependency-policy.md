@@ -49,9 +49,13 @@ Other PRs do not run the advisory scans. Unavailable Git revisions or failed
 change detection fail validation rather than silently skipping it.
 
 The scans use the exact PR head, with the same pinned tool and dependency-selection
-commands as scheduled runs. PR scan runs only validate and save files with the
-Actions run (artifacts): they do not create issues, change review labels, or start
-normal Copilot assessments. Their completion does not trigger a normal AI review.
+commands as scheduled runs. The scan workflow sets `NON_PUBLISHING` to `true` for
+PRs and `false` for scheduled and manual runs. Both modes use the same
+[reporter](../.github/scripts/report_advisories.py). In non-publishing mode, it
+parses the reports and writes the Actions summary without calling GitHub.
+Scan files are still saved as Actions artifacts, and findings or scan failures
+still fail PR validation. No issues, comments, or review labels are changed.
+Completion of a PR scan does not trigger a normal AI review.
 The separate AI review workflow can run a test assessment on its own relevant PRs.
 Scheduled and manually dispatched runs still scan both resolutions and report
 findings as before.
