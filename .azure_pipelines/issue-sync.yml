@@ -1,0 +1,105 @@
+# Create this separate pipeline in the existing private build project; default branch: main.
+# Use the reusable Azure DevOps/WIF work-item connection, not ESRP credentials or a PAT.
+#
+# Before enabling GitHub deliveries:
+# - Create an Incoming WebHook service connection named ms-mqtt-client-issues.
+#   Use the same WebHook Name, a strong shared secret, and header X-Hub-Signature.
+#   Authorize only this pipeline to use the connection.
+# - Create an Azure DevOps/WIF connection named ms-mqtt-client-ado-workitems
+#   for the target organization. Grant its identity the required project access,
+#   View/Edit work items in both parent areas, and Create tag definition if needed.
+#   Authorize only this pipeline. The named Sync stage serializes deliveries.
+# - Set private pipeline variables ADO_ORGANIZATION, ADO_PROJECT, and ADO_PARENT_ID.
+#   Keep ADO_PARENT_ID for Bugs; set ADO_ENHANCEMENT_PARENT_ID for enhancement PBIs.
+# - In the GitHub repository's Webhooks settings, subscribe to Issues only,
+#   use application/json, enable SSL verification, and configure the same secret.
+#   URL: https://dev.azure.com/<build-org>/_apis/public/distributedtask/webhooks/ms-mqtt-client-issues?api-version=6.0-preview
+# - Validate a signed delivery and rejection of an invalid signature before use.
+#   Native Incoming WebHook verification uses HMAC-SHA1, not SHA256.
+#
+# A manual initialization run without a webhook does not modify work items.
+# Only current native Bug/Feature issues with planned sync; do not auto-apply it.
+# Native Features become Product Backlog Items; an enhancement label alone is insufficient.
+# Opened/labeled events can opt issues in; edits/closures never create missing items.
+# Removing planned pauses future updates without deleting the ADO item. No schedule.
+# Keep the upstream title suffix and repository tags used to identify each item.
+# Issue content is refreshed through the public GitHub API; rate limits fail the job.
+
+trigger: none
+pr: none
+
+resources:
+  repositories:
+    - repository: 1esPipelines
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+  webhooks:
+    - webhook: GitHubIssues
+      connection: ms-mqtt-client-issues
+      filters:
+        - path: repository.full_name
+          value: microsoft/rust-mqtt-client
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1esPipelines
+  parameters:
+    pool:
+      name: 1es-ms-mqtt-client-west-us
+      image: linux-image
+      os: linux
+    sdl:
+      sourceAnalysisPool:
+        name: 1es-ms-mqtt-client-west-us
+        image: windows-image
+        os: windows
+    stages:
+      - stage: Sync
+        displayName: Synchronize planned GitHub issues
+        lockBehavior: sequential
+        jobs:
+          - job: SyncBugs
+            displayName: Create or update the mirrored ADO item
+            timeoutInMinutes: '10'
+            steps:
+              - checkout: self
+                clean: 'true'
+                fetchDepth: '1'
+                persistCredentials: 'false'
+
+              - task: NodeTool@0
+                displayName: Install Node.js for the pinned upstream action
+                inputs:
+                  versionSpec: 24.x
+
+              - task: AzureCLI@3
+                displayName: Synchronize the issue and parent link
+                inputs:
+                  connectionType: azureDevOps
+                  azureDevOpsServiceConnection: ms-mqtt-client-ado-workitems
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    set -euo pipefail
+                    ADO_TOKEN="$(az account get-access-token \
+                      --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+                      --query accessToken --output tsv)"
+                    if [ -z "$ADO_TOKEN" ]; then
+                      echo "##vso[task.logissue type=error]No Azure DevOps access token was acquired." >&2
+                      exit 1
+                    fi
+                    echo "##vso[task.setsecret]$ADO_TOKEN"
+                    export ADO_TOKEN
+                    python3 -B .github/scripts/issue_to_ado.py
+                env:
+                  ADO_ORGANIZATION: $(ADO_ORGANIZATION)
+                  ADO_PROJECT: $(ADO_PROJECT)
+                  ADO_PARENT_ID: $(ADO_PARENT_ID)
+                  ADO_ENHANCEMENT_PARENT_ID: $(ADO_ENHANCEMENT_PARENT_ID)
+                  WEBHOOK_REPOSITORY_ID: ${{ parameters.GitHubIssues.repository.id }}
+                  WEBHOOK_REPOSITORY: ${{ parameters.GitHubIssues.repository.full_name }}
+                  WEBHOOK_ACTION: ${{ parameters.GitHubIssues.action }}
+                  WEBHOOK_ISSUE_NUMBER: ${{ parameters.GitHubIssues.issue.number }}
+                  WEBHOOK_ISSUE_TYPE: ${{ parameters.GitHubIssues.issue.type.name }}
+                  WEBHOOK_SENDER: ${{ parameters.GitHubIssues.sender.login }}
+                  WEBHOOK_PING_ID: ${{ parameters.GitHubIssues.hook_id }}
